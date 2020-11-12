@@ -262,10 +262,11 @@ int4 RangeHint::compare(const RangeHint &op2) const
   return 0;
 }
 
+/// \param id is the globally unique id associated with the function scope
 /// \param spc is the (stack) address space associated with this function's local variables
 /// \param fd is the function associated with these local variables
 /// \param g is the Architecture
-ScopeLocal::ScopeLocal(AddrSpace *spc,Funcdata *fd,Architecture *g) : ScopeInternal(fd->getName(),g)
+ScopeLocal::ScopeLocal(uint8 id,AddrSpace *spc,Funcdata *fd,Architecture *g) : ScopeInternal(id,fd->getName(),g)
 
 {
   space = spc;
@@ -288,7 +289,6 @@ void ScopeLocal::collectNameRecs(void)
   while(iter!=nametree.end()) {
     Symbol *sym = *iter++;
     if (sym->isNameLocked()&&(!sym->isTypeLocked())) {
-      addRecommendName(sym);
       if (sym->isThisPointer()) {		// If there is a "this" pointer
 	Datatype *dt = sym->getType();
 	if (dt->getMetatype() == TYPE_PTR) {
@@ -300,6 +300,7 @@ void ScopeLocal::collectNameRecs(void)
 	  }
 	}
       }
+      addRecommendName(sym);	// This deletes the symbol
     }
   }
 }
@@ -1208,8 +1209,12 @@ SymbolEntry *ScopeLocal::remapSymbol(Symbol *sym,const Address &addr,const Addre
   SymbolEntry *entry = sym->getFirstWholeMap();
   int4 size = entry->getSize();
   if (!entry->isDynamic()) {
-    if (entry->getAddr() == addr && entry->getFirstUseAddress() == usepoint)
-      return entry;
+    if (entry->getAddr() == addr) {
+      if (usepoint.isInvalid() && entry->getFirstUseAddress().isInvalid())
+	return entry;
+      if (entry->getFirstUseAddress() == usepoint)
+	return entry;
+    }
   }
   removeSymbolMappings(sym);
   RangeList rnglist;

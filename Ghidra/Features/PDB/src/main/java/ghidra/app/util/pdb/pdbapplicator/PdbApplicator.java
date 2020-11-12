@@ -21,12 +21,14 @@ import java.util.*;
 import ghidra.app.cmd.label.SetLabelPrimaryCmd;
 import ghidra.app.util.NamespaceUtils;
 import ghidra.app.util.SymbolPath;
+import ghidra.app.util.bin.format.pdb.PdbParserConstants;
 import ghidra.app.util.bin.format.pdb2.pdbreader.*;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.*;
 import ghidra.app.util.bin.format.pdb2.pdbreader.type.AbstractMsType;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.app.util.pdb.PdbCategories;
 import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
+import ghidra.framework.options.Options;
 import ghidra.graph.*;
 import ghidra.graph.algo.GraphNavigator;
 import ghidra.graph.jung.JungDirectedGraph;
@@ -180,6 +182,10 @@ public class PdbApplicator {
 			Address imageBaseParam, PdbApplicatorOptions applicatorOptionsParam,
 			TaskMonitor monitorParam, MessageLog logParam) throws PdbException, CancelledException {
 
+		// FIXME: should not support use of DataTypeManager-only since it will not have the correct data
+		// organization if it corresponds to a data type archive.  Need to evaulate archive use case
+		// and determine if a program must always be used.
+
 		initializeApplyTo(programParam, dataTypeManagerParam, imageBaseParam,
 			applicatorOptionsParam, monitorParam, logParam);
 
@@ -198,11 +204,15 @@ public class PdbApplicator {
 				throw new PdbException("Invalid Restriction");
 		}
 
+		if (program == null) {
+			Options options = program.getOptions(Program.PROGRAM_INFO);
+			options.setBoolean(PdbParserConstants.PDB_LOADED, true);
+		}
+
 		pdbAddressManager.logReport();
 
-		String applicatorMetrics = pdbApplicatorMetrics.getPostProcessingReport();
-		Msg.info(this, applicatorMetrics);
-		PdbLog.message(applicatorMetrics);
+		pdbApplicatorMetrics.logReport();
+
 		Msg.info(this, "PDB Terminated Normally");
 	}
 
@@ -356,12 +366,12 @@ public class PdbApplicator {
 
 	private List<SymbolGroup> createSymbolGroups() throws CancelledException, PdbException {
 		List<SymbolGroup> mySymbolGroups = new ArrayList<>();
-		int num = pdb.getDatabaseInterface().getNumModules();
+		int num = pdb.getDebugInfo().getNumModules();
 		// moduleNumber zero is our global/public group.
 		for (int moduleNumber = 0; moduleNumber <= num; moduleNumber++) {
 			monitor.checkCanceled();
 			Map<Long, AbstractMsSymbol> symbols =
-				pdb.getDatabaseInterface().getModuleSymbolsByOffset(moduleNumber);
+				pdb.getDebugInfo().getModuleSymbolsByOffset(moduleNumber);
 			SymbolGroup symbolGroup = new SymbolGroup(symbols, moduleNumber);
 			mySymbolGroups.add(symbolGroup);
 		}
@@ -491,7 +501,7 @@ public class PdbApplicator {
 
 	/**
 	 * Returns the {@link CategoryPath} for a typedef with with the give {@link SymbolPath} and
-	 * module number; 1 <= moduleNumber <= {@link AbstractDatabaseInterface#getNumModules()}, 
+	 * module number; 1 <= moduleNumber <= {@link PdbDebugInfo#getNumModules()}, 
 	 * except that modeleNumber of 0 represents publics/globals. 
 	 * @param moduleNumber module number
 	 * @param symbolPath SymbolPath of the symbol
@@ -517,33 +527,33 @@ public class PdbApplicator {
 		return categoryUtils.getAnonymousTypesCategory();
 	}
 
-	/**
-	 * Returns the name of what should be the next Anonymous Function (based on the count of
-	 * the number of anonymous functions) so that there is a unique name for the function.
-	 * @return the name for the next anonymous function.
-	 */
-	String getNextAnonymousFunctionName() {
-		return categoryUtils.getNextAnonymousFunctionName();
-	}
+//	/**
+//	 * Returns the name of what should be the next Anonymous Function (based on the count of
+//	 * the number of anonymous functions) so that there is a unique name for the function.
+//	 * @return the name for the next anonymous function.
+//	 */
+//	String getNextAnonymousFunctionName() {
+//		return categoryUtils.getNextAnonymousFunctionName();
+//	}
 
-	/**
-	 * Updates the count of the anonymous functions.  This is a separate call from
-	 * {@link #getNextAnonymousFunctionName()} because the count should only be updated after
-	 * the previous anonymous function has been successfully created/stored.
-	 */
-	void incrementNextAnonymousFunctionName() {
-		categoryUtils.incrementNextAnonymousFunctionName();
-	}
+//	/**
+//	 * Updates the count of the anonymous functions.  This is a separate call from
+//	 * {@link #getNextAnonymousFunctionName()} because the count should only be updated after
+//	 * the previous anonymous function has been successfully created/stored.
+//	 */
+//	void incrementNextAnonymousFunctionName() {
+//		categoryUtils.incrementNextAnonymousFunctionName();
+//	}
 
 	private PdbCategories setPdbCatogoryUtils(String pdbFilename)
 			throws CancelledException, PdbException {
 
 		List<String> categoryNames = new ArrayList<>();
-		int num = pdb.getDatabaseInterface().getNumModules();
+		int num = pdb.getDebugInfo().getNumModules();
 		for (int index = 1; index <= num; index++) {
 			monitor.checkCanceled();
 			String moduleName =
-				pdb.getDatabaseInterface().getModuleInformation(index).getModuleName();
+				pdb.getDebugInfo().getModuleInformation(index).getModuleName();
 			categoryNames.add(moduleName);
 		}
 
@@ -610,7 +620,7 @@ public class PdbApplicator {
 	//==============================================================================================
 	//==============================================================================================
 	int findModuleNumberBySectionOffsetContribution(int section, long offset) throws PdbException {
-		for (AbstractSectionContribution sectionContribution : pdb.getDatabaseInterface().getSectionContributionList()) {
+		for (AbstractSectionContribution sectionContribution : pdb.getDebugInfo().getSectionContributionList()) {
 			int sectionContributionOffset = sectionContribution.getOffset();
 			int maxSectionContributionOffset =
 				sectionContributionOffset + sectionContribution.getLength();
@@ -624,6 +634,9 @@ public class PdbApplicator {
 	//==============================================================================================
 	private void processDataTypesSequentially() throws CancelledException, PdbException {
 		AbstractTypeProgramInterface tpi = pdb.getTypeProgramInterface();
+		if (tpi == null) {
+			return;
+		}
 		int num = tpi.getTypeIndexMaxExclusive() - tpi.getTypeIndexMin();
 		monitor.initialize(num);
 		setMonitorMessage("PDB: Processing " + num + " data type components...");
@@ -688,6 +701,9 @@ public class PdbApplicator {
 	//==============================================================================================
 	private void processItemTypesSequentially() throws CancelledException, PdbException {
 		AbstractTypeProgramInterface ipi = pdb.getItemProgramInterface();
+		if (ipi == null) {
+			return;
+		}
 		int num = ipi.getTypeIndexMaxExclusive() - ipi.getTypeIndexMin();
 		monitor.initialize(num);
 		setMonitorMessage("PDB: Processing " + num + " item type components...");
@@ -725,6 +741,9 @@ public class PdbApplicator {
 	//==============================================================================================
 	private void resolveSequentially() throws CancelledException {
 		AbstractTypeProgramInterface tpi = pdb.getTypeProgramInterface();
+		if (tpi == null) {
+			return;
+		}
 		int num = tpi.getTypeIndexMaxExclusive() - tpi.getTypeIndexMin();
 		monitor.initialize(num);
 		setMonitorMessage("PDB: Resolving " + num + " data type components...");
@@ -772,7 +791,7 @@ public class PdbApplicator {
 
 //	public AbstractMsSymbol getSymbolForModuleAndOffset(int moduleNumber, long offset)
 //			throws PdbException {
-//		return pdb.getDatabaseInterface().getSymbolForModuleAndOffsetOfRecord(moduleNumber, offset);
+//		return pdb.getDebugInfo().getSymbolForModuleAndOffsetOfRecord(moduleNumber, offset);
 //	}
 
 	//==============================================================================================
@@ -789,6 +808,10 @@ public class PdbApplicator {
 	boolean isInvalidAddress(Address address, String name) {
 		if (address == PdbAddressManager.BAD_ADDRESS) {
 			appendLogMsg("Invalid address encountered for: " + name);
+			return true;
+		}
+		if (address == PdbAddressManager.ZERO_ADDRESS) {
+			// Symbol OMAP resulted in 0 RVA - Discard silently
 			return true;
 		}
 		if (address == PdbAddressManager.EXTERNAL_ADDRESS) {
@@ -931,7 +954,7 @@ public class PdbApplicator {
 	//==============================================================================================
 	private void processModuleSymbols() throws CancelledException {
 		int totalCount = 0;
-		int num = pdb.getDatabaseInterface().getNumModules();
+		int num = pdb.getDebugInfo().getNumModules();
 		for (int moduleNumber = 1; moduleNumber <= num; moduleNumber++) {
 			monitor.checkCanceled();
 			SymbolGroup symbolGroup = getSymbolGroupForModule(moduleNumber);
@@ -990,7 +1013,7 @@ public class PdbApplicator {
 		SymbolGroup symbolGroup = getSymbolGroup();
 
 		PublicSymbolInformation publicSymbolInformation =
-			pdb.getDatabaseInterface().getPublicSymbolInformation();
+			pdb.getDebugInfo().getPublicSymbolInformation();
 		List<Long> offsets = publicSymbolInformation.getModifiedHashRecordSymbolOffsets();
 		setMonitorMessage("PDB: Applying " + offsets.size() + " public symbol components...");
 		monitor.initialize(offsets.size());
@@ -1020,7 +1043,7 @@ public class PdbApplicator {
 		SymbolGroup symbolGroup = getSymbolGroup();
 
 		GlobalSymbolInformation globalSymbolInformation =
-			pdb.getDatabaseInterface().getGlobalSymbolInformation();
+			pdb.getDebugInfo().getGlobalSymbolInformation();
 		List<Long> offsets = globalSymbolInformation.getModifiedHashRecordSymbolOffsets();
 		setMonitorMessage("PDB: Applying global symbols...");
 		monitor.initialize(offsets.size());
@@ -1051,7 +1074,7 @@ public class PdbApplicator {
 		SymbolGroup symbolGroup = getSymbolGroup();
 
 		GlobalSymbolInformation globalSymbolInformation =
-			pdb.getDatabaseInterface().getGlobalSymbolInformation();
+			pdb.getDebugInfo().getGlobalSymbolInformation();
 		List<Long> offsets = globalSymbolInformation.getModifiedHashRecordSymbolOffsets();
 		setMonitorMessage("PDB: Applying typedefs...");
 		monitor.initialize(offsets.size());
@@ -1081,11 +1104,11 @@ public class PdbApplicator {
 	@SuppressWarnings("unused") // for method not being called.
 	private void processNonPublicOrGlobalSymbols() throws CancelledException, PdbException {
 		Set<Long> offsetsRemaining = getSymbolGroup().getOffsets();
-		for (long off : pdb.getDatabaseInterface().getPublicSymbolInformation().getModifiedHashRecordSymbolOffsets()) {
+		for (long off : pdb.getDebugInfo().getPublicSymbolInformation().getModifiedHashRecordSymbolOffsets()) {
 			monitor.checkCanceled();
 			offsetsRemaining.remove(off);
 		}
-		for (long off : pdb.getDatabaseInterface().getGlobalSymbolInformation().getModifiedHashRecordSymbolOffsets()) {
+		for (long off : pdb.getDebugInfo().getGlobalSymbolInformation().getModifiedHashRecordSymbolOffsets()) {
 			monitor.checkCanceled();
 			offsetsRemaining.remove(off);
 		}
@@ -1108,9 +1131,9 @@ public class PdbApplicator {
 
 	//==============================================================================================
 	private int findLinkerModuleNumber() {
-		if (pdb.getDatabaseInterface() != null) {
+		if (pdb.getDebugInfo() != null) {
 			int num = 1;
-			for (AbstractModuleInformation module : pdb.getDatabaseInterface().getModuleInformationList()) {
+			for (AbstractModuleInformation module : pdb.getDebugInfo().getModuleInformationList()) {
 				if (isLinkerModule(module.getModuleName())) {
 					return num;
 				}
@@ -1159,7 +1182,7 @@ public class PdbApplicator {
 		int linkerModuleNumber = findLinkerModuleNumber();
 
 		int totalCount = 0;
-		int num = pdb.getDatabaseInterface().getNumModules();
+		int num = pdb.getDebugInfo().getNumModules();
 		for (int index = 1; index <= num; index++) {
 			monitor.checkCanceled();
 			if (index == linkerModuleNumber) {

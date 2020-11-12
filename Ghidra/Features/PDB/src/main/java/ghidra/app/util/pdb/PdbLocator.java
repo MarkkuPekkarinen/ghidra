@@ -27,6 +27,7 @@ import ghidra.app.util.importer.LibrarySearchPathManager;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.OperatingSystem;
 import ghidra.framework.Platform;
+import ghidra.framework.preferences.Preferences;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import ghidra.util.SystemUtilities;
@@ -70,18 +71,25 @@ import ghidra.util.task.TaskMonitor;
  */
 public class PdbLocator {
 
-	public static final File SPECIAL_PDB_LOCATION = new File("C:/WINDOWS/Symbols");
 	public static final boolean onWindows =
 		(Platform.CURRENT_PLATFORM.getOperatingSystem() == OperatingSystem.WINDOWS);
 
-	private File symbolsRepositoryPath;
+	private static final File USER_HOME = new File(System.getProperty("user.home"));
+	public static final File DEFAULT_SYMBOLS_DIR =
+		onWindows ? new File("C:\\Symbols") : new File(USER_HOME, "Symbols");
+	public final static File WINDOWS_SYMBOLS_DIR =
+		onWindows ? new File("C:/WINDOWS/Symbols") : null;
+
+	public final static String PDB_SYMBOLS_DIR_PREFERENCE = "PDB Storage Directory";
+
+	private File symbolsRepositoryDir;
 	/**
 	 * Only holds identifies in PDBs up until a matching one was found--nothing beyond that.
 	 */
 	private Map<String, PdbIdentifiers> identifiersByFilePath = new HashMap<>();
 
-	public PdbLocator(File symbolsRepositoryPath) {
-		this.symbolsRepositoryPath = symbolsRepositoryPath;
+	public PdbLocator(File symbolsRepositoryDir) {
+		this.symbolsRepositoryDir = symbolsRepositoryDir;
 	}
 
 	//==============================================================================================
@@ -216,11 +224,11 @@ public class PdbLocator {
 		try {
 
 			List<String> orderedListOfExistingFileNames = findPDB(new PdbProgramAttributes(program),
-				includePeSpecifiedPdbPath, symbolsRepositoryPath.getAbsolutePath());
+				includePeSpecifiedPdbPath, symbolsRepositoryDir);
 			if (orderedListOfExistingFileNames.isEmpty()) {
 
-				String pdbName = program.getOptions(Program.PROGRAM_INFO).getString(
-					PdbParserConstants.PDB_FILE, (String) null);
+				String pdbName = program.getOptions(Program.PROGRAM_INFO)
+						.getString(PdbParserConstants.PDB_FILE, (String) null);
 				if (pdbName == null) {
 					message = "Program has no associated PDB file.";
 				}
@@ -364,27 +372,27 @@ public class PdbLocator {
 		return builder.toString();
 	}
 
-	private StringBuilder formatPdbIdentifiers(PdbProgramAttributes attributes) {
+	public static StringBuilder formatPdbIdentifiers(PdbProgramAttributes attributes) {
 		Integer signature = (attributes.getPdbSignature() == null) ? null
 				: Integer.valueOf(attributes.getPdbSignature());
 		return formatPdbIdentifiers(attributes.getPdbFile(), signature,
-			Integer.valueOf(attributes.getPdbAge()), attributes.getPdbGuid());
+			Integer.valueOf(attributes.getPdbAge(), 16), attributes.getPdbGuid());
 	}
 
-	private StringBuilder formatPdbIdentifiers(String file, PdbIdentifiers identifiers) {
+	public static StringBuilder formatPdbIdentifiers(String file, PdbIdentifiers identifiers) {
 		return formatPdbIdentifiers(file, identifiers.getSignature(), identifiers.getAge(),
 			identifiers.getGuid().toString());
 	}
 
-	private StringBuilder formatPdbIdentifiers(String file, Integer signature, int age,
+	private static StringBuilder formatPdbIdentifiers(String file, Integer signature, int age,
 			String guidString) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("  Location: ").append(file);
 		if (signature != null) {
 			builder.append(String.format("; Signature: 0X%08X", signature));
 		}
-		builder.append("; Age: ");
-		builder.append(age);
+		builder.append("; Age: 0x");
+		builder.append(Integer.toHexString(age));
 		if (guidString != null) {
 			builder.append("; GUID: ");
 			builder.append(guidString);
@@ -401,12 +409,12 @@ public class PdbLocator {
 	 * @param pdbAttributes  PDB attributes associated with the program.
 	 * @param includePeSpecifiedPdbPath {@code true} if looking for PDB in PE-Header-Specified
 	 * path location, which may be unsafe security-wise.
-	 * @param symbolsRepositoryPathIn Location of the local symbols repository (can be null).
+	 * @param symbolsRepositoryDir Location of the local symbols repository (can be null).
 	 * @return matching PDB file (or null, if not found).
 	 * @throws PdbException if there was a problem with the PDB attributes.
 	 */
-	private List<String> findPDB(PdbProgramAttributes pdbAttributes,
-			boolean includePeSpecifiedPdbPath, String symbolsRepositoryPathIn) throws PdbException {
+	private static List<String> findPDB(PdbProgramAttributes pdbAttributes,
+			boolean includePeSpecifiedPdbPath, File symbolsRepositoryDir) throws PdbException {
 
 		// Store potential names of PDB files and potential locations of those files,
 		// so that all possible combinations can be searched.
@@ -425,7 +433,7 @@ public class PdbLocator {
 			guidSubdirPaths.add(File.separator + potentialName + File.separator + guidAgeString);
 		}
 
-		return checkPathsForPdb(symbolsRepositoryPathIn, guidSubdirPaths, potentialPdbNames,
+		return checkPathsForPdb(symbolsRepositoryDir, guidSubdirPaths, potentialPdbNames,
 			pdbAttributes, includePeSpecifiedPdbPath);
 	}
 
@@ -447,32 +455,35 @@ public class PdbLocator {
 	 *  		symbolsRepositoryPath, then look for .pdb.xml file, then .pdb.xml file in other
 	 *  		directories.
 	 *
-	 * @param symbolsRepositoryPath  location of the local symbols repository (can be null)
+	 * @param symbolsRepositoryDir  location of the local symbols repository (can be null)
 	 * @param guidSubdirPaths  subdirectory paths (that include the PDB's GUID) that may contain
 	 * 							a matching PDB
 	 * @param potentialPdbNames  all potential filenames for the PDB file(s) that match the program
 	 * @param pdbAttributes    PDB attributes associated with the program
+	 * @param includePeSpecifiedPdbPath if true include paths derived from the PDB file path 
+	 * determined at time of import.  NOTE: This option is considered unsafe and should not be
+	 * enabled unless binary source is trusted and PDB file path is reasonable for this system.
 	 * @return  matching PDB file, if found (else null)
 	 */
-	private static List<String> checkPathsForPdb(String symbolsRepositoryPath,
+	private static List<String> checkPathsForPdb(File symbolsRepositoryDir,
 			Set<String> guidSubdirPaths, List<String> potentialPdbNames,
 			PdbProgramAttributes pdbAttributes, boolean includePeSpecifiedPdbPath) {
 
 		Set<File> symbolsRepoPaths =
-			getSymbolsRepositoryPaths(symbolsRepositoryPath, guidSubdirPaths);
+			getSymbolsRepositoryPaths(symbolsRepositoryDir, guidSubdirPaths);
 		Set<File> predefinedPaths =
 			getPredefinedPaths(guidSubdirPaths, pdbAttributes, includePeSpecifiedPdbPath);
 
-		// Start by searching in symbolsRepositoryPath, if available.
+		// Start by searching in symbolsRepositoryDir, if available.
 
 		List<String> orderedListOfExistingFileNames = new ArrayList<>();
-		if (symbolsRepositoryPath != null) {
-			orderedListOfExistingFileNames.addAll(
-				checkSpecificPathsForPdb(symbolsRepoPaths, potentialPdbNames));
+		if (!symbolsRepoPaths.isEmpty()) {
+			orderedListOfExistingFileNames
+					.addAll(checkSpecificPathsForPdb(symbolsRepoPaths, potentialPdbNames));
 		}
 
-		orderedListOfExistingFileNames.addAll(
-			checkSpecificPathsForPdb(predefinedPaths, potentialPdbNames));
+		orderedListOfExistingFileNames
+				.addAll(checkSpecificPathsForPdb(predefinedPaths, potentialPdbNames));
 
 		return orderedListOfExistingFileNames;
 
@@ -488,26 +499,23 @@ public class PdbLocator {
 	}
 
 	//==============================================================================================
-	private static Set<File> getSymbolsRepositoryPaths(String symbolsRepositoryPath,
+	private static Set<File> getSymbolsRepositoryPaths(File symbolsRepositoryDir,
 			Set<String> guidSubdirPaths) {
 
 		Set<File> symbolsRepoPaths = new LinkedHashSet<>();
 
 		// Collect sub-directories of the symbol repository that exist
-		File symRepoFile;
-
-		if (symbolsRepositoryPath != null &&
-			(symRepoFile = new File(symbolsRepositoryPath)).isDirectory()) {
+		if (symbolsRepositoryDir != null && symbolsRepositoryDir.isDirectory()) {
 
 			for (String guidSubdir : guidSubdirPaths) {
-				File testDir = new File(symRepoFile, guidSubdir);
+				File testDir = new File(symbolsRepositoryDir, guidSubdir);
 				if (testDir.isDirectory()) {
 					symbolsRepoPaths.add(testDir);
 				}
 			}
 
 			// Check outer folder last
-			symbolsRepoPaths.add(symRepoFile);
+			symbolsRepoPaths.add(symbolsRepositoryDir);
 		}
 
 		return symbolsRepoPaths;
@@ -521,7 +529,8 @@ public class PdbLocator {
 		Set<File> predefinedPaths = new LinkedHashSet<>();
 
 		getPathsFromAttributes(pdbAttributes, includePeSpecifiedPdbPath, predefinedPaths);
-		getWindowsPaths(guidSubdirPaths, predefinedPaths);
+		getSymbolPaths(DEFAULT_SYMBOLS_DIR, guidSubdirPaths, predefinedPaths);
+		getSymbolPaths(WINDOWS_SYMBOLS_DIR, guidSubdirPaths, predefinedPaths);
 		getLibraryPaths(guidSubdirPaths, predefinedPaths);
 
 		return predefinedPaths;
@@ -560,19 +569,22 @@ public class PdbLocator {
 	 * <li>C:\MySymbols\symbols\ext
 	 * <P>
 	 */
-	private static void getWindowsPaths(Set<String> guidSubdirPaths, Set<File> predefinedPaths) {
-		// Don't have to call .exists(), since .isDirectory() does that already
-		if (onWindows && SPECIAL_PDB_LOCATION.isDirectory()) {
-			predefinedPaths.add(SPECIAL_PDB_LOCATION);
+	private static void getSymbolPaths(File symbolsDir, Set<String> guidSubdirPaths,
+			Set<File> predefinedPaths) {
+		// TODO: Need to provide better control of symbol directory preference
+		// instead of only using default
+		if (symbolsDir == null || !symbolsDir.isDirectory()) {
+			return;
+		}
+		predefinedPaths.add(symbolsDir);
 
-			// Check alternate locations
-			String specialPdbPath = SPECIAL_PDB_LOCATION.getAbsolutePath();
+		// Check alternate locations
+		String specialPdbPath = symbolsDir.getAbsolutePath();
 
-			for (String guidSubdir : guidSubdirPaths) {
-				File testDir = new File(specialPdbPath + guidSubdir);
-				if (testDir.isDirectory()) {
-					predefinedPaths.add(testDir);
-				}
+		for (String guidSubdir : guidSubdirPaths) {
+			File testDir = new File(specialPdbPath + guidSubdir);
+			if (testDir.isDirectory()) {
+				predefinedPaths.add(testDir);
 			}
 		}
 	}
@@ -636,7 +648,7 @@ public class PdbLocator {
 	}
 
 	//==============================================================================================
-	private boolean verifyPdbSignature(PdbProgramAttributes programAttributes,
+	public static boolean verifyPdbSignature(PdbProgramAttributes programAttributes,
 			PdbIdentifiers identifiers) throws PdbException {
 
 		String attributesGuidString = programAttributes.getPdbGuid();
@@ -666,6 +678,23 @@ public class PdbLocator {
 		}
 
 		return true;
+	}
+
+	public static File getDefaultPdbSymbolsDir() {
+		String pdbStorageLocation = Preferences.getProperty(PDB_SYMBOLS_DIR_PREFERENCE, null, true);
+		File defaultSymbolsDir = DEFAULT_SYMBOLS_DIR;
+		if (pdbStorageLocation != null) {
+			File pdbDirectory = new File(pdbStorageLocation);
+			if (pdbDirectory.isDirectory()) {
+				defaultSymbolsDir = pdbDirectory;
+			}
+		}
+		return defaultSymbolsDir;
+	}
+
+	public static void setDefaultPdbSymbolsDir(File symbolsDir) {
+		Preferences.setProperty(PDB_SYMBOLS_DIR_PREFERENCE, symbolsDir.getAbsolutePath());
+		Preferences.store();
 	}
 
 }
