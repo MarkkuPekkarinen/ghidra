@@ -21,6 +21,7 @@ import static java.awt.event.InputEvent.*;
 
 import java.awt.*;
 import java.awt.event.*;
+import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.util.*;
 import java.util.List;
@@ -115,7 +116,6 @@ public class GTable extends JTable {
 	 * Constructs a new GTable
 	 */
 	public GTable() {
-		super();
 		init();
 	}
 
@@ -217,6 +217,10 @@ public class GTable extends JTable {
 	@Override
 	// overridden to install our SelectionManager
 	public void setModel(TableModel dataModel) {
+		// we are going to create a new selection model, save off the old selectionMode and
+		// restore it at the end.
+		int selectionMode = selectionModel.getSelectionMode();
+
 		if (selectionManager != null) {
 			selectionManager.dispose();
 		}
@@ -226,6 +230,7 @@ public class GTable extends JTable {
 		initializeRowHeight();
 
 		selectionManager = createSelectionManager();
+		selectionModel.setSelectionMode(selectionMode);
 	}
 
 	protected <T> SelectionManager createSelectionManager() {
@@ -279,14 +284,24 @@ public class GTable extends JTable {
 	 * Call this when the table will no longer be used
 	 */
 	public void dispose() {
-		if (dataModel instanceof AbstractGTableModel) {
-			((AbstractGTableModel<?>) dataModel).dispose();
+		TableModel unwrappedeModel = getUnwrappedTableModel();
+		if (unwrappedeModel instanceof AbstractGTableModel) {
+			((AbstractGTableModel<?>) unwrappedeModel).dispose();
 		}
 
 		if (columnModel instanceof GTableColumnModel) {
 			((GTableColumnModel) columnModel).dispose();
 		}
+
 		columnRenderingDataMap.clear();
+
+		if (selectionManager != null) {
+			selectionManager.dispose();
+		}
+
+		for (PropertyChangeListener listener : getPropertyChangeListeners()) {
+			removePropertyChangeListener(listener);
+		}
 	}
 
 	/**
@@ -489,6 +504,10 @@ public class GTable extends JTable {
 	private int calculatePreferredRowHeight() {
 		if (userDefinedRowHeight != 16) { // default size
 			return userDefinedRowHeight; // prefer user-defined settings
+		}
+
+		if (getColumnCount() == 0) {
+			return userDefinedRowHeight; // no columns yet defined
 		}
 
 		TableCellRenderer defaultRenderer = getDefaultRenderer(String.class);
@@ -701,9 +720,6 @@ public class GTable extends JTable {
 		}
 	}
 
-	/**
-	 * @see javax.swing.JComponent#getToolTipText(java.awt.event.MouseEvent)
-	 */
 	@Override
 	public String getToolTipText(MouseEvent e) {
 		String str = super.getToolTipText(e);
@@ -853,10 +869,10 @@ public class GTable extends JTable {
 	}
 
 	/**
-	 * Performs custom work to locate renderers for special table model types.  This method
-	 * allows clients to bypass the {@link #getCellRenderer(int, int)}, which is sometimes
-	 * overridden by subclasses to return a hard-coded renderer.  In that case, some clients
-	 * still want a way to perform normal cell renderer lookup.
+	 * Performs custom work to locate renderers for special table model types.  This method allows 
+	 * clients to bypass the {@link #getCellRenderer(int, int)}, which is sometimes overridden by 
+	 * subclasses to return a hard-coded renderer.  In that case, some clients still want a way to 
+	 * perform normal cell renderer lookup.
 	 * 
 	 * @param row the row
 	 * @param col the column
@@ -875,11 +891,9 @@ public class GTable extends JTable {
 	}
 
 	/**
-	 * If you just begin typing into an editable cell in
-	 * a JTable, then the cell editor will be displayed. However,
-	 * the editor component will not have a focus. This
-	 * method has been overridden to request
-	 * focus on the editor component.
+	 * If you just begin typing into an editable cell in a JTable, then the cell editor will be 
+	 * displayed. However, the editor component will not have a focus. This method has been 
+	 * overridden to request focus on the editor component.
 	 *
 	 * @see javax.swing.JTable#editCellAt(int, int)
 	 */
@@ -1037,18 +1051,16 @@ public class GTable extends JTable {
 	}
 
 	/**
-	 * Maintain a {@link docking.widgets.table.GTableCellRenderingData} object
-	 * associated with each column that maintains some state and references to
-	 * useful data. These objects are created as needed, stored by the table for
-	 * convenient re-use and to prevent per-cell creation, and cleared when columns
-	 * are removed from the table.
+	 * Maintain a {@link docking.widgets.table.GTableCellRenderingData} object associated with each 
+	 * column that maintains some state and references to useful data. These objects are created as 
+	 * needed, stored by the table for convenient re-use and to prevent per-cell creation, and 
+	 * cleared when columns are removed from the table.
 	 * <p>
-	 * Row and cell state is cleared before returning to the caller to ensure
-	 * consistent state; when the client is done rendering a cell, row and cell
-	 * state should also be cleared to minimize references.
+	 * Row and cell state is cleared before returning to the caller to ensure consistent state; 
+	 * when the client is done rendering a cell, row and cell state should also be cleared to 
+	 * minimize references.
 	 *
-	 * @param viewColumn
-	 *            The columns' view index
+	 * @param viewColumn the columns' view index
 	 * @return Data specific to the column. Row state is cleared before returning.
 	 */
 	GTableCellRenderingData getRenderingData(int viewColumn) {

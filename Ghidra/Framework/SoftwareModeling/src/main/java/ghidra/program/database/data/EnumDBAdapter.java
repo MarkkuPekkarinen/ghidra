@@ -1,6 +1,5 @@
 /* ###
  * IP: GHIDRA
- * REVIEWED: YES
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +15,12 @@
  */
 package ghidra.program.database.data;
 
-import ghidra.util.UniversalID;
-import ghidra.util.exception.VersionException;
-import ghidra.util.task.TaskMonitor;
-
 import java.io.IOException;
 
 import db.*;
+import ghidra.util.UniversalID;
+import ghidra.util.exception.VersionException;
+import ghidra.util.task.TaskMonitor;
 
 /**
  * Adapter to access the Enumeration data types tables.
@@ -43,7 +41,7 @@ abstract class EnumDBAdapter {
 	static final int ENUM_LAST_CHANGE_TIME_COL = EnumDBAdapterV1.V1_ENUM_LAST_CHANGE_TIME_COL;
 
 	/**
-	 * Gets an adapter for working with the enumeration data type database table. The adapter is based 
+	 * Gets an adapter for working with the enumeration data type database table. The adapter is based
 	 * on the version of the database associated with the specified database handle and the openMode.
 	 * @param handle handle to the database to be accessed.
 	 * @param openMode the mode this adapter is to be opened for (CREATE, UPDATE, READ_ONLY, UPGRADE).
@@ -110,14 +108,14 @@ abstract class EnumDBAdapter {
 			tmpAdapter = new EnumDBAdapterV1(tmpHandle, true);
 			RecordIterator it = oldAdapter.getRecords();
 			while (it.hasNext()) {
-				Record rec = it.next();
+				DBRecord rec = it.next();
 				tmpAdapter.updateRecord(rec, false);
 			}
 			oldAdapter.deleteTable(handle);
 			EnumDBAdapterV1 newAdapter = new EnumDBAdapterV1(handle, true);
 			it = tmpAdapter.getRecords();
 			while (it.hasNext()) {
-				Record rec = it.next();
+				DBRecord rec = it.next();
 				newAdapter.updateRecord(rec, false);
 			}
 			return newAdapter;
@@ -140,7 +138,7 @@ abstract class EnumDBAdapter {
 	 * @return the database record for this data type.
 	 * @throws IOException if the database can't be accessed.
 	 */
-	abstract Record createRecord(String name, String comments, long categoryID, byte size,
+	abstract DBRecord createRecord(String name, String comments, long categoryID, byte size,
 			long sourceArchiveID, long sourceDataTypeID, long lastChangeTime) throws IOException;
 
 	/**
@@ -149,7 +147,7 @@ abstract class EnumDBAdapter {
 	 * @return the record for the enumeration data type.
 	 * @throws IOException if the database can't be accessed.
 	 */
-	abstract Record getRecord(long enumID) throws IOException;
+	abstract DBRecord getRecord(long enumID) throws IOException;
 
 	/**
 	 * Gets an iterator over all enumeration data type records.
@@ -161,16 +159,17 @@ abstract class EnumDBAdapter {
 	/**
 	 * Updates the enumeration data type table with the provided record.
 	 * @param record the new record
-	 * @param setLastChangedTime true means change the last change time in the record to the 
+	 * @param setLastChangeTime true means change the last change time in the record to the
 	 * current time before putting the record in the database.
 	 * @throws IOException if the database can't be accessed.
 	 */
-	abstract void updateRecord(Record record, boolean setLastChangeTime) throws IOException;
+	abstract void updateRecord(DBRecord record, boolean setLastChangeTime) throws IOException;
 
 	/**
-	 * Remove the record for the given enumeration ID, and remove all of its 
-	 * associated value records.
+	 * Remove the record for the given enumeration ID, and remove all of its associated value
+	 * records.
 	 * @param enumID ID of enumerated data type to delete
+	 * @return true if successful
 	 * @throws IOException if there was a problem accessing the database
 	 */
 	abstract boolean removeRecord(long enumID) throws IOException;
@@ -188,7 +187,7 @@ abstract class EnumDBAdapter {
 	 * @return an array of IDs for the enumeration data types in the category.
 	 * @throws IOException if the database can't be accessed.
 	 */
-	abstract long[] getRecordIdsInCategory(long categoryID) throws IOException;
+	abstract Field[] getRecordIdsInCategory(long categoryID) throws IOException;
 
 	/**
 	 * Gets an array with the IDs of all data types in the enumeration table that were derived
@@ -197,9 +196,16 @@ abstract class EnumDBAdapter {
 	 * @return the array data type IDs.
 	 * @throws IOException if the database can't be accessed.
 	 */
-	abstract long[] getRecordIdsForSourceArchive(long archiveID) throws IOException;
+	abstract Field[] getRecordIdsForSourceArchive(long archiveID) throws IOException;
 
-	abstract Record getRecordWithIDs(UniversalID sourceID, UniversalID datatypeID)
+	/**
+	 * Get enum record whose sourceID and datatypeID match the specified Universal IDs.
+	 * @param sourceID universal source archive ID
+	 * @param datatypeID universal datatype ID
+	 * @return enum record found or null
+	 * @throws IOException if IO error occurs
+	 */
+	abstract DBRecord getRecordWithIDs(UniversalID sourceID, UniversalID datatypeID)
 			throws IOException;
 
 }

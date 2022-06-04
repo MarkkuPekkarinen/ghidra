@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.commons.lang3.StringUtils;
+
 import ghidra.program.database.data.DataTypeUtilities;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Enum;
@@ -90,6 +92,7 @@ public class DemangledDataType extends DemangledType {
 	private boolean isEnum;
 	private boolean isPointer64;
 	private boolean isReference;
+	private boolean isRValueReference;
 	private boolean isSigned;
 	private boolean isStruct;
 	private boolean isTemplate;
@@ -339,6 +342,9 @@ public class DemangledDataType extends DemangledType {
 	static DataType findDataType(DataTypeManager dataTypeManager, Demangled namespace,
 			String dtName) {
 
+		// TODO: add support for use of Program.getPreferredRootNamespaceCategoryPath when
+		// searching for datatypes
+
 		List<DataType> list = new ArrayList<>();
 		dataTypeManager.findDataTypes(dtName, list);
 		if (list.isEmpty()) {
@@ -403,6 +409,9 @@ public class DemangledDataType extends DemangledType {
 	}
 
 	static Structure createPlaceHolderStructure(String dtName, Demangled namespace) {
+		if (StringUtils.isBlank(dtName)) {
+			throw new IllegalArgumentException("Name cannot be blank");
+		}
 		StructureDataType structDT = new StructureDataType(dtName, 0);
 		structDT.setDescription("PlaceHolder Structure");
 		structDT.setCategoryPath(getDemanglerCategoryPath(dtName, namespace));
@@ -443,6 +452,13 @@ public class DemangledDataType extends DemangledType {
 
 	public void setReference() {
 		isReference = true;
+	}
+
+	/**
+	 * rvalue reference; C++11
+	 */
+	public void setRValueReference() {
+		isRValueReference = true;
 	}
 
 	public void setSigned() {
@@ -671,6 +687,9 @@ public class DemangledDataType extends DemangledType {
 
 		if (isReference) {
 			buffer.append(SPACE + REF_NOTATION);
+			if (isRValueReference) {
+				buffer.append(REF_NOTATION); // &&
+			}
 		}
 
 		// the order of __ptr64 and __restrict can vary--with fuzzing... 
@@ -703,5 +722,4 @@ public class DemangledDataType extends DemangledType {
 	public String toString() {
 		return getSignature();
 	}
-
 }

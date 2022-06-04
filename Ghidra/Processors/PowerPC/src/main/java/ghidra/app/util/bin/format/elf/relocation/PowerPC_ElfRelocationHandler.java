@@ -63,7 +63,7 @@ public class PowerPC_ElfRelocationHandler extends ElfRelocationHandler {
 		int offset = (int) relocationAddress.getOffset();
 
 		ElfSymbol sym = elfRelocationContext.getSymbol(symbolIndex);
-		int symbolValue;
+
 //		if (sym.isLocal() && sym.getSectionHeaderIndex() != ElfSectionHeaderConstants.SHN_UNDEF) {
 //
 //			// see glibc - sysdeps/powerpc/powerpc32/dl-machine.h elf_machine_rela
@@ -75,18 +75,29 @@ public class PowerPC_ElfRelocationHandler extends ElfRelocationHandler {
 //			symbolValue = (int) elfRelocationContext.getImageBaseWordAdjustmentOffset();
 //		}
 //		else {
-		symbolValue = (int) elfRelocationContext.getSymbolValue(sym);
+		Address symbolAddr = (elfRelocationContext.getSymbolAddress(sym));
+		int symbolValue = (int) elfRelocationContext.getSymbolValue(sym);
 //		}
+		String symbolName = sym.getNameAsString();
 
 		int oldValue = memory.getInt(relocationAddress);
 		int newValue = 0;
 
 		switch (type) {
+			case PowerPC_ElfRelocationConstants.R_PPC_COPY:
+				markAsWarning(program, relocationAddress, "R_PPC_COPY", symbolName,
+					symbolIndex, "Runtime copy not supported", elfRelocationContext.getLog());
+				break;
 			case PowerPC_ElfRelocationConstants.R_PPC_ADDR32:
 			case PowerPC_ElfRelocationConstants.R_PPC_UADDR32:
 			case PowerPC_ElfRelocationConstants.R_PPC_GLOB_DAT:
 				newValue = symbolValue + addend;
 				memory.setInt(relocationAddress, newValue);
+				if (addend != 0) {
+					warnExternalOffsetRelocation(program, relocationAddress,
+						symbolAddr, symbolName, addend, elfRelocationContext.getLog());
+					applyComponentOffsetPointer(program, relocationAddress, addend);
+				}
 				break;
 			case PowerPC_ElfRelocationConstants.R_PPC_ADDR24:
 				newValue = (symbolValue + addend) >> 2;
@@ -190,13 +201,11 @@ public class PowerPC_ElfRelocationHandler extends ElfRelocationHandler {
 					// TODO: Handle this case if needed - hopefully the EXTERNAL block is 
 					// not too far away since a fabricated GOT would be in the same block
 					// and we may only have room in the plt for two instructions.
-					String symbolName = sym.getNameAsString();
 					markAsUnhandled(program, relocationAddress, type, symbolIndex, symbolName,
 						elfRelocationContext.getLog());
 				}
 				break;
 			default:
-				String symbolName = sym.getNameAsString();
 				markAsUnhandled(program, relocationAddress, type, symbolIndex, symbolName,
 					elfRelocationContext.getLog());
 				break;

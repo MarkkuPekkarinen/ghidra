@@ -20,6 +20,8 @@ import java.util.*;
 import org.jdom.Element;
 
 import ghidra.app.CorePluginPackage;
+import ghidra.app.decompiler.ClangToken;
+import ghidra.app.decompiler.DecompilerHighlightService;
 import ghidra.app.decompiler.component.hover.DecompilerHoverService;
 import ghidra.app.events.*;
 import ghidra.app.plugin.PluginCategoryNames;
@@ -28,6 +30,7 @@ import ghidra.framework.model.DomainFile;
 import ghidra.framework.options.SaveState;
 import ghidra.framework.plugintool.*;
 import ghidra.framework.plugintool.util.PluginStatus;
+import ghidra.program.database.SpecExtension;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.*;
 import ghidra.program.util.ProgramLocation;
@@ -44,13 +47,14 @@ import ghidra.util.task.SwingUpdateManager;
 	category = PluginCategoryNames.ANALYSIS,
 	shortDescription = "Decompiler",
 	description = "Plugin for producing high-level decompilation",
-	servicesRequired = { 
-		GoToService.class, NavigationHistoryService.class, ClipboardService.class, 
+	servicesRequired = {
+		GoToService.class, NavigationHistoryService.class, ClipboardService.class,
 		DataTypeManagerService.class /*, ProgramManager.class */
 	},
-	eventsConsumed = { 
-		ProgramActivatedPluginEvent.class, ProgramOpenedPluginEvent.class, 
-		ProgramLocationPluginEvent.class, ProgramSelectionPluginEvent.class, 
+	servicesProvided = { DecompilerHighlightService.class },
+	eventsConsumed = {
+		ProgramActivatedPluginEvent.class, ProgramOpenedPluginEvent.class,
+		ProgramLocationPluginEvent.class, ProgramSelectionPluginEvent.class,
 		ProgramClosedPluginEvent.class
 	}
 )
@@ -76,11 +80,16 @@ public class DecompilePlugin extends Plugin {
 	});
 
 	public DecompilePlugin(PluginTool tool) {
-
 		super(tool);
 
 		disconnectedProviders = new ArrayList<>();
 		connectedProvider = new PrimaryDecompilerProvider(this);
+
+		registerServices();
+	}
+
+	private void registerServices() {
+		registerServiceProvided(DecompilerHighlightService.class, connectedProvider);
 	}
 
 	@Override
@@ -200,15 +209,18 @@ public class DecompilePlugin extends Plugin {
 		}
 	}
 
+	void handleTokenRenamed(ClangToken tokenAtCursor, String newName) {
+		connectedProvider.handleTokenRenamed(tokenAtCursor, newName);
+		for (DecompilerProvider provider : disconnectedProviders) {
+			provider.handleTokenRenamed(tokenAtCursor, newName);
+		}
+	}
+
 	private void removeProvider(DecompilerProvider provider) {
 		tool.removeComponentProvider(provider);
 		provider.dispose();
 	}
 
-	/**
-	 * Process the plugin event; delegates the processing to the
-	 * byte block.
-	 */
 	@Override
 	public void processEvent(PluginEvent event) {
 		if (event instanceof ProgramClosedPluginEvent) {
@@ -223,6 +235,9 @@ public class DecompilePlugin extends Plugin {
 		if (event instanceof ProgramActivatedPluginEvent) {
 			currentProgram = ((ProgramActivatedPluginEvent) event).getActiveProgram();
 			connectedProvider.doSetProgram(currentProgram);
+			if (currentProgram != null) {
+				SpecExtension.registerOptions(currentProgram);
+			}
 		}
 		else if (event instanceof ProgramLocationPluginEvent) {
 			ProgramLocation location = ((ProgramLocationPluginEvent) event).getLocation();

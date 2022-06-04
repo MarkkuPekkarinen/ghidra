@@ -21,7 +21,7 @@ import java.util.*;
 
 import org.apache.commons.lang3.StringUtils;
 
-import db.Record;
+import db.DBRecord;
 import ghidra.program.database.*;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
@@ -30,7 +30,6 @@ import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.*;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.*;
-import ghidra.program.util.ChangeManager;
 import ghidra.util.*;
 import ghidra.util.exception.*;
 import ghidra.util.prop.PropertyVisitor;
@@ -53,11 +52,10 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 	protected ReferenceManager refMgr;
 	protected ProgramDB program;
 
-	private Record commentRec;
+	private DBRecord commentRec;
 	private boolean checkedComments;
 	protected byte[] bytes;
 	private ProgramContext programContext;
-	protected ChangeManager changeMgr;
 	protected Lock lock;
 
 	/**
@@ -80,7 +78,6 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 		program = (ProgramDB) codeMgr.getProgram();
 		refMgr = program.getReferenceManager();
 		programContext = program.getProgramContext();
-		changeMgr = program;
 	}
 
 	@Override
@@ -89,7 +86,7 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 	}
 
 	@Override
-	protected boolean refresh(Record record) {
+	protected boolean refresh(DBRecord record) {
 		address = codeMgr.getAddressMap().decodeAddress(addr);
 		endAddr = null;
 		commentRec = null;
@@ -121,7 +118,7 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 	 * does NOT indicate existence and a record query may be required.
 	 * @return true if removal of code unit has been confirmed
 	 */
-	abstract protected boolean hasBeenDeleted(Record record);
+	abstract protected boolean hasBeenDeleted(DBRecord record);
 
 	@Override
 	public void addMnemonicReference(Address refAddr, RefType refType, SourceType sourceType) {
@@ -284,7 +281,7 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 	public Address getMaxAddress() {
 		refreshIfNeeded();
 		if (endAddr == null) {
-			endAddr = address.add(length - 1);
+			endAddr = getLength() == 0 ? address : address.add(getLength() - 1);
 		}
 		return endAddr;
 	}
@@ -669,9 +666,10 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 		try {
 			checkIsValid();
 			populateByteArray();
-			byte[] b = new byte[length];
-			if (bytes.length < length) {
-				if (program.getMemory().getBytes(address, b) != length) {
+			int len = getLength();
+			byte[] b = new byte[len];
+			if (bytes.length < len) {
+				if (program.getMemory().getBytes(address, b) != len) {
 					throw new MemoryAccessException("Couldn't get all bytes for CodeUnit");
 				}
 			}
@@ -794,7 +792,7 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 	@Override
 	public abstract String toString();
 
-	Record getCommentRecord() {
+	DBRecord getCommentRecord() {
 		return commentRec;
 	}
 
@@ -829,7 +827,7 @@ abstract class CodeUnitDB extends DatabaseObject implements CodeUnit, ProcessorC
 	}
 
 	protected int getPreferredCacheLength() {
-		return length;
+		return getLength();
 	}
 
 	private void validateOpIndex(int opIndex) {

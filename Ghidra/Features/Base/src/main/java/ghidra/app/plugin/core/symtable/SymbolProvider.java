@@ -97,7 +97,7 @@ class SymbolProvider extends ComponentProviderAdapter {
 	}
 
 	Symbol getSymbolForRow(int row) {
-		return symbolKeyModel.getRowObject(row);
+		return symbolKeyModel.getRowObject(row).getSymbol();
 	}
 
 	void setCurrentSymbol(Symbol symbol) {
@@ -126,9 +126,9 @@ class SymbolProvider extends ComponentProviderAdapter {
 		}
 	}
 
-	void symbolRemoved(Symbol s) {
+	void symbolRemoved(long symbolId) {
 		if (isVisible()) {
-			symbolKeyModel.symbolRemoved(s);
+			symbolKeyModel.symbolRemoved(symbolId);
 		}
 	}
 
@@ -149,8 +149,12 @@ class SymbolProvider extends ComponentProviderAdapter {
 		return symbolPanel.getTable();
 	}
 
-	NewSymbolFilter getFilter() {
+	SymbolFilter getFilter() {
 		return symbolPanel.getFilter();
+	}
+
+	boolean isShowingDynamicSymbols() {
+		return getFilter().acceptsDefaultLabelSymbols();
 	}
 
 	private String generateSubTitle() {
@@ -174,11 +178,15 @@ class SymbolProvider extends ComponentProviderAdapter {
 		}
 	}
 
+	boolean isBusy() {
+		return symbolKeyModel.isBusy();
+	}
+
 	@Override
 	public void componentHidden() {
 		symbolKeyModel.reload(null);
 		if (plugin != null) {
-			plugin.closeReferenceProvider();
+			plugin.symbolProviderClosed();
 		}
 	}
 
@@ -199,5 +207,4 @@ class SymbolProvider extends ComponentProviderAdapter {
 	void writeConfigState(SaveState saveState) {
 		symbolPanel.writeConfigState(saveState);
 	}
-
 }

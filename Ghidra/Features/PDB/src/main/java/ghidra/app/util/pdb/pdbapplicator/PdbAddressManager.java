@@ -99,7 +99,7 @@ public class PdbAddressManager {
 	/**
 	 * Returns the Address for the given symbol.  If the {@link PdbApplicatorOptions}
 	 * Address Remap option is turned on is turned on, it will attempt to map the address to a
-	 * new address in the current program. 
+	 * new address in the current program.
 	 * @param symbol The {@link AddressMsSymbol}
 	 * @return The Address, which can be {@code Address.NO_ADDRESS} if invalid or
 	 * {@code Address.EXTERNAL_ADDRESS} if the address is external to the program.
@@ -111,7 +111,7 @@ public class PdbAddressManager {
 	/**
 	 * Returns the Address for the given section and offset.  If the {@link PdbApplicatorOptions}
 	 * Address Remap option is turned on is turned on, it will attempt to map the address to a
-	 * new address in the current program. 
+	 * new address in the current program.
 	 * @param segment The segment
 	 * @param offset The offset
 	 * @return The Address, which can be {@code Address.NO_ADDRESS} if invalid or
@@ -128,7 +128,7 @@ public class PdbAddressManager {
 	/**
 	 * Returns the Address for the given section and offset.  If the {@link PdbApplicatorOptions}
 	 * Address Remap option is turned on is turned on, it will attempt to map the address to a
-	 * new address in the current program. 
+	 * new address in the current program.
 	 * @param symbol The {@link AddressMsSymbol}
 	 * @return The Address, which can be {@code Address.NO_ADDRESS} if invalid or
 	 * {@code Address.EXTERNAL_ADDRESS} if the address is external to the program.
@@ -298,7 +298,7 @@ public class PdbAddressManager {
 //		// Set section/segment 0 to image base. (should be what is header), but what is its size?
 //		// TODO... made up size for now... is there something else?  We could put null instead.
 //		// For now, the method that reads this information might report EXTERNAL instead of
-//		// trying to use this. 
+//		// trying to use this.
 //		long segmentZeroLength = 0x7fffffff;
 //		allSegmentsInfo.add(new SegmentInfo(imageBase, segmentZeroLength));
 //		PdbDebugInfo dbi = applicator.getPdb().getDebugInfo();
@@ -327,10 +327,14 @@ public class PdbAddressManager {
 //	}
 
 	private void determineMemoryBlocks() {
-		PdbDebugInfo dbi = applicator.getPdb().getDebugInfo();
-		segmentMapList = dbi.getSegmentMapList();
-		if (dbi instanceof PdbNewDebugInfo) {
-			DebugData debugData = ((PdbNewDebugInfo) dbi).getDebugData();
+		AbstractPdb pdb = applicator.getPdb();
+		PdbDebugInfo debugInfo = pdb.getDebugInfo();
+		if (debugInfo == null) {
+			return;
+		}
+		segmentMapList = debugInfo.getSegmentMapList();
+		if (debugInfo instanceof PdbNewDebugInfo) {
+			DebugData debugData = ((PdbNewDebugInfo) debugInfo).getDebugData();
 			imageSectionHeaders = debugData.getImageSectionHeadersOrig();
 			if (imageSectionHeaders != null) {
 				omapFromSource = debugData.getOmapFromSource();
@@ -504,6 +508,10 @@ public class PdbAddressManager {
 //		pdb.getDebugInfo().getDebugData().getImageSectionHeader();
 
 		AbstractPdb pdb = applicator.getPdb();
+		PdbDebugInfo debugInfo = pdb.getDebugInfo();
+		if (debugInfo == null) {
+			return;
+		}
 		Program program = applicator.getProgram();
 		if (program == null) {
 			return;
@@ -511,7 +519,7 @@ public class PdbAddressManager {
 
 		Memory mem = program.getMemory();
 		MemoryBlock[] blocks = mem.getBlocks();
-		List<SegmentMapDescription> segmentMapList = pdb.getDebugInfo().getSegmentMapList();
+		List<SegmentMapDescription> segmentMapList = debugInfo.getSegmentMapList();
 		/**
 		 * Program has additional "Headers" block set up by the {@link PeLoader}.
 		 */
@@ -570,7 +578,9 @@ public class PdbAddressManager {
 	@SuppressWarnings("unused") // for method not being called.
 	private boolean garnerSectionSegmentInformation() throws PdbException {
 		AbstractPdb pdb = applicator.getPdb();
-		if (pdb.getDebugInfo() == null) {
+
+		PdbDebugInfo debugInfo = pdb.getDebugInfo();
+		if (debugInfo == null) {
 			return false;
 		}
 
@@ -578,10 +588,13 @@ public class PdbAddressManager {
 //		pdb.getDebugInfo().getDebugData().getImageSectionHeader();
 
 		int num = 1;
-		for (AbstractModuleInformation module : pdb.getDebugInfo().getModuleInformationList()) {
+		for (AbstractModuleInformation module : debugInfo.getModuleInformationList()) {
 			if ("* Linker *".equals(module.getModuleName())) {
-				List<AbstractMsSymbol> linkerSymbolList =
-					applicator.getSymbolGroupForModule(num).getSymbols();
+				SymbolGroup symbolGroup = applicator.getSymbolGroupForModule(num);
+				if (symbolGroup == null) {
+					continue; // should not happen
+				}
+				List<AbstractMsSymbol> linkerSymbolList = symbolGroup.getSymbols();
 				for (AbstractMsSymbol symbol : linkerSymbolList) {
 					if (symbol instanceof PeCoffSectionMsSymbol) {
 						PeCoffSectionMsSymbol section = (PeCoffSectionMsSymbol) symbol;

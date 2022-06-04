@@ -42,7 +42,7 @@ public abstract class PropertyMapDB implements PropertyMap {
 
 	protected static final String[] SCHEMA_FIELD_NAMES = new String[] { "Value" };
 	protected static final String[] NO_SCHEMA_FIELD_NAMES = new String[0];
-	protected static final Class<?>[] NO_SCHEMA_FIELD_CLASSES = new Class<?>[0];
+	protected static final Field[] NO_SCHEMA_FIELDS = new Field[0];
 
 	protected static final int PROPERTY_VALUE_COL = 0;
 
@@ -92,8 +92,8 @@ public abstract class PropertyMapDB implements PropertyMap {
 		}
 	}
 
-	void checkMapVersion(int openMode, TaskMonitor monitor) throws VersionException,
-			CancelledException, IOException {
+	void checkMapVersion(int openMode, TaskMonitor monitor)
+			throws VersionException, CancelledException, IOException {
 		if (propertyTable != null && addrMap.isUpgraded()) {
 			if (openMode == DBConstants.UPGRADE) {
 				upgradeTable(monitor);
@@ -124,7 +124,7 @@ public abstract class PropertyMapDB implements PropertyMap {
 				if (monitor.isCancelled()) {
 					throw new CancelledException();
 				}
-				Record rec = iter.next();
+				DBRecord rec = iter.next();
 				if (tempTable == null) {
 					// Create table on first entry upgrade
 					tempTable = tmpDb.createTable(getTableName(), schema);
@@ -151,7 +151,7 @@ public abstract class PropertyMapDB implements PropertyMap {
 				if (monitor.isCancelled()) {
 					throw new CancelledException();
 				}
-				Record rec = iter.next();
+				DBRecord rec = iter.next();
 				propertyTable.putRecord(rec);
 				monitor.setProgress(++count);
 			}
@@ -175,15 +175,15 @@ public abstract class PropertyMapDB implements PropertyMap {
 	 * is null.
 	 * @throws IOException
 	 */
-	protected void createTable(Class<?> valueFieldClass) throws IOException {
-		if (valueFieldClass != null) {
+	protected void createTable(Field valueField) throws IOException {
+		if (valueField != null) {
 			// Create default table schema with a value column and an long Address key
-			Class<?>[] classes = new Class<?>[] { valueFieldClass };
-			schema = new Schema(0, "Address", classes, SCHEMA_FIELD_NAMES);
+			Field[] fields = new Field[] { valueField };
+			schema = new Schema(0, "Address", fields, SCHEMA_FIELD_NAMES);
 		}
 		else {
 			// Table contains only a long Address key
-			schema = new Schema(0, "Address", NO_SCHEMA_FIELD_CLASSES, NO_SCHEMA_FIELD_NAMES);
+			schema = new Schema(0, "Address", NO_SCHEMA_FIELDS, NO_SCHEMA_FIELD_NAMES);
 		}
 		propertyTable = dbHandle.createTable(getTableName(), schema);
 	}
@@ -412,9 +412,8 @@ public abstract class PropertyMapDB implements PropertyMap {
 			return null;
 		}
 		try {
-			AddressKeyIterator iter =
-				new AddressKeyIterator(propertyTable, addrMap,
-					addrMap.getAddressFactory().getAddressSet().getMaxAddress(), false);
+			AddressKeyIterator iter = new AddressKeyIterator(propertyTable, addrMap,
+				addrMap.getAddressFactory().getAddressSet().getMaxAddress(), false);
 			return addrMap.decodeAddress(iter.previous());
 		}
 		catch (NoSuchElementException e) {
@@ -435,7 +434,7 @@ public abstract class PropertyMapDB implements PropertyMap {
 
 	/**
 	 * Get an iterator over the long address keys which contain a property value.
-	 * @param set
+	 * @param set addresses over which to iterate (null indicates all defined memory regions)
 	 * @param atStart true if the iterator should be positioned at the start
 	 * of the range
 	 * @return long address iterator.
@@ -443,9 +442,8 @@ public abstract class PropertyMapDB implements PropertyMap {
 	 */
 	public AddressKeyIterator getAddressKeyIterator(AddressSetView set, boolean atStart)
 			throws IOException {
-
-		if (propertyTable == null) {
-			return new AddressKeyIterator();
+		if (propertyTable == null || (set != null && set.isEmpty())) {
+			return AddressKeyIterator.EMPTY_ITERATOR;
 		}
 		if (atStart) {
 			return new AddressKeyIterator(propertyTable, addrMap, set, set.getMinAddress(), true);
@@ -464,7 +462,7 @@ public abstract class PropertyMapDB implements PropertyMap {
 			throws IOException {
 
 		if (propertyTable == null) {
-			return new AddressKeyIterator();
+			return AddressKeyIterator.EMPTY_ITERATOR;
 		}
 		return new AddressKeyIterator(propertyTable, addrMap, start, before);
 	}
@@ -482,7 +480,7 @@ public abstract class PropertyMapDB implements PropertyMap {
 			throws IOException {
 
 		if (propertyTable == null) {
-			return new AddressKeyIterator();
+			return AddressKeyIterator.EMPTY_ITERATOR;
 		}
 		if (atStart) {
 			return new AddressKeyIterator(propertyTable, addrMap, start, end, start, true);
@@ -562,8 +560,8 @@ public abstract class PropertyMapDB implements PropertyMap {
 	 */
 	@Override
 	public AddressIterator getPropertyIterator(AddressSetView asv, boolean forward) {
-		if (propertyTable == null) {
-			return new EmptyAddressIterator();
+		if (propertyTable == null || (asv != null && asv.isEmpty())) {
+			return AddressIterator.EMPTY_ITERATOR;
 		}
 		AddressKeyIterator keyIter = null;
 		try {

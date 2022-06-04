@@ -23,6 +23,7 @@ import java.awt.event.*;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.EventObject;
+import java.util.List;
 
 import javax.swing.*;
 import javax.swing.border.Border;
@@ -42,8 +43,7 @@ import docking.widgets.fieldpanel.support.FieldRange;
 import docking.widgets.fieldpanel.support.FieldSelection;
 import docking.widgets.label.GDLabel;
 import docking.widgets.label.GLabel;
-import docking.widgets.table.GTable;
-import docking.widgets.table.GTableCellRenderer;
+import docking.widgets.table.*;
 import docking.widgets.textfield.GValidatedTextField;
 import ghidra.app.services.DataTypeManagerService;
 import ghidra.app.util.datatype.DataTypeSelectionEditor;
@@ -153,7 +153,7 @@ public abstract class CompositeEditorPanel extends JPanel
 
 	private boolean launchBitFieldEditor(int modelColumn, int editingRow) {
 		if (model.viewComposite instanceof Structure &&
-			!model.viewComposite.isInternallyAligned() &&
+			!model.viewComposite.isPackingEnabled() &&
 			model.getDataTypeColumn() == modelColumn && editingRow < model.getNumComponents()) {
 			// check if we are attempting to edit a bitfield
 			DataTypeComponent dtComponent = model.getComponent(editingRow);
@@ -161,7 +161,7 @@ public abstract class CompositeEditorPanel extends JPanel
 				table.getCellEditor().cancelCellEditing();
 
 				BitFieldEditorDialog dlg = new BitFieldEditorDialog(model.viewComposite,
-					provider.dtmService, editingRow, ordinal -> {
+					provider.dtmService, editingRow, model.showHexNumbers, ordinal -> {
 						model.notifyCompositeChanged();
 					});
 				Component c = provider.getComponent();
@@ -506,7 +506,7 @@ public abstract class CompositeEditorPanel extends JPanel
 		if (dt instanceof Composite) {
 			Composite composite = (Composite) dt;
 			String origDtPath = composite.getPathName();
-			if (!origDtPath.equals(model.getOriginalDataTypePath())) {
+			if (!origDtPath.equals(model.getOriginalDataTypePath().getPath())) {
 				model.fixupOriginalPath(composite);
 			}
 		}
@@ -540,7 +540,7 @@ public abstract class CompositeEditorPanel extends JPanel
 		}
 		if (reload) {
 			cancelCellEditing(); // Make sure a field isn't being edited.
-			model.load(originalDt, model.isOffline()); // reload the structure
+			model.load(originalDt); // reload the structure
 			model.updateAndCheckChangeState();
 		}
 	}
@@ -555,6 +555,16 @@ public abstract class CompositeEditorPanel extends JPanel
 
 	private void createTable() {
 		table = new CompositeTable(model);
+
+		TableColumnModel columnModel = table.getColumnModel();
+		if (columnModel instanceof GTableColumnModel) {
+			GTableColumnModel gColumnModel = (GTableColumnModel) columnModel;
+			List<TableColumn> hiddenColumns = model.getHiddenColumns();
+			for (TableColumn column : hiddenColumns) {
+				gColumnModel.addHiddenColumn(column);
+			}
+		}
+
 		table.putClientProperty("JTable.autoStartsEdit", Boolean.FALSE);
 		table.addMouseListener(new CompositeTableMouseListener());
 
@@ -1255,7 +1265,7 @@ public abstract class CompositeEditorPanel extends JPanel
 
 			Plugin plugin = provider.getPlugin();
 			final PluginTool tool = plugin.getTool();
-			editor = new DataTypeSelectionEditor(tool, maxLength,
+			editor = new DataTypeSelectionEditor(tool,
 				bitfieldAllowed ? AllowedDataTypes.SIZABLE_DYNAMIC_AND_BITFIELD
 						: AllowedDataTypes.SIZABLE_DYNAMIC);
 			editor.setTabCommitsEdit(true);
@@ -1287,12 +1297,7 @@ public abstract class CompositeEditorPanel extends JPanel
 				}
 			};
 
-			dataTypeChooserButton.addActionListener(new ActionListener() {
-				@Override
-				public void actionPerformed(ActionEvent e) {
-					Swing.runLater(() -> stopEdit(tool));
-				}
-			});
+			dataTypeChooserButton.addActionListener(e -> Swing.runLater(() -> stopEdit(tool)));
 
 			textField.addFocusListener(new FocusAdapter() {
 				@Override

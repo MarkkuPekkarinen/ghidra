@@ -28,10 +28,10 @@ import ghidra.app.util.bin.format.coff.relocation.CoffRelocationHandler;
 import ghidra.app.util.bin.format.coff.relocation.CoffRelocationHandlerFactory;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.model.DomainObject;
-import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.database.mem.FileBytes;
 import ghidra.program.model.address.*;
-import ghidra.program.model.data.*;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.Undefined;
 import ghidra.program.model.lang.Language;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.*;
@@ -132,7 +132,7 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 			List<QueryResult> results =
 				QueryOpinionService.query(getName(), header.getMachineName(), secondary);
 			for (QueryResult result : results) {
-				loadSpecs.add(new LoadSpec(this, header.getImageBase(true), result));
+				loadSpecs.add(new LoadSpec(this, header.getImageBase(isMicrosoftFormat()), result));
 			}
 			if (loadSpecs.isEmpty()) {
 				loadSpecs.add(new LoadSpec(this, header.getImageBase(false), true));
@@ -153,7 +153,8 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 	}
 
 	@Override
-	public String validateOptions(ByteProvider provider, LoadSpec loadSpec, List<Option> options, Program program) {
+	public String validateOptions(ByteProvider provider, LoadSpec loadSpec, List<Option> options,
+			Program program) {
 		if (options != null) {
 			for (Option option : options) {
 				String name = option.getName();
@@ -277,8 +278,8 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 
 					symbolsMap.put(symbol, sym);
 
-					externalAddress = externalAddress.add(
-						getPointerSizeAligned(externalAddress.getAddressSpace()));
+					externalAddress = externalAddress
+							.add(getPointerSizeAligned(externalAddress.getAddressSpace()));
 				}
 				else if (sectionNum <= -2) {
 					log.appendMsg("Strange symbol " + symbol + " : " + symbol.getBasicType() +
@@ -342,7 +343,7 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 						symbol.getStorageClass() != CoffSymbolStorageClass.C_STAT) {
 						// ONLY DO THIS IF THE SYMBOL IS A FUNCTION!
 						symbolTable.addExternalEntryPoint(address);
-						createOneByteFunction(program, sym.getName(), address);
+						markAsFunction(program, sym.getName(), address);
 					}
 
 					symbolsMap.put(symbol, sym);
@@ -365,7 +366,7 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 			try {
 				MemoryBlock block = program.getMemory()
 						.createUninitializedBlock(MemoryBlock.EXTERNAL_BLOCK_NAME,
-					externalAddressStart, size, false);
+							externalAddressStart, size, false);
 
 				// assume any value in external is writable.
 				block.setWrite(true);
@@ -384,7 +385,7 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 	}
 
 	private Data createUndefined(Listing listing, Memory memory, Address addr, int size)
-			throws CodeUnitInsertionException, DataTypeConflictException {
+			throws CodeUnitInsertionException {
 		MemoryBlock block = memory.getBlock(addr);
 		if (block == null || !block.isInitialized()) {
 			return null;
@@ -470,8 +471,8 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 				// don't create a block, but record the section to get at the address!
 				block = program.getMemory().getBlock(sectionAddr);
 				try {
-					program.getSymbolTable().createLabel(sectionAddr, section.getName(),
-						SourceType.IMPORTED);
+					program.getSymbolTable()
+							.createLabel(sectionAddr, section.getName(), SourceType.IMPORTED);
 					// TODO: sectionSize somewhere for case where flags==0 ?
 				}
 				catch (InvalidInputException e) {
@@ -702,34 +703,19 @@ public class CoffLoader extends AbstractLibrarySupportLoader {
 					}
 				}
 
-				program.getRelocationTable().add(address, relocation.getType(),
-					new long[] { relocation.getSymbolIndex() }, origBytes,
-					symbol != null ? symbol.getName() : "<null>");
+				program.getRelocationTable()
+						.add(address, relocation.getType(),
+							new long[] { relocation.getSymbolIndex() }, origBytes,
+							symbol != null ? symbol.getName() : "<null>");
 			}
 		}
 	}
 
 	private void handleRelocationError(Program program, MessageLog log, Address address,
 			String message) {
-		program.getBookmarkManager().setBookmark(address, BookmarkType.ERROR, "Relocations",
-			message);
+		program.getBookmarkManager()
+				.setBookmark(address, BookmarkType.ERROR, "Relocations", message);
 		log.appendMsg(message);
-	}
-
-	private void createOneByteFunction(Program program, String name, Address address) {
-		FunctionManager functionMgr = program.getFunctionManager();
-		if (functionMgr.getFunctionAt(address) != null) {
-			return;
-		}
-		try {
-			functionMgr.createFunction(name, address, new AddressSet(address), SourceType.IMPORTED);
-		}
-		catch (InvalidInputException e) {
-			// ignore
-		}
-		catch (OverlappingFunctionException e) {
-			// ignore
-		}
 	}
 
 	@Override

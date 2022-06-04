@@ -18,10 +18,7 @@ package docking;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Date;
+import java.util.*;
 import java.util.List;
 
 import javax.swing.*;
@@ -43,7 +40,7 @@ import ghidra.util.table.column.GColumnRenderer;
 import utilities.util.reflection.ReflectionUtilities;
 
 /**
- * A dialog that takes error text and displays it with an option details button.  If there is 
+ * A dialog that takes error text and displays it with an option details button.  If there is
  * an {@link ErrorReporter}, then a button is provided to report the error.
  */
 public class ErrLogDialog extends AbstractErrDialog {
@@ -71,6 +68,7 @@ public class ErrLogDialog extends AbstractErrDialog {
 	private static ErrorReporter errorReporter;
 
 	private List<ErrorEntry> errors = new ArrayList<>();
+	private String baseTitle;
 
 	public static ErrLogDialog createExceptionDialog(String title, String message, Throwable t) {
 		return new ErrLogDialog(title, message, t);
@@ -78,6 +76,8 @@ public class ErrLogDialog extends AbstractErrDialog {
 
 	private ErrLogDialog(String title, String message, Throwable throwable) {
 		super(title != null ? title : "Error");
+
+		baseTitle = getTitle();
 
 		ErrorEntry error = new ErrorEntry(message, throwable);
 		errors.add(error);
@@ -114,22 +114,33 @@ public class ErrLogDialog extends AbstractErrDialog {
 		sb.append(" ");
 		sb.append(System.getProperty("os.arch"));
 		sb.append(EOL);
-		sb.append("Workstation: ");
-		sb.append(getHostname());
-		sb.append(EOL);
+
+		String hostname = getHostnameString();
+		if (hostname != null) {
+			sb.append(hostname);
+			sb.append(EOL);
+		}
 		return sb.toString();
 	}
 
-	private Object getHostname() {
-		String hostname = "<unknown>";
-		try {
-			InetAddress addr = InetAddress.getLocalHost();
-			hostname = addr.getCanonicalHostName();
+	private String getHostnameString() {
+		//
+		// Note: we avoid use of InetAddress; using that to get the host name can timeout
+		//
+		String name = null;
+		Map<String, String> env = System.getenv();
+		if (env.containsKey("COMPUTERNAME")) {
+			name = env.get("COMPUTERNAME");
 		}
-		catch (UnknownHostException e) {
-			// ignore
+		else if (env.containsKey("HOSTNAME")) {
+			name = env.get("HOSTNAME");
 		}
-		return hostname;
+
+		if (name == null) {
+			return null;
+		}
+
+		return "Workstation: " + name;
 	}
 
 	public static void setErrorReporter(ErrorReporter errorReporter) {
@@ -146,7 +157,8 @@ public class ErrLogDialog extends AbstractErrDialog {
 		introPanel.add(
 			new GIconLabel(UIManager.getIcon("OptionPane.errorIcon"), SwingConstants.RIGHT),
 			BorderLayout.WEST);
-		introPanel.add(new GHtmlLabel(HTMLUtilities.toHTML(message)) {
+		String html = HTMLUtilities.toHTML(message);
+		introPanel.add(new GHtmlLabel(html) {
 			@Override
 			public Dimension getPreferredSize() {
 				// rendering HTML the label can expand larger than the screen; keep it reasonable
@@ -170,14 +182,14 @@ public class ErrLogDialog extends AbstractErrDialog {
 
 		detailsPane = new ErrorDetailsSplitPane();
 
-		JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEADING, 5, 5));
-		buttonPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+		JPanel sideButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEADING, 5, 5));
+		sideButtonPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 		if (errorReporter != null) {
-			buttonPanel.add(sendButton);
+			sideButtonPanel.add(sendButton);
 		}
-		buttonPanel.add(detailsButton);
+		sideButtonPanel.add(detailsButton);
 
-		introPanel.add(buttonPanel, BorderLayout.EAST);
+		introPanel.add(sideButtonPanel, BorderLayout.EAST);
 		mainPanel.add(detailsPane, BorderLayout.CENTER);
 
 		addWorkPanel(mainPanel);
@@ -244,6 +256,11 @@ public class ErrLogDialog extends AbstractErrDialog {
 	@Override
 	int getExceptionCount() {
 		return errors.size();
+	}
+
+	@Override
+	String getBaseTitle() {
+		return baseTitle;
 	}
 
 	private class ErrorDetailsSplitPane extends JSplitPane {
@@ -323,7 +340,7 @@ public class ErrLogDialog extends AbstractErrDialog {
 			setLayout(new BorderLayout());
 			model = new ErrEntryTableModel();
 			errorsTable = new GTable(model);
-			tableFilterPanel = new GTableFilterPanel<ErrorEntry>(errorsTable, model);
+			tableFilterPanel = new GTableFilterPanel<>(errorsTable, model);
 
 			errorsTable.getSelectionManager().addListSelectionListener(e -> {
 				if (e.getValueIsAdjusting()) {
@@ -377,6 +394,16 @@ public class ErrLogDialog extends AbstractErrDialog {
 
 			validate();
 			textDetails.scrollToBottom();
+		}
+
+		@Override
+		public Dimension getPreferredSize() {
+			Dimension size = super.getPreferredSize();
+
+			// Cap preferred width to something reasonable; most displays have more than 1000 width.
+			// Users can still resize as desired
+			size.width = Math.min(size.width, 1000);
+			return size;
 		}
 
 		void setError(ErrorEntry e) {
@@ -458,7 +485,7 @@ public class ErrLogDialog extends AbstractErrDialog {
 
 		@Override
 		protected TableColumnDescriptor<ErrorEntry> createTableColumnDescriptor() {
-			TableColumnDescriptor<ErrorEntry> descriptor = new TableColumnDescriptor<ErrorEntry>();
+			TableColumnDescriptor<ErrorEntry> descriptor = new TableColumnDescriptor<>();
 			descriptor.addVisibleColumn(new IdColumn(), 1, true);
 			descriptor.addVisibleColumn(new MessageColumn());
 			descriptor.addHiddenColumn(new DetailsColumn());

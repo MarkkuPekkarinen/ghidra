@@ -522,19 +522,7 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 
 	@Test
 	public void testAnalyzedFalseInLatest() throws Exception {
-		mtf.initialize("notepad", new OriginalProgramModifierListener() {
-
-			@Override
-			public void modifyOriginal(ProgramDB program) throws Exception {
-				int transactionID = program.startTransaction("test");
-				try {
-					Options list = program.getOptions("Program Information");
-					list.setBoolean("Analyzed", false);
-				}
-				finally {
-					program.endTransaction(transactionID, true);
-				}
-			}
+		mtf.initialize("notepad", new ProgramModifierListener() {
 
 			@Override
 			public void modifyLatest(ProgramDB program) {
@@ -605,19 +593,7 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 
 	@Test
 	public void testAnalyzedFalseInMy() throws Exception {
-		mtf.initialize("notepad", new OriginalProgramModifierListener() {
-
-			@Override
-			public void modifyOriginal(ProgramDB program) throws Exception {
-				int transactionID = program.startTransaction("test");
-				try {
-					Options list = program.getOptions("Program Information");
-					list.setBoolean("Analyzed", false);
-				}
-				finally {
-					program.endTransaction(transactionID, true);
-				}
-			}
+		mtf.initialize("notepad", new ProgramModifierListener() {
 
 			@Override
 			public void modifyLatest(ProgramDB program) {
@@ -734,10 +710,20 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 	public void testAnalyzedTrueInLatestFalseInMy() throws Exception {
 		// test case: conflict because both values changed
 		// Choose 'latest'
-		mtf.initialize("notepad", new ProgramModifierListener() {
-			/* (non-Javadoc)
-			 * @see ghidra.framework.data.ProgramModifierListener#modifyLatest(ghidra.program.database.ProgramDB)
-			 */
+		mtf.initialize("notepad", new OriginalProgramModifierListener() {
+
+			@Override
+			public void modifyOriginal(ProgramDB program) throws Exception {
+				int transactionID = program.startTransaction("test");
+				try {
+					Options list = program.getOptions("Program Information");
+					list.setBoolean("Analyzed", false); // revert to default state
+				}
+				finally {
+					program.endTransaction(transactionID, true);
+				}
+			}
+
 			@Override
 			public void modifyLatest(ProgramDB program) {
 				int transactionID = program.startTransaction("test");
@@ -777,10 +763,20 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 	public void testAnalyzedFalseInLatestTrueInMy() throws Exception {
 		// test case: conflict because both values changed
 		// Choose 'latest'
-		mtf.initialize("notepad", new ProgramModifierListener() {
-			/* (non-Javadoc)
-			 * @see ghidra.framework.data.ProgramModifierListener#modifyLatest(ghidra.program.database.ProgramDB)
-			 */
+		mtf.initialize("notepad", new OriginalProgramModifierListener() {
+
+			@Override
+			public void modifyOriginal(ProgramDB program) throws Exception {
+				int transactionID = program.startTransaction("test");
+				try {
+					Options list = program.getOptions("Program Information");
+					list.setBoolean("Analyzed", false); // revert to default value
+				}
+				finally {
+					program.endTransaction(transactionID, true);
+				}
+			}
+
 			@Override
 			public void modifyLatest(ProgramDB program) {
 				int transactionID = program.startTransaction("test");
@@ -793,9 +789,6 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 				}
 			}
 
-			/* (non-Javadoc)
-			 * @see ghidra.framework.data.ProgramModifierListener#modifyPrivate(ghidra.program.database.ProgramDB)
-			 */
 			@Override
 			public void modifyPrivate(ProgramDB program) {
 				int transactionID = program.startTransaction("test");
@@ -892,6 +885,9 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 
 			printOpenWindows();
 
+			// 12/87/20 -  put in to find intermittent test failure when the button cannot be found
+			capture(window, "missing.button." + text);
+
 			fail("Unable to find radio button '" + text + "'; see console for details");
 		}
 
@@ -918,6 +914,14 @@ public class PropertyListMergeManager2Test extends AbstractMergeTest {
 	}
 
 	private AbstractButton findButton(Container container, String text) {
+
+		// note: there may be some timing issue with accessing swing components from the test
+		//       thread.   This waitForSwing() will cause registers to get flushed, making swing
+		//       changes visible to this thread.  
+		//
+		//       The correct change would probably be to put this code and the similar code from 
+		//       the test framework onto the swing thread when attempting to find swing widgets.
+		waitForSwing();
 		Component[] comp = container.getComponents();
 		for (Component element : comp) {
 			if ((element instanceof AbstractButton && element.isVisible()) &&

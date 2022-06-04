@@ -30,7 +30,8 @@ import docking.widgets.fieldpanel.support.Highlight;
 import docking.widgets.table.threaded.*;
 import ghidra.GhidraOptions;
 import ghidra.app.CorePluginPackage;
-import ghidra.app.context.*;
+import ghidra.app.context.NavigatableActionContext;
+import ghidra.app.context.NavigatableContextAction;
 import ghidra.app.events.ProgramSelectionPluginEvent;
 import ghidra.app.nav.Navigatable;
 import ghidra.app.nav.NavigatableRemovalListener;
@@ -92,7 +93,6 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 	private MemSearchDialog searchDialog;
 	private GoToService goToService;
 	private int searchLimit;
-	private static int DEFAULT_SEARCH_LIMIT = 500; // Default maximum number of search results.
 	private ImageIcon searchIcon;
 
 	private Color defaultHighlightColor;
@@ -120,7 +120,7 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 
 		createActions();
 		initializeOptionListeners();
-		getOptions();
+		loadOptions();
 		tool.addContextListener(this);
 	}
 
@@ -174,6 +174,7 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 		if (program == null) {
 			return false;
 		}
+
 		searchAgainAction.setEnabled(true);
 
 		if (localSearchInfo.isSearchAll()) {
@@ -342,16 +343,11 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 	}
 
 	private void createActions() {
-		searchAction = new NavigatableContextAction("Search Memory", getName()) {
+		searchAction = new NavigatableContextAction("Search Memory", getName(), false) {
 			@Override
 			public void actionPerformed(NavigatableActionContext context) {
 				setNavigatable(context.getNavigatable());
 				invokeSearchDialog(context);
-			}
-
-			@Override
-			protected boolean isEnabledForContext(NavigatableActionContext context) {
-				return !(context instanceof RestrictedAddressSetContext);
 			}
 		};
 		searchAction.setHelpLocation(new HelpLocation(HelpTopics.SEARCH, searchAction.getName()));
@@ -359,9 +355,10 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 		searchAction.setMenuBarData(new MenuData(menuPath, "search"));
 		searchAction.setKeyBindingData(new KeyBindingData('S', 0));
 		searchAction.setDescription("Search Memory for byte sequence");
+		searchAction.addToWindowWhen(NavigatableActionContext.class);
 		tool.addAction(searchAction);
 
-		searchAgainAction = new NavigatableContextAction("Repeat Memory Search", getName()) {
+		searchAgainAction = new NavigatableContextAction("Repeat Memory Search", getName(), false) {
 			@Override
 			public void actionPerformed(NavigatableActionContext context) {
 				setNavigatable(context.getNavigatable());
@@ -370,15 +367,16 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 
 			@Override
 			protected boolean isEnabledForContext(NavigatableActionContext context) {
-				return !(context instanceof RestrictedAddressSetContext) && searchInfo != null;
+				return searchInfo != null && super.isEnabledForContext(context);
 			}
 		};
-		searchAgainAction.setHelpLocation(
-			new HelpLocation(HelpTopics.SEARCH, searchAgainAction.getName()));
+		searchAgainAction
+				.setHelpLocation(new HelpLocation(HelpTopics.SEARCH, searchAgainAction.getName()));
 		menuPath = new String[] { "&Search", "Repeat Memory Search" };
 		searchAgainAction.setMenuBarData(new MenuData(menuPath, "search"));
 		searchAgainAction.setKeyBindingData(new KeyBindingData(KeyEvent.VK_F3, 0));
 		searchAgainAction.setDescription("Search Memory for byte sequence");
+		searchAgainAction.addToWindowWhen(NavigatableActionContext.class);
 		tool.addAction(searchAgainAction);
 	}
 
@@ -390,8 +388,6 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 		opt.registerOption(PluginConstants.AUTO_RESTRICT_SELECTION, true, null,
 			"Automactically adjusts memory searches restricted" +
 				" to the current selection, as selections comes and goes");
-		opt.registerOption(GhidraOptions.OPTION_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT, null,
-			"Number of search hits found before stopping");
 		opt.registerOption(PluginConstants.SEARCH_HIGHLIGHT_NAME, true, null,
 			"Toggles highlight search results");
 
@@ -407,10 +403,11 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 		opt.addOptionsChangeListener(this);
 	}
 
-	private void getOptions() {
+	private void loadOptions() {
 
 		Options opt = tool.getOptions(PluginConstants.SEARCH_OPTION_NAME);
-		int newSearchLimit = opt.getInt(GhidraOptions.OPTION_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT);
+		int newSearchLimit =
+			opt.getInt(GhidraOptions.OPTION_SEARCH_LIMIT, PluginConstants.DEFAULT_SEARCH_LIMIT);
 		if (newSearchLimit <= 0) {
 			throw new OptionsVetoException("Search limit must be greater than 0");
 		}
@@ -431,7 +428,7 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 	@Override
 	public void optionsChanged(ToolOptions options, String optionName, Object oldValue,
 			Object newValue) {
-		getOptions();
+		loadOptions();
 	}
 
 	protected void updateSelection(NavigatableActionContext context) {
@@ -510,7 +507,6 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 			TableService tableService) {
 
 		String searchString = searchDialog.getSearchText();
-
 		String title = "Search Memory - \"" + searchString + "\"";
 		String type = "Search";
 		if (navigatable.supportsMarkers()) {
@@ -565,7 +561,7 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 // Inner Classes
 //==================================================================================================
 
-	class TableLoadingListener implements ThreadedTableModelListener {
+	private class TableLoadingListener implements ThreadedTableModelListener {
 
 		private ThreadedTableModel<MemSearchResult, ?> model;
 
@@ -750,14 +746,19 @@ public class MemSearchPlugin extends Plugin implements OptionsChangeListener,
 
 		private Color getHighlightColor(Address highlightStart, int highlightLength) {
 			ProgramLocation location = navigatable != null ? navigatable.getLocation() : null;
-			if (location instanceof BytesFieldLocation) {
-				BytesFieldLocation byteLoc = (BytesFieldLocation) location;
-				Address byteAddress = byteLoc.getAddressForByte();
+			if (!(location instanceof BytesFieldLocation)) {
+				return defaultHighlightColor;
+			}
+
+			BytesFieldLocation byteLoc = (BytesFieldLocation) location;
+			Address byteAddress = byteLoc.getAddressForByte();
+			if (highlightStart.hasSameAddressSpace(byteAddress)) {
 				long diff = byteAddress.subtract(highlightStart);
 				if (diff >= 0 && diff < highlightLength) {
-					return activeHighlightColor;
+					return activeHighlightColor; // the current location is in the highlight
 				}
 			}
+
 			return defaultHighlightColor;
 		}
 

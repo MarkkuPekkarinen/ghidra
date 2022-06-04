@@ -32,6 +32,7 @@ import org.jdom.Element;
 
 import docking.*;
 import docking.action.*;
+import docking.action.builder.ActionBuilder;
 import docking.actions.PopupActionProvider;
 import docking.actions.ToolActions;
 import docking.framework.AboutDialog;
@@ -59,16 +60,16 @@ import ghidra.util.*;
 import ghidra.util.task.*;
 
 /**
- * Base class that is a container to manage plugins and their actions, and to coordinate the 
+ * Base class that is a container to manage plugins and their actions, and to coordinate the
  * firing of plugin events and tool events. A PluginTool may have visible components supplied by
- * <pre>ComponentProviders </pre>. These components may be docked within the tool, or moved 
+ * <pre>ComponentProviders </pre>. These components may be docked within the tool, or moved
  * out into their own windows.
  *
- * <p>Plugins normally add actions via {@link #addAction(DockingActionIf)}.   There is also 
+ * <p>Plugins normally add actions via {@link #addAction(DockingActionIf)}.   There is also
  * an alternate method for getting actions to appear in the popup context menu (see
  * {@link #addPopupActionProvider(PopupActionProvider)}).   The popup listener mechanism is generally not
  * needed and should only be used in special circumstances (see {@link PopupActionProvider}).
- * 
+ *
  * <p>The PluginTool also manages tasks that run in the background, and options used by the plugins.
  *
  */
@@ -136,7 +137,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 
 		boolean hasErrors = restoreFromXml(template.getToolElement());
 		if (!hasErrors) {
-			configChangedFlag = false;
+			setConfigChanged(false);
 		}
 		optionsMgr.validateOptions();
 	}
@@ -449,7 +450,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 		}
 
 		winMgr.setVisible(false);
-		eventMgr.clearLastEvents();
+		eventMgr.clear();
 		pluginMgr.dispose();
 
 		toolActions.removeActions(ToolConstants.TOOL_OWNER);
@@ -561,7 +562,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 		}
 		catch (PluginException e) {
 			hasErrors = true;
-			Msg.showError(this, getToolFrame(), "Error Restoring Plugins", e.getMessage());
+			Msg.showError(this, getToolFrame(), "Error Restoring Plugins", e.getMessage(), e);
 		}
 
 		winMgr.restoreWindowDataFromXml(root);
@@ -709,11 +710,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 		new TaskLauncher(task, winMgr.getActiveWindow());
 	}
 
-	/**
-	 * Get the options for the given category name; if no options exist with
-	 * the given name, then one is created.
-	 */
-
 	@Override
 	public ToolOptions getOptions(String categoryName) {
 		return optionsMgr.getOptions(categoryName);
@@ -811,8 +807,26 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * @throws PluginException if a plugin could not be constructed, or
 	 * there was problem executing its init() method, or if a plugin of this
 	 * class already exists in the tool
+	 * @deprecated use {@link #addPlugins(List)}
 	 */
+	@Deprecated(since = "10.2", forRemoval = true)
 	public void addPlugins(String[] classNames) throws PluginException {
+		try {
+			pluginMgr.addPlugins(Arrays.asList(classNames));
+		}
+		finally {
+			setConfigChanged(true);
+		}
+	}
+
+	/**
+	 * Add plugins to the tool.
+	 * @param classNames array of plugin class names
+	 * @throws PluginException if a plugin could not be constructed, or
+	 * there was problem executing its init() method, or if a plugin of this
+	 * class already exists in the tool
+	 */
+	public void addPlugins(List<String> classNames) throws PluginException {
 		try {
 			pluginMgr.addPlugins(classNames);
 		}
@@ -826,15 +840,28 @@ public abstract class PluginTool extends AbstractDockingTool {
 		setConfigChanged(true);
 	}
 
-	public boolean hasUnsavedData() {
-		return pluginMgr.hasUnsavedData();
+	/**
+	 * Remove the array of plugins from the tool.
+	 * @param plugins array of plugins to remove
+	 * @deprecated use {@link #removePlugins(List)}
+	 */
+	@Deprecated(since = "10.2", forRemoval = true)
+	public void removePlugins(Plugin[] plugins) {
+		SystemUtilities.runSwingNow(() -> {
+			try {
+				pluginMgr.removePlugins(Arrays.asList(plugins));
+			}
+			finally {
+				setConfigChanged(true);
+			}
+		});
 	}
 
 	/**
 	 * Remove the array of plugins from the tool.
 	 * @param plugins array of plugins to remove
 	 */
-	public void removePlugins(Plugin[] plugins) {
+	public void removePlugins(List<Plugin> plugins) {
 		SystemUtilities.runSwingNow(() -> {
 			try {
 				pluginMgr.removePlugins(plugins);
@@ -843,6 +870,10 @@ public abstract class PluginTool extends AbstractDockingTool {
 				setConfigChanged(true);
 			}
 		});
+	}
+
+	public boolean hasUnsavedData() {
+		return pluginMgr.hasUnsavedData();
 	}
 
 	/**
@@ -921,11 +952,8 @@ public abstract class PluginTool extends AbstractDockingTool {
 				optionsMgr.editOptions();
 			}
 
-			@Override
-			public boolean shouldAddToWindow(boolean isMainWindow, Set<Class<?>> contextTypes) {
-				return isMainWindow || !contextTypes.isEmpty();
-			}
 		};
+		optionsAction.setAddToAllWindows(true);
 		optionsAction.setHelpLocation(
 			new HelpLocation(ToolConstants.FRONT_END_HELP_TOPIC, "Tool Options"));
 		MenuData menuData =
@@ -967,8 +995,8 @@ public abstract class PluginTool extends AbstractDockingTool {
 		saveAsAction.setMenuBarData(menuData);
 
 		saveAsAction.setEnabled(true);
-		saveAsAction.setHelpLocation(
-			new HelpLocation(ToolConstants.TOOL_HELP_TOPIC, "Tool_Changes"));
+		saveAsAction
+				.setHelpLocation(new HelpLocation(ToolConstants.TOOL_HELP_TOPIC, "Tool_Changes"));
 
 		addAction(saveAction);
 		addAction(saveAsAction);
@@ -993,8 +1021,8 @@ public abstract class PluginTool extends AbstractDockingTool {
 			new String[] { ToolConstants.MENU_FILE, exportPullright, "Export Tool..." });
 		menuData.setMenuSubGroup(Integer.toString(subGroup++));
 		exportToolAction.setMenuBarData(menuData);
-		exportToolAction.setHelpLocation(
-			new HelpLocation(ToolConstants.TOOL_HELP_TOPIC, "Export_Tool"));
+		exportToolAction
+				.setHelpLocation(new HelpLocation(ToolConstants.TOOL_HELP_TOPIC, "Export_Tool"));
 		addAction(exportToolAction);
 
 		DockingAction exportDefautToolAction =
@@ -1016,90 +1044,43 @@ public abstract class PluginTool extends AbstractDockingTool {
 	}
 
 	protected void addHelpActions() {
+		new ActionBuilder("About Ghidra", ToolConstants.TOOL_OWNER)
+				.menuPath(ToolConstants.MENU_HELP, "&About Ghidra")
+				.menuGroup("ZZA")
+				.helpLocation(new HelpLocation(ToolConstants.ABOUT_HELP_TOPIC, "About_Ghidra"))
+				.inWindow(ActionBuilder.When.ALWAYS)
+				.onAction(c -> DockingWindowManager.showDialog(new AboutDialog()))
+				.buildAndInstall(this);
 
-		DockingAction action = new DockingAction("About Ghidra", ToolConstants.TOOL_OWNER) {
-
-			@Override
-			public void actionPerformed(ActionContext context) {
-				DockingWindowManager.showDialog(new AboutDialog());
-			}
-
-			@Override
-			public boolean shouldAddToWindow(boolean isMainWindow, Set<Class<?>> contextTypes) {
-				return true;
-			}
-		};
-		action.setMenuBarData(
-			new MenuData(new String[] { ToolConstants.MENU_HELP, "&About Ghidra" }, null, "ZZA"));
-
-		action.setHelpLocation(new HelpLocation(ToolConstants.ABOUT_HELP_TOPIC, "About_Ghidra"));
-		action.setEnabled(true);
-		addAction(action);
-
-		DockingAction userAgreementAction = new DockingAction("User Agreement",
-			ToolConstants.TOOL_OWNER, KeyBindingType.UNSUPPORTED) {
-
-			@Override
-			public void actionPerformed(ActionContext context) {
-				DockingWindowManager.showDialog(new UserAgreementDialog(false, false));
-			}
-
-			@Override
-			public boolean shouldAddToWindow(boolean isMainWindow, Set<Class<?>> contextTypes) {
-				return true;
-			}
-		};
-		userAgreementAction.setMenuBarData(
-			new MenuData(new String[] { ToolConstants.MENU_HELP, "&User Agreement" }, null,
-				ToolConstants.HELP_CONTENTS_MENU_GROUP));
-		userAgreementAction.setHelpLocation(
-			new HelpLocation(ToolConstants.ABOUT_HELP_TOPIC, "User_Agreement"));
-
-		userAgreementAction.setEnabled(true);
-		addAction(userAgreementAction);
+		new ActionBuilder("User Agreement", ToolConstants.TOOL_OWNER)
+				.menuPath(ToolConstants.MENU_HELP, "&User Agreement")
+				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP)
+				.helpLocation(new HelpLocation(ToolConstants.ABOUT_HELP_TOPIC, "User_Agreement"))
+				.inWindow(ActionBuilder.When.ALWAYS)
+				.onAction(
+					c -> DockingWindowManager.showDialog(new UserAgreementDialog(false, false)))
+				.buildAndInstall(this);
 
 		final ErrorReporter reporter = ErrLogDialog.getErrorReporter();
 		if (reporter != null) {
-			action = new DockingAction("Report Bug", ToolConstants.TOOL_OWNER) {
-
-				@Override
-				public void actionPerformed(ActionContext context) {
-					reporter.report(getToolFrame(), "User Bug Report", null);
-				}
-
-				@Override
-				public boolean shouldAddToWindow(boolean isMainWindow, Set<Class<?>> contextTypes) {
-					return true;
-				}
-			};
-			action.setMenuBarData(new MenuData(
-				new String[] { ToolConstants.MENU_HELP, "&Report Bug..." }, null, "BBB"));
-
-			action.setHelpLocation(new HelpLocation("ErrorReporting", "Report_Bug"));
-			action.setEnabled(true);
-			addAction(action);
+			new ActionBuilder("Report Bug", ToolConstants.TOOL_OWNER)
+					.menuPath(ToolConstants.MENU_HELP, "&Report Bug...")
+					.menuGroup("BBB")
+					.helpLocation(new HelpLocation("ErrorReporting", "Report_Bug"))
+					.inWindow(ActionBuilder.When.ALWAYS)
+					.onAction(c -> reporter.report(getToolFrame(), "User Bug Report", null))
+					.buildAndInstall(this);
 		}
 
 		HelpService help = Help.getHelpService();
-		action = new DockingAction("Contents", ToolConstants.TOOL_OWNER) {
 
-			@Override
-			public void actionPerformed(ActionContext context) {
-				help.showHelp(null, false, getToolFrame());
-			}
-
-			@Override
-			public boolean shouldAddToWindow(boolean isMainWindow, Set<Class<?>> contextTypes) {
-				return true;
-			}
-		};
-		action.setMenuBarData(new MenuData(new String[] { ToolConstants.MENU_HELP, "&Contents" },
-			null, ToolConstants.HELP_CONTENTS_MENU_GROUP));
-
-		action.setEnabled(true);
-		action.setHelpLocation(new HelpLocation("Misc", "Welcome_to_Ghidra_Help"));
-
-		addAction(action);
+		new ActionBuilder("Contents", ToolConstants.TOOL_OWNER)
+				.menuPath(ToolConstants.MENU_HELP, "&Contents")
+				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP)
+				.helpLocation(new HelpLocation("Misc", "Welcome_to_Ghidra_Help"))
+				.inWindow(ActionBuilder.When.ALWAYS)
+				.onAction(c -> help.showHelp(null, false, getToolFrame()))
+				.buildAndInstall(this);
 	}
 
 	/**
@@ -1149,10 +1130,10 @@ public abstract class PluginTool extends AbstractDockingTool {
 	}
 
 	public boolean shouldSave() {
-		return configChangedFlag; // ignore the window layout changes
+		return hasConfigChanged(); // ignore the window layout changes
 	}
 
-	/** 
+	/**
 	 * Called when it is time to save the tool.  Handles auto-saving logic.
 	 * @return true if a save happened
 	 */
@@ -1160,28 +1141,26 @@ public abstract class PluginTool extends AbstractDockingTool {
 		if (toolServices.canAutoSave(this)) {
 			saveTool();
 		}
-		else {
-			if (configChangedFlag) {
-				int result = OptionDialog.showOptionDialog(getToolFrame(), SAVE_DIALOG_TITLE,
-					"This tool has changed.  There are/were multiple instances of this tool\n" +
-						"running and Ghidra cannot determine if this tool instance should\n" +
-						"automatically be saved.  Do you want to save the configuration of this tool\n" +
-						"instance?",
-					"Save", "Save As...", "Don't Save", OptionDialog.WARNING_MESSAGE);
-				if (result == OptionDialog.CANCEL_OPTION) {
-					return false;
-				}
-				if (result == OptionDialog.OPTION_ONE) {
-					saveTool();
-				}
-				else if (result == OptionDialog.OPTION_TWO) {
-					boolean didSave = saveToolAs();
-					if (!didSave) {
-						return doSaveTool();
-					}
-				}
-				// option 3 is don't save; just exit
+		else if (hasConfigChanged()) {
+			int result = OptionDialog.showOptionDialog(getToolFrame(), SAVE_DIALOG_TITLE,
+				"This tool has changed.  There are/were multiple instances of this tool\n" +
+					"running and Ghidra cannot determine if this tool instance should\n" +
+					"automatically be saved.  Do you want to save the configuration of this tool\n" +
+					"instance?",
+				"Save", "Save As...", "Don't Save", OptionDialog.WARNING_MESSAGE);
+			if (result == OptionDialog.CANCEL_OPTION) {
+				return false;
 			}
+			if (result == OptionDialog.OPTION_ONE) {
+				saveTool();
+			}
+			else if (result == OptionDialog.OPTION_TWO) {
+				boolean didSave = saveToolAs();
+				if (!didSave) {
+					return doSaveTool();
+				}
+			}
+			// option 3 is don't save; just exit
 		}
 		return true;
 	}
@@ -1191,7 +1170,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * <br>Note: This forces plugins to terminate any tasks they have running and
 	 * apply any unsaved data to domain objects or files. If they can't do
 	 * this or the user cancels then this returns false.
-	 * 
+	 *
 	 * @param isExiting whether the tool is exiting
 	 * @return false if this tool has tasks in progress or can't be closed
 	 * since the user has unfinished/unsaved changes.
@@ -1226,7 +1205,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * <br>Note: This forces plugins to terminate any tasks they have running for the
 	 * indicated domain object and apply any unsaved data to the domain object. If they can't do
 	 * this or the user cancels then this returns false.
-	 * 
+	 *
 	 * @param domainObject the domain object to check
 	 * @return false any of the plugins reports that the domain object
 	 * should not be closed
@@ -1417,7 +1396,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * time the dialog is shown.
 	 *
 	 * @param dialogComponent the DialogComponentProvider object to be shown in a dialog.
-	 * 
+	 *
 	 * @deprecated dialogs are now always shown over the active window when possible
 	 */
 	@Deprecated
@@ -1446,7 +1425,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * @param centeredOnComponent the component on which to center the dialog.
 	 */
 	public void showDialog(DialogComponentProvider dialogComponent, Component centeredOnComponent) {
-		DockingWindowManager.showDialog(getToolFrame(), dialogComponent, centeredOnComponent);
+		DockingWindowManager.showDialog(centeredOnComponent, dialogComponent);
 	}
 
 	public Window getActiveWindow() {

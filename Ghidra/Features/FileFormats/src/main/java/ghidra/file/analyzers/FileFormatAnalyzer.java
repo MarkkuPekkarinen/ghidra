@@ -21,7 +21,8 @@ import ghidra.app.cmd.data.CreateStringCmd;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.services.*;
 import ghidra.app.util.importer.MessageLog;
-import ghidra.docking.settings.*;
+import ghidra.docking.settings.FormatSettingsDefinition;
+import ghidra.docking.settings.SettingsDefinition;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
@@ -46,7 +47,7 @@ public abstract class FileFormatAnalyzer implements Analyzer {
 	}
 
 	@Override
-	final public boolean added(Program program, AddressSetView set, TaskMonitor monitor,
+	public final boolean added(Program program, AddressSetView set, TaskMonitor monitor,
 			MessageLog log) throws CancelledException {
 		try {
 			return analyze(program, set, monitor, log);
@@ -58,28 +59,28 @@ public abstract class FileFormatAnalyzer implements Analyzer {
 	}
 
 	@Override
-	final public void analysisEnded(Program program) {
+	public void analysisEnded(Program program) {
 		// do nothing
 	}
 
 	@Override
-	final public void registerOptions(Options options, Program program) {
+	public void registerOptions(Options options, Program program) {
 		// do nothing
 	}
 
 	@Override
-	final public void optionsChanged(Options options, Program program) {
+	public void optionsChanged(Options options, Program program) {
 		// do nothing
 	}
 
 	@Override
-	final public boolean removed(Program program, AddressSetView set, TaskMonitor monitor,
+	public boolean removed(Program program, AddressSetView set, TaskMonitor monitor,
 			MessageLog log) throws CancelledException {
 		return false;
 	}
 
 	@Override
-	final public boolean supportsOneTimeAnalysis() {
+	public boolean supportsOneTimeAnalysis() {
 		return false;
 	}
 
@@ -121,15 +122,6 @@ public abstract class FileFormatAnalyzer implements Analyzer {
 				if (isAscii && bytes.length > 1) {
 					changeFormatToString(component);
 				}
-/*
-				if (component.getFieldName().equals("magic") ||
-					component.getFieldName().equals("identifier") ||
-					component.getFieldName().equals("compression") ||
-					component.getFieldName().equals("format") ||
-					component.getFieldName().equals("type")) {
-					changeFormatToString(component);
-				}
-*/
 			}
 			address = address.add(data.getLength());
 		}
@@ -149,8 +141,6 @@ public abstract class FileFormatAnalyzer implements Analyzer {
 	}
 
 	protected void changeFormatToString(Data data) {
-		SettingsImpl settings = new SettingsImpl(data);
-		settings.setDefaultSettings(settings);
 		SettingsDefinition[] settingsDefinitions = data.getDataType().getSettingsDefinitions();
 		for (SettingsDefinition settingsDefinition : settingsDefinitions) {
 			if (settingsDefinition instanceof FormatSettingsDefinition) {

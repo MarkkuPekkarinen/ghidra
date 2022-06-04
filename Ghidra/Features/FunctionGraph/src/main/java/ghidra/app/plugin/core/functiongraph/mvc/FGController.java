@@ -51,7 +51,6 @@ import ghidra.framework.options.ToolOptions;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.OptionsService;
 import ghidra.graph.viewer.*;
-import ghidra.graph.viewer.layout.LayoutProvider;
 import ghidra.program.model.address.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.*;
@@ -289,6 +288,7 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 
 	/**
 	 * Sets the message that will appear in the lower part of the graph.
+	 * 
 	 * @param message the message to display
 	 */
 	public void setStatusMessage(String message) {
@@ -332,11 +332,15 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 	}
 
 	private boolean shouldSaveVertexChanges() {
-		return functionGraphOptions.getNavigationHistoryChoice() == NavigationHistoryChoices.VERTEX_CHANGES;
+		return functionGraphOptions
+				.getNavigationHistoryChoice() == NavigationHistoryChoices.VERTEX_CHANGES;
 	}
 
 	@Override
-	public void programSelectionChanged(ProgramSelection selection) {
+	public void programSelectionChanged(ProgramSelection selection, EventTrigger trigger) {
+		if (trigger != EventTrigger.GUI_ACTION) {
+			return;
+		}
 		// We need to translate the given selection (which is from a single vertex) to the current
 		// overall selection for the graph (which includes the selection from all vertices).  We
 		// do this so that a selection change in one vertex does not clear the selection in
@@ -634,6 +638,10 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 		viewSettings.setLocation(location);
 	}
 
+	public void optionsChanged() {
+		view.optionsChanged();
+	}
+
 	public void refreshDisplayWithoutRebuilding() {
 		view.refreshDisplayWithoutRebuilding();
 	}
@@ -670,12 +678,9 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 			return;
 		}
 
-		@SuppressWarnings("rawtypes")
-		Class<? extends LayoutProvider> previousLayoutClass = previousLayout.getClass();
-		@SuppressWarnings("rawtypes")
-		Class<? extends LayoutProvider> newLayoutClass = newLayout.getClass();
-
-		if (previousLayoutClass == newLayoutClass) {
+		String previousLayoutName = previousLayout.getLayoutName();
+		String newLayoutName = newLayout.getLayoutName();
+		if (previousLayoutName.equals(newLayoutName)) {
 			view.relayout();
 		}
 		else {
@@ -784,12 +789,13 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 	}
 
 	/**
-	 * Signals that something major has changed for the program and we don't know where, so
-	 * clear all cached functions for the given program.
+	 * Signals that something major has changed for the program and we don't know where, so clear
+	 * all cached functions for the given program.
 	 *
 	 * BLEH!: I don't like clearing the cache this way...another options is to mark all cached
-	 *       values as stale, somehow.  If we did this, then when the view reuses the cached
-	 *       data, it could signal to the user that the graph is out-of-date.
+	 * values as stale, somehow. If we did this, then when the view reuses the cached data, it could
+	 * signal to the user that the graph is out-of-date.
+	 * 
 	 * @param program the program
 	 */
 	public void invalidateAllCacheForProgram(Program program) {
@@ -996,8 +1002,8 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 	}
 
 	/**
-	 * Update the graph's notion of the current location based upon that of the Tool.  This
-	 * method is meant to be called from internal mutative operations.
+	 * Update the graph's notion of the current location based upon that of the Tool. This method is
+	 * meant to be called from internal mutative operations.
 	 */
 	public void synchronizeProgramLocationAfterEdit() {
 		// It is assumed that the provider's location is the correct location.
@@ -1006,6 +1012,7 @@ public class FGController implements ProgramLocationListener, ProgramSelectionLi
 
 	/**
 	 * Will broadcast the given vertex location to the external system
+	 * 
 	 * @param location the location coming from the vertex
 	 */
 	public void synchronizeProgramLocationToVertex(ProgramLocation location) {

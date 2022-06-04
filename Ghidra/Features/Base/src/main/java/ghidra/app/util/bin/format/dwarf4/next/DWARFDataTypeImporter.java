@@ -15,23 +15,26 @@
  */
 package ghidra.app.util.bin.format.dwarf4.next;
 
-import java.io.IOException;
+import static ghidra.app.util.bin.format.dwarf4.encoding.DWARFAttribute.DW_AT_count;
+import static ghidra.app.util.bin.format.dwarf4.encoding.DWARFAttribute.DW_AT_upper_bound;
+import static ghidra.app.util.bin.format.dwarf4.encoding.DWARFTag.DW_TAG_subrange_type;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
+import java.io.IOException;
+
 import org.apache.commons.lang3.StringUtils;
 
-import ghidra.app.plugin.core.datamgr.util.DataTypeUtils;
 import ghidra.app.util.DataTypeNamingUtil;
 import ghidra.app.util.bin.format.dwarf4.*;
 import ghidra.app.util.bin.format.dwarf4.encoding.*;
 import ghidra.app.util.bin.format.dwarf4.expression.DWARFExpressionException;
+import ghidra.program.database.DatabaseObject;
 import ghidra.program.database.data.DataTypeUtilities;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Enum;
-import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
-import ghidra.util.exception.DuplicateNameException;
 
 /**
  * Creates Ghidra {@link DataType}s using information from DWARF debug entries.  The caller
@@ -47,7 +50,6 @@ public class DWARFDataTypeImporter {
 	private DWARFDataTypeManager dwarfDTM;
 	private DWARFImportOptions importOptions;
 	private DWARFDataType voidDDT;
-	private DWARFNameInfo rootDNI;
 
 	/**
 	 * Tracks which {@link DIEAggregate DIEAs} have been visited by {@link #getDataTypeWorker(DIEAggregate, DataType)}
@@ -92,7 +94,6 @@ public class DWARFDataTypeImporter {
 		this.importOptions = importOptions;
 		this.voidDDT = new DWARFDataType(dwarfDTM.getVoidType(),
 			DWARFNameInfo.fromDataType(dwarfDTM.getVoidType()), -1);
-		this.rootDNI = prog.getUncategorizedRootDNI();
 	}
 
 	public DWARFDataType getDDTByInstance(DataType dtInstance) {
@@ -138,6 +139,13 @@ public class DWARFDataTypeImporter {
 		DWARFDataType result = dieOffsetToDataTypeMap.get(diea.getOffset());
 		if (result != null) {
 			return result;
+		}
+
+		// Query the dwarfDTM for plain Ghidra dataTypes that were previously
+		// registered in a different import session.
+		DataType alreadyImportedDT = dwarfDTM.getDataType(diea.getOffset(), null);
+		if (shouldReuseAlreadyImportedDT(alreadyImportedDT)) {
+			return new DWARFDataType(alreadyImportedDT, null, diea.getOffset());
 		}
 
 		if (!trackRecursion(diea.getOffset(), 1)) {
@@ -212,6 +220,20 @@ public class DWARFDataTypeImporter {
 		return result;
 	}
 
+	/**
+	 * Returns true if the previously imported data type should be reused.
+	 * <p>
+	 * Don't re-use empty structs (isNotYetDefined) to ensure that newer
+	 * definitions of the same struct are given a chance to be resolved() 
+	 * into the DTM. 
+	 * 
+	 * @param alreadyImportedDT dataType to check
+	 * @return boolean true if its okay to reuse the data type
+	 */
+	private boolean shouldReuseAlreadyImportedDT(DataType alreadyImportedDT) {
+		return alreadyImportedDT != null && !alreadyImportedDT.isNotYetDefined();
+	}
+
 	/*
 	 * when a clone()'d datatype is created, update the current mappings to
 	 * point to the new instance instead of the old instance.
@@ -229,6 +251,10 @@ public class DWARFDataTypeImporter {
 	 * 						offset -> ddt
 	 */
 	private void recordTempDataType(DWARFDataType ddt) {
+		if (ddt.dataType instanceof DatabaseObject) {
+			// don't store info about types that are already in the database
+			return;
+		}
 		dataTypeInstanceToDDTMap.put(ddt.dataType, ddt);
 		for (Long offset : ddt.offsets) {
 			dieOffsetToDataTypeMap.put(offset, ddt);
@@ -255,12 +281,10 @@ public class DWARFDataTypeImporter {
 
 		boolean foundThisParam = false;
 		List<ParameterDefinition> params = new ArrayList<>();
-		for (DebugInfoEntry childEntry : diea.getHeadFragment().getChildren(
-			DWARFTag.DW_TAG_formal_parameter)) {
-			DIEAggregate childDIEA = prog.getAggregate(childEntry);
+		for (DIEAggregate paramDIEA : diea.getFunctionParamList()) {
 
-			String paramName = childDIEA.getName();
-			DWARFDataType paramDT = getDataType(childDIEA.getTypeRef(), null);
+			String paramName = paramDIEA.getName();
+			DWARFDataType paramDT = getDataType(paramDIEA.getTypeRef(), null);
 			if (paramDT == null || paramDT.dataType.getLength() <= 0) {
 				Msg.error(this, "Bad function parameter type for " + dni.asCategoryPath());
 				return null;
@@ -269,7 +293,7 @@ public class DWARFDataTypeImporter {
 			ParameterDefinition pd = new ParameterDefinitionImpl(paramName, paramDT.dataType, null);
 			params.add(pd);
 
-			foundThisParam |= DWARFUtil.isThisParam(childDIEA);
+			foundThisParam |= DWARFUtil.isThisParam(paramDIEA);
 		}
 
 		FunctionDefinitionDataType funcDef =
@@ -277,7 +301,7 @@ public class DWARFDataTypeImporter {
 		funcDef.setReturnType(returnType.dataType);
 		funcDef.setArguments(params.toArray(new ParameterDefinition[params.size()]));
 
-		if (!diea.getHeadFragment().getChildren(DWARFTag.DW_TAG_unspecified_parameters).isEmpty()) {
+		if (!diea.getChildren(DWARFTag.DW_TAG_unspecified_parameters).isEmpty()) {
 			funcDef.setVarArgs(true);
 		}
 
@@ -344,28 +368,6 @@ public class DWARFDataTypeImporter {
 		return refdDT;
 	}
 
-//	/**
-//	 * Mash parameter datatype names together to make a mangling suffix to append to
-//	 * a function def name.
-//	 * <p>
-//	 * @param returnTypeDT
-//	 * @param parameters
-//	 * @return
-//	 */
-//	private String getMangledFuncDefName(DataType returnTypeDT,
-//			List<ParameterDefinition> parameters) {
-//		StringBuilder sb = new StringBuilder();
-//		sb.append(mangleDTName(returnTypeDT.getName()));
-//		for (ParameterDefinition p : parameters) {
-//			sb.append("_").append(mangleDTName(p.getDataType().getName()));
-//		}
-//		return sb.toString();
-//	}
-//
-//	private String mangleDTName(String s) {
-//		return s.replaceAll(" ", "_").replaceAll("\\*", "ptr");
-//	}
-
 	/**
 	 * Creates a Ghidra {@link Enum} datatype.
 	 * <p>
@@ -416,8 +418,7 @@ public class DWARFDataTypeImporter {
 	}
 
 	private void populateStubEnum(Enum enumDT, DIEAggregate diea) {
-		for (DebugInfoEntry childEntry : diea.getHeadFragment().getChildren(
-			DWARFTag.DW_TAG_enumerator)) {
+		for (DebugInfoEntry childEntry : diea.getChildren(DWARFTag.DW_TAG_enumerator)) {
 			DIEAggregate childDIEA = prog.getAggregate(childEntry);
 			String childName = childDIEA.getName();
 
@@ -518,11 +519,18 @@ public class DWARFDataTypeImporter {
 			structSize = 0;
 		}
 		boolean isUnion = diea.getTag() == DWARFTag.DW_TAG_union_type;
+		boolean isDecl = diea.getBool(DWARFAttribute.DW_AT_declaration, false);
 
 		DataType struct =
 			isUnion ? new UnionDataType(dni.getParentCP(), dni.getName(), dataTypeManager)
 					: new StructureDataType(dni.getParentCP(), dni.getName(), (int) structSize,
 						dataTypeManager);
+
+		if (!isDecl && origStructSize == 0) {
+			// Enable packing on 0-byte composites so they are treated as defined
+			// and will not take space if used in a field in another composite.
+			((Composite) struct).setToDefaultPacking();
+		}
 
 		DWARFDataType result = new DWARFDataType(struct, dni, diea.getOffset());
 		result.dsi = DWARFSourceInfo.create(diea);
@@ -592,8 +600,7 @@ public class DWARFDataTypeImporter {
 		long unionSize = diea.getUnsignedLong(DWARFAttribute.DW_AT_byte_size, -1);
 
 		UnionDataType union = (UnionDataType) ddt.dataType;
-		for (DebugInfoEntry childEntry : diea.getHeadFragment().getChildren(
-			DWARFTag.DW_TAG_member)) {
+		for (DebugInfoEntry childEntry : diea.getChildren(DWARFTag.DW_TAG_member)) {
 			DIEAggregate childDIEA = prog.getAggregate(childEntry);
 
 			// skip static member vars as they do not have storage in the structure
@@ -685,6 +692,9 @@ public class DWARFDataTypeImporter {
 		}
 
 		if (union.getLength() < unionSize) {
+			// NOTE: this is likely due incorrect alignment for union or one or more of its components.
+			// Default alignment is 1 for non-packed unions and structures.
+			
 			// if the Ghidra union data type is smaller than the DWARF union, pad it out
 			DataType padding = Undefined.getUndefinedDataType((int) unionSize);
 			try {
@@ -739,11 +749,14 @@ public class DWARFDataTypeImporter {
 		DataTypeComponent[] definedComponents = structure.getDefinedComponents();
 		for (int i = 0; i < definedComponents.length; i++) {
 			DataTypeComponent dtc = definedComponents[i];
+			DataType dtcDT = dtc.getDataType();
+			if (dtcDT.isZeroLength()) {
+				continue;
+			}
 			int nextDTCOffset =
 				(i < definedComponents.length - 1) ? definedComponents[i + 1].getOffset()
 						: structure.getLength();
-			int emptySpaceBetween = nextDTCOffset - dtc.getEndOffset();
-			DataType dtcDT = dtc.getDataType();
+			int emptySpaceBetween = nextDTCOffset - (dtc.getEndOffset() + 1);
 			if (dtc.getLength() < dtcDT.getLength() && emptySpaceBetween > 0) {
 				DataTypeComponent newDTC = structure.replaceAtOffset(dtc.getOffset(), dtcDT,
 					Math.min(nextDTCOffset - dtc.getOffset(), dtc.getDataType().getLength()),
@@ -768,16 +781,16 @@ public class DWARFDataTypeImporter {
 			DataTypeComponent[] definedComponents = structure.getDefinedComponents();
 			if (definedComponents.length > 0) {
 				DataTypeComponent lastDTC = definedComponents[definedComponents.length - 1];
-				return lastDTC.getOffset() + getUnpaddedDataTypeLength(lastDTC.getDataType());
+				return lastDTC.getOffset() + lastDTC.getLength();
 			}
 		}
-		return dt.getLength();
+		return dt.isZeroLength() ? 0 : dt.getLength();
 	}
 
 	private void populateStubStruct_worker(DWARFDataType ddt, StructureDataType structure,
 			DIEAggregate diea, int childTagType) throws IOException, DWARFExpressionException {
 
-		for (DebugInfoEntry childEntry : diea.getHeadFragment().getChildren(childTagType)) {
+		for (DebugInfoEntry childEntry : diea.getChildren(childTagType)) {
 
 			DIEAggregate childDIEA = prog.getAggregate(childEntry);
 			// skip static member vars as they do not have storage in the structure
@@ -810,14 +823,6 @@ public class DWARFDataTypeImporter {
 				}
 			}
 
-			// If the child's datatype is an anon datatype, copy the datatype into our
-			// structure's categorypath and give it a name based on the member name.
-			if (isAnonDataType(childDT) && importOptions.isCopyRenameAnonTypes()) {
-				DataType copiedType = copyAnonTypeForMember(childDT.dataType,
-					new CategoryPath(structure.getCategoryPath(), structure.getName()), memberName);
-				childDT = new DWARFDataType(copiedType, null, childDT.offsets);
-			}
-
 			boolean hasMemberOffset =
 				childDIEA.hasAttribute(DWARFAttribute.DW_AT_data_member_location);
 
@@ -834,9 +839,6 @@ public class DWARFDataTypeImporter {
 				}
 			}
 
-			boolean isDynamicSizedType = (childDT.dataType instanceof Dynamic ||
-				childDT.dataType instanceof FactoryDataType);
-
 			//if (childDT.getPathName().equals(structure.getPathName()) && childDT != structure) {
 			// The child we are adding has the exact same fullpath as us.
 			// This can happen when DWARF namespace info gets squished and two types
@@ -846,33 +848,7 @@ public class DWARFDataTypeImporter {
 			// TODO: rename parent struct here.  use .conflict or _basetype?
 			//}
 
-			if (childDT.isEmptyArrayType && childDT.dataType instanceof Array) {
-
-				if (memberOffset == structure.getLength() &&
-					structure.getFlexibleArrayComponent() == null) {
-					DataType arrayElementType = ((Array) childDT.dataType).getDataType();
-					structure.setFlexibleArrayComponent(arrayElementType, memberName, null);
-				}
-				else {
-					DWARFUtil.appendDescription(structure,
-						memberDesc("Missing member",
-							"Unsupported interior flex array: " + childDT.dataType.getName(),
-							memberName, childDT, memberOffset, -1, -1),
-						"\n");
-
-				}
-
-				// skip the rest of this loop as it deals with adding component children members.
-				continue;
-			}
-
 			if (isBitField) {
-				if (isDynamicSizedType) {
-					DWARFUtil.appendDescription(structure, memberDesc("Missing member",
-						"dynamic length type", memberName, childDT, memberOffset, bitSize, -1),
-						"\n");
-					continue;
-				}
 				if (!BitFieldDataType.isValidBaseDataType(childDT.dataType)) {
 					DWARFUtil.appendDescription(structure,
 						memberDesc("Missing member",
@@ -936,11 +912,12 @@ public class DWARFDataTypeImporter {
 			}
 			else {
 				String memberComment = null;
+				boolean isDynamicSizedType = (childDT.dataType instanceof Dynamic ||
+					childDT.dataType instanceof FactoryDataType);
 				if (isDynamicSizedType) {
 					memberComment = "Unsupported dynamic size data type: " + childDT.dataType;
 					childDT.dataType = Undefined.getUndefinedDataType(1);
 				}
-
 				int childLength = getUnpaddedDataTypeLength(childDT.dataType);
 				if (memberOffset + childLength > structure.getLength()) {
 					DWARFUtil.appendDescription(structure, memberDesc("Missing member",
@@ -950,21 +927,39 @@ public class DWARFDataTypeImporter {
 					continue;
 				}
 
-				DataTypeComponent existingDTC = structure.getComponentAt(memberOffset);
-				if (existingDTC != null &&
-					!(existingDTC.getDataType() instanceof DefaultDataType)) {
-					DWARFUtil.appendDescription(structure,
-						memberDesc("Missing member", "conflict with " + existingDTC.getFieldName(),
-							memberName, childDT, memberOffset, -1, -1),
-						"\n");
-					continue;
-				}
 
 				try {
-					DataTypeComponent dtc = structure.replaceAtOffset(memberOffset,
-						childDT.dataType, childLength, memberName, memberComment);
-
-					// struct.replaceAtOffset() clones the childDT, which will mess up our
+					DataTypeComponent dtc;
+					if (DataTypeComponent.usesZeroLengthComponent(childDT.dataType)) {
+						if (!isUndefinedOrZeroLenAtOffset(structure, memberOffset)) {
+							DWARFUtil.appendDescription(structure, memberDesc("Missing member",
+								"conflicting member at same offset", memberName, childDT,
+								memberOffset, -1, -1), "\n");
+							continue;
+						}
+						// use insertAt for zero len members to allow multiple at same offset
+						dtc =
+							structure.insertAtOffset(memberOffset, childDT.dataType, 0, memberName,
+							memberComment);
+					}
+					else {
+						int ordinalToReplace = getUndefinedOrdinalAt(structure, memberOffset);
+						if (ordinalToReplace == -1) {
+							DataTypeComponent existingDTC =
+								structure.getComponentContaining(memberOffset);
+							if (existingDTC != null) {
+								DWARFUtil.appendDescription(structure,
+									memberDesc("Missing member",
+										"conflict with " + existingDTC.getFieldName(),
+										memberName, childDT, memberOffset, -1, -1),
+									"\n");
+							}
+							continue;
+						}
+						dtc = structure.replace(ordinalToReplace, childDT.dataType, childLength,
+							memberName, memberComment);
+					}
+					// struct.replaceAtOffset() and insertAtOffset() clones the childDT, which will mess up our
 					// identity based mapping in currentImplDataTypeToDDT.
 					// Update the mapping to prevent that.
 					updateMapping(childDT.dataType, dtc.getDataType());
@@ -979,6 +974,31 @@ public class DWARFDataTypeImporter {
 				}
 			}
 		}
+	}
+
+	private boolean isUndefinedOrZeroLenAtOffset(Structure struct, int offset) {
+		List<DataTypeComponent> compsAt = struct.getComponentsContaining(offset);
+		DataTypeComponent lastComp = !compsAt.isEmpty() ? compsAt.get(compsAt.size() - 1) : null;
+		if (lastComp == null) {
+			// only triggered if offset == length of struct, which is okay since we are adding
+			// a zero-length component to the struct
+			return true;
+		}
+		if (lastComp.getOffset() != offset) {
+			return false;
+		}
+		DataType dt = lastComp.getDataType();
+		return dt.isZeroLength() || dt instanceof DefaultDataType;
+	}
+
+	private int getUndefinedOrdinalAt(Structure struct, int offset) {
+		List<DataTypeComponent> compsAt = struct.getComponentsContaining(offset);
+		DataTypeComponent lastComp = !compsAt.isEmpty() ? compsAt.get(compsAt.size() - 1) : null;
+		if (lastComp == null || lastComp.getOffset() != offset ||
+			!(lastComp.getDataType() instanceof DefaultDataType)) {
+			return -1;
+		}
+		return lastComp.getOrdinal();
 	}
 
 	private static String memberDesc(String prefix, String errorStr, String memberName,
@@ -1003,7 +1023,6 @@ public class DWARFDataTypeImporter {
 			throws IOException, DWARFExpressionException {
 
 		DWARFDataType elementType = getDataType(diea.getTypeRef(), voidDDT);
-
 		// do a second query to see if there was a recursive loop in the call above back
 		// to this datatype that resulted in this datatype being created.
 		// Use that instance if possible.
@@ -1015,31 +1034,26 @@ public class DWARFDataTypeImporter {
 		// Build a list of the defined dimensions for this array type.
 		// The first element in the DWARF dimension list would be where a wild-card (-1 length)
 		// dimension would be defined.
-		boolean isEmptyArray = false;
 		List<Integer> dimensions = new ArrayList<>();
-		List<DebugInfoEntry> subrangeDIEs =
-			diea.getHeadFragment().getChildren(DWARFTag.DW_TAG_subrange_type);
+		List<DebugInfoEntry> subrangeDIEs = diea.getChildren(DW_TAG_subrange_type);
 		for (int subRangeDIEIndex = 0; subRangeDIEIndex < subrangeDIEs.size(); subRangeDIEIndex++) {
 			DIEAggregate subrangeAggr = prog.getAggregate(subrangeDIEs.get(subRangeDIEIndex));
 			long numElements = -1;
 			try {
-				if (subrangeAggr.hasAttribute(DWARFAttribute.DW_AT_count)) {
+				if (subrangeAggr.hasAttribute(DW_AT_count)) {
 					numElements =
-						subrangeAggr.parseUnsignedLong(DWARFAttribute.DW_AT_count, 0xbadbeef);
+						subrangeAggr.parseUnsignedLong(DW_AT_count, 0xbadbeef);
 				}
 				// Otherwise check for an upper bound
-				else if (subrangeAggr.hasAttribute(DWARFAttribute.DW_AT_upper_bound)) {
-					// TODO: Check lower bound or get the difference based on
-					// the language (See DWARF4 Section 5.11)
-					// TODO: upperbound == -1 seems to indicate zero length array
+				else if (subrangeAggr.hasAttribute(DW_AT_upper_bound)) {
 					long upperBound =
-						subrangeAggr.parseUnsignedLong(DWARFAttribute.DW_AT_upper_bound, 0xbadbeef);
+						subrangeAggr.parseUnsignedLong(DW_AT_upper_bound, 0xbadbeef);
 
 					// fix special flag values used by DWARF to indicate that the array dimension
-					// is unknown.  64bit 0xffffff...s will already be -1, and 32bit 0xffff..s will
-					// be forced to -1.
+					// is unknown.  64bit 0xffffff...s and 32bit 0xffff..s will
+					// be forced to 0.
 					if (upperBound == 0xFF_FF_FF_FFL /* ie. max uint32 */ || upperBound == -1) {
-						upperBound = -1;
+						upperBound = 0;
 					}
 					else {
 						numElements = upperBound + 1;
@@ -1052,23 +1066,9 @@ public class DWARFDataTypeImporter {
 			}
 
 			if (numElements == -1) {
-				// if numElements is the DWARF special flag value for unknown, set flag
-				// and force the value back to something that Ghidra datatypes can handle.
-				// The consumer of the resultant data type will get back an array with
-				// 1 element instead of 0 elements because of Ghidra's limitations.
-				// They should check the DWARFDataType.isEmptyArrayType flag (I'm looking at
-				// you makeDataTypeForStruct()) if they can handle unknown length arrays.
-				if (subRangeDIEIndex == 0) {
-					isEmptyArray = true;
-				}
-				else {
-					Msg.error(this,
-						"Bad undefined-length array dimension for subrange " + subRangeDIEIndex +
-							" for array's size in DIE: " + diea.getOffset() + ", forcing to 1");
-				}
-				numElements = 1;
+				numElements = 0;
 			}
-			else if (numElements == 0 || numElements > Integer.MAX_VALUE) {
+			else if (numElements > Integer.MAX_VALUE) {
 				Msg.error(this, "Bad value [" + numElements + "] for array's size in DIE: " +
 					diea.getOffset() + ", forcing to 1");
 				numElements = 1;
@@ -1081,7 +1081,7 @@ public class DWARFDataTypeImporter {
 		for (int i = dimensions.size() - 1; i >= 0; i--) {
 			int numElements = dimensions.get(i);
 			ArrayDataType subArray =
-				new ArrayDataType(dt, numElements, dt.getLength(), dataTypeManager);
+				new ArrayDataType(dt, numElements, -1, dataTypeManager);
 			if (dt == elementType.dataType) {
 				updateMapping(dt, subArray.getDataType());
 			}
@@ -1089,7 +1089,6 @@ public class DWARFDataTypeImporter {
 		}
 
 		DWARFDataType result = new DWARFDataType(dt, null, diea.getOffset());
-		result.isEmptyArrayType = isEmptyArray;
 
 		return result;
 	}
@@ -1199,7 +1198,6 @@ public class DWARFDataTypeImporter {
 
 		boolean typedefWithSameName = DataTypeUtilities.equalsIgnoreConflict(
 			typedefDNI.asDataTypePath().getPath(), refdDT.dataType.getPathName());
-		boolean typedefPointingToAnonType = isAnonDataType(refdDT);
 
 		if (typedefWithSameName) {
 			if (importOptions.isElideTypedefsWithSameName()) {
@@ -1211,27 +1209,6 @@ public class DWARFDataTypeImporter {
 			// there isn't a gratuitous conflict.
 			String newName = typedefDNI.getName() + "_typedef";
 			typedefDNI = typedefDNI.replaceName(newName, newName);
-		}
-
-		if (typedefPointingToAnonType && importOptions.isCopyRenameAnonTypes() &&
-			DWARFUtil.getReferringTypedef(refdDIEA) == diea) {
-			// if this typedef points to an anon type (and we are the only typedef pointing
-			// to the anon type), copy the anon type to our namespace as our name, return
-			// it instead of a new typedef
-			DWARFDataType result = new DWARFDataType(
-				DataTypeUtils.copyToNamedBaseDataType(refdDT.dataType, dataTypeManager), typedefDNI,
-				diea.getOffset());
-			try {
-				DataType namedType = DataTypeUtils.getNamedBaseDataType(result.dataType);
-				namedType.setNameAndCategory(typedefDNI.getParent().asCategoryPath(),
-					typedefDNI.getName());
-				dataTypeInstanceToDDTMap.put(namedType, result);
-			}
-			catch (InvalidNameException | DuplicateNameException e) {
-				// fall thru to default action of just returning original type unchanged
-			}
-
-			return result;
 		}
 
 		TypedefDataType typedefDT = new TypedefDataType(typedefDNI.getParentCP(),
@@ -1258,70 +1235,8 @@ public class DWARFDataTypeImporter {
 		return new DWARFDataType(dt, dni, diea.getOffset());
 	}
 
-	/**
-	 * Returns true if the specified {@link DataType} (or if its a pointer, the pointed to
-	 * DataType) is a data type that did not have a name and was assigned an name in the form
-	 * "anon_datatype".
-	 *
-	 * @param dt
-	 * @return
-	 */
-	private static boolean isAnonDataType(DWARFDataType ddt) {
-		if (ddt.dni != null && ddt.dni.isAnon()) {
-			return true;
-		}
-		DataType namedType = DataTypeUtils.getNamedBaseDataType(ddt.dataType);
-		return namedType.getName().startsWith("anon_");
-	}
-
-	/**
-	 * Copy an anon Datatype (or a chain of pointers to a anon DataType) into a new CategoryPath
-	 * with a new name that is appropriate for a structure member field.
-	 * <p>
-	 * Use this method when a struct has a field with an anon datatype.  The new copied
-	 * datatype will be called "anonorigname_for_structurefieldname"
-	 * <p>
-	 *
-	 * @param dt - DataType to copy
-	 * @param destCategory {@link CategoryPath} to copy to
-	 * @param membername the name of the structure member that uses this anon datatype.
-	 * @return new DataType that is a copy of the old type, but in a new location and name.
-	 */
-	private DataType copyAnonTypeForMember(DataType dt, CategoryPath destCategory,
-			String membername) {
-		List<Pointer> ptrChainTypes = new ArrayList<>();
-		DataType actualDT = dt;
-		while (actualDT instanceof Pointer) {
-			ptrChainTypes.add((Pointer) actualDT);
-			actualDT = ((Pointer) actualDT).getDataType();
-		}
-
-		if (actualDT.getCategoryPath().equals(destCategory)) {
-			return dt;
-		}
-
-		DataType copy = actualDT.copy(dataTypeManager);
-		try {
-			copy.setNameAndCategory(destCategory, copy.getName() + "_for_" + membername);
-		}
-		catch (InvalidNameException | DuplicateNameException e) {
-			Msg.error(this, "Failed to copy anon type " + dt);
-			return dt;
-		}
-
-		DataType result = copy;
-		for (int i = ptrChainTypes.size() - 1; i >= 0; i--) {
-			Pointer origPtr = ptrChainTypes.get(i);
-			result = new PointerDataType(result,
-				origPtr.isDynamicallySized() ? -1 : origPtr.getLength(), dataTypeManager);
-		}
-
-		return result;
-	}
-
 	static class DWARFDataType {
 		DataType dataType;
-		boolean isEmptyArrayType;
 		DWARFNameInfo dni;
 		DWARFSourceInfo dsi;
 		Set<Long> offsets = new HashSet<>();
@@ -1348,5 +1263,6 @@ public class DWARFDataTypeImporter {
 			return offsets.stream().sorted().map(Long::toHexString).collect(
 				Collectors.joining(","));
 		}
+
 	}
 }

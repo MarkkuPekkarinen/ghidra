@@ -27,8 +27,10 @@ import docking.action.DockingActionIf;
 import docking.action.MenuData;
 import docking.actions.KeyBindingUtils;
 import ghidra.framework.plugintool.PluginConfigurationModel;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginDescription;
 import ghidra.framework.plugintool.util.PluginStatus;
+import ghidra.util.HTMLUtilities;
 
 /**
  * Panel that contains a JTextPane to show plugin description information.
@@ -46,9 +48,11 @@ class PluginDetailsPanel extends AbstractDetailsPanel {
 	private SimpleAttributeSet noValueAttrSet;
 
 	private final PluginConfigurationModel model;
+	private PluginTool tool;
 
-	PluginDetailsPanel(PluginConfigurationModel model) {
+	PluginDetailsPanel(PluginTool tool, PluginConfigurationModel model) {
 		super();
+		this.tool = tool;
 		this.model = model;
 		createFieldAttributes();
 		createMainPanel();
@@ -103,7 +107,7 @@ class PluginDetailsPanel extends AbstractDetailsPanel {
 				insertHTMLString(buffer, dependencies.get(i).getPluginClass().getName(),
 					dependencyAttrSet);
 				if (i < dependencies.size() - 1) {
-					insertHTMLString(buffer, "<BR>", dependencyAttrSet);
+					buffer.append(HTMLUtilities.BR);
 				}
 			}
 			insertHTMLLine(buffer, "", titleAttrSet);  // add a newline
@@ -122,8 +126,8 @@ class PluginDetailsPanel extends AbstractDetailsPanel {
 		else {
 			for (int i = 0; i < servicesRequired.size(); i++) {
 				insertHTMLString(buffer, servicesRequired.get(i).getName(), dependencyAttrSet);
-				if (i < dependencies.size() - 1) {
-					insertHTMLString(buffer, "<BR>", dependencyAttrSet);
+				if (i < servicesRequired.size() - 1) {
+					buffer.append(HTMLUtilities.BR);
 				}
 			}
 			insertHTMLLine(buffer, "", titleAttrSet);  // add a newline
@@ -136,7 +140,7 @@ class PluginDetailsPanel extends AbstractDetailsPanel {
 		//
 		//
 		// Optional: Actions loaded by this plugin
-		// 
+		//
 		addLoadedActionsContent(buffer, descriptor);
 
 		buffer.append("</TABLE>");
@@ -157,8 +161,13 @@ class PluginDetailsPanel extends AbstractDetailsPanel {
 		insertHTMLLine(buffer, "Loaded Actions:", titleAttrSet);
 		buffer.append("</TD>");
 
-		Set<DockingActionIf> actions = model.getActionsForPlugin(pluginDescription);
-		if (actions.size() == 0) {
+		Set<DockingActionIf> actions = Collections.emptySet();
+		if (model.isLoaded(pluginDescription)) {
+			actions =
+				KeyBindingUtils.getKeyBindingActionsForOwner(tool, pluginDescription.getName());
+		}
+
+		if (actions.isEmpty()) {
 			buffer.append("<TD VALIGN=\"TOP\">");
 			insertHTMLLine(buffer, "No actions for plugin", noValueAttrSet);
 			buffer.append("</TD>");

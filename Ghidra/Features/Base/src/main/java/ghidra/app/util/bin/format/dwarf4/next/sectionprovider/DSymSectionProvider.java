@@ -15,17 +15,15 @@
  */
 package ghidra.app.util.bin.format.dwarf4.next.sectionprovider;
 
-import ghidra.app.util.bin.*;
-import ghidra.app.util.bin.format.macho.*;
-import ghidra.app.util.opinion.MachoLoader;
-import ghidra.program.model.listing.Program;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-import generic.continues.RethrowContinuesFactory;
+import ghidra.app.util.bin.*;
+import ghidra.app.util.bin.format.macho.*;
+import ghidra.app.util.opinion.MachoLoader;
+import ghidra.program.model.listing.Program;
 
 /**
  * Fetches DWARF section data for a MachO program with co-located .dSYM folder. (ie. Mac OSX
@@ -63,7 +61,7 @@ public class DSymSectionProvider implements DWARFSectionProvider {
 	public DSymSectionProvider(File dsymFile) throws IOException, MachException {
 		this.provider = new RandomAccessByteProvider(dsymFile);
 		
-		machHeader = MachHeader.createMachHeader(RethrowContinuesFactory.INSTANCE, provider);
+		machHeader = new MachHeader(provider);
 		machHeader.parse();
 		for (Section s : machHeader.getAllSections()) {
 			// strip leading "_"'s from section name to normalize
@@ -77,7 +75,7 @@ public class DSymSectionProvider implements DWARFSectionProvider {
 		
 		Section s = machSectionsByName.get(sectionName);
 		return (s != null) ? new ByteProviderWrapper(provider,
-			machHeader.getStartIndexInProvider() + s.getOffset(), s.getSize()) : null;
+			machHeader.getStartIndex() + s.getOffset(), s.getSize()) : null;
 	}
 
 	@Override

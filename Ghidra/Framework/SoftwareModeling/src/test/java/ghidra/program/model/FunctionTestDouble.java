@@ -48,6 +48,11 @@ public class FunctionTestDouble implements Function {
 	}
 
 	@Override
+	public boolean isDeleted() {
+		return false;
+	}
+
+	@Override
 	public String toString() {
 		return name;
 	}
@@ -402,7 +407,7 @@ public class FunctionTestDouble implements Function {
 	}
 
 	@Override
-	public Address[] getFunctionThunkAddresses() {
+	public Address[] getFunctionThunkAddresses(boolean recursive) {
 		throw new UnsupportedOperationException();
 	}
 

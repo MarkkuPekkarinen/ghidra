@@ -36,6 +36,10 @@ public class ArchiveRootNode extends DataTypeTreeNode {
 
 	ArchiveRootNode(DataTypeManagerHandler archiveManager) {
 		this.archiveManager = archiveManager;
+		init();
+	}
+
+	private void init() {
 		archiveListener = new RootNodeListener();
 		archiveManager.addArchiveManagerListener(archiveListener);
 	}
@@ -108,13 +112,6 @@ public class ArchiveRootNode extends DataTypeTreeNode {
 	@Override
 	public boolean canPaste(List<GTreeNode> pastedNodes) {
 		return false;
-		// DT problem with copying archives, use saveAs for now
-//		for (GTreeNode node : pastedNodes) {
-//			if ( !(node instanceof ArchiveNode) ) {
-//				return false;
-//			}
-//		}
-//		return true;
 	}
 
 	@Override
@@ -227,9 +224,6 @@ public class ArchiveRootNode extends DataTypeTreeNode {
 					index = -index - 1;
 					addNode(index, node);
 				}
-				// kick tree to refilter if filter in place so that nodes will stay expaned see
-				// SCR #7895
-//				tree.setFilterText(tree.getFilterText());
 			}
 		}
 

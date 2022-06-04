@@ -51,7 +51,7 @@ void HighVariable::setSymbol(Varnode *vn) const
   symbol = entry->getSymbol();
   if (entry->isDynamic())	// Dynamic symbols match whole variable
     symboloffset = -1;
-  else if (symbol->getCategory() == 1)
+  else if (symbol->getCategory() == Symbol::equate)
     symboloffset = -1;			// For equates, we don't care about size
   else if (symbol->getType()->getSize() == vn->getSize() &&
       entry->getAddr() == vn->getAddr() && !entry->isPiece())
@@ -153,6 +153,9 @@ void HighVariable::updateType(void) const
   vn = getTypeRepresentative();
 
   type = vn->getType();
+  if (type->hasStripped())
+    type = type->getStripped();
+
 				// Update lock flags
   flags &= ~Varnode::typelock;
   if (vn->isTypeLock())
@@ -463,7 +466,7 @@ void HighVariable::saveXml(ostream &s) const
   else if (isConstant())
     a_v(s,"class",string("constant"));
   else if (!isPersist() && (symbol != (Symbol *)0)) {
-    if (symbol->getCategory() == 0)
+    if (symbol->getCategory() == Symbol::function_parameter)
       a_v(s,"class",string("param"));
     else
       a_v(s,"class",string("local"));
@@ -486,6 +489,62 @@ void HighVariable::saveXml(ostream &s) const
     s << "/>";
   }
   s << "</high>";
+}
+
+/// Given a Varnode at the root of an expression, we collect all the \e explicit HighVariables
+/// involved in the expression.  This should only be run after \e explicit and \e implicit
+/// properties have been computed on Varnodes.  The expression is traced back from the root
+/// until explicit Varnodes are encountered; then their HighVariable is marked and added to the list.
+/// The routine returns a value based on PcodeOps encountered in the expression:
+///   - 1 for call instructions
+///   - 2 for LOAD instructions
+///   - 3 for both call and LOAD
+///   - 0 for no calls or LOADS
+///
+/// \param vn is the given root Varnode of the expression
+/// \param highList will hold the collected HighVariables
+/// \return a value based on call and LOAD instructions in the expression
+int4 HighVariable::markExpression(Varnode *vn,vector<HighVariable *> &highList)
+
+{
+  HighVariable *high = vn->getHigh();
+  high->setMark();
+  highList.push_back(high);
+  int4 retVal = 0;
+  if (!vn->isWritten()) return retVal;
+
+  vector<PcodeOpNode> path;
+  PcodeOp *op = vn->getDef();
+  if (op->isCall())
+    retVal |= 1;
+  if (op->code() == CPUI_LOAD)
+    retVal |= 2;
+  path.push_back(PcodeOpNode(op,0));
+  while(!path.empty()) {
+    PcodeOpNode &node(path.back());
+    if (node.op->numInput() <= node.slot) {
+      path.pop_back();
+      continue;
+    }
+    Varnode *curVn = node.op->getIn(node.slot);
+    node.slot += 1;
+    if (curVn->isAnnotation()) continue;
+    if (curVn->isExplicit()) {
+      high = curVn->getHigh();
+      if (high->isMark()) continue;	// Already in the list
+      high->setMark();
+      highList.push_back(high);
+      continue;				// Truncate at explicit
+    }
+    if (!curVn->isWritten()) continue;
+    op = curVn->getDef();
+    if (op->isCall())
+      retVal |= 1;
+    if (op->code() == CPUI_LOAD)
+      retVal |= 2;
+    path.push_back(PcodeOpNode(curVn->getDef(),0));
+  }
+  return retVal;
 }
 
 #ifdef MERGEMULTI_DEBUG

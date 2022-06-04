@@ -16,16 +16,17 @@
 #include "op.hh"
 #include "funcdata.hh"
 
+const string IopSpace::NAME = "iop";
+
 /// Constructor for the \b iop space.
 /// There is only one such space, and it is considered internal
 /// to the model, i.e. the Translate engine should never generate
 /// addresses in this space.
 /// \param m is the associated address space manager
 /// \param t is the associated processor translator
-/// \param nm is the name of the space (always \b iop)
 /// \param ind is the associated index
-IopSpace::IopSpace(AddrSpaceManager *m,const Translate *t,const string &nm,int4 ind)
-  : AddrSpace(m,t,IPTR_IOP,nm,sizeof(void *),1,ind,0,1)
+IopSpace::IopSpace(AddrSpaceManager *m,const Translate *t,int4 ind)
+  : AddrSpace(m,t,IPTR_IOP,NAME,sizeof(void *),1,ind,0,1)
 {
   clearFlags(heritaged|does_deadcode|big_endian);
   if (HOST_ENDIAN==1)		// Endianness always set to host
@@ -171,6 +172,106 @@ bool PcodeOp::isCseMatch(const PcodeOp *op) const
   return true;
 }
 
+/// Its possible for the order of operations to be rearranged in some instances but still keep
+/// equivalent data-flow.  Test if \b this operation can be moved to occur immediately after
+/// a specified \e point operation. This currently only tests for movement within a basic block.
+/// \param point is the specified point to move \b this after
+/// \return \b true if the move is possible
+bool PcodeOp::isMoveable(const PcodeOp *point) const
+
+{
+  if (this == point) return true;	// No movement necessary
+  bool movingLoad = false;
+  if (getEvalType() == PcodeOp::special) {
+    if (code() == CPUI_LOAD)
+      movingLoad = true;	// Allow LOAD to be moved with additional restrictions
+    else
+      return false;	// Don't move special ops
+  }
+  if (parent != point->parent) return false;	// Not in the same block
+  if (output != (Varnode *)0) {
+    // Output cannot be moved past an op that reads it
+    list<PcodeOp *>::const_iterator iter = output->beginDescend();
+    list<PcodeOp *>::const_iterator enditer = output->endDescend();
+    while(iter != enditer) {
+      PcodeOp *readOp = *iter;
+      ++iter;
+      if (readOp->parent != parent) continue;
+      if (readOp->start.getOrder() <= point->start.getOrder())
+	return false;		// Is in the block and is read before (or at) -point-
+    }
+  }
+  // Only allow this op to be moved across a CALL in very restrictive circumstances
+  bool crossCalls = false;
+  if (getEvalType() != PcodeOp::special) {
+    // Check for a normal op where all inputs and output are not address tied
+    if (output != (Varnode *)0 && !output->isAddrTied() && !output->isPersist()) {
+      int4 i;
+      for(i=0;i<numInput();++i) {
+	const Varnode *vn = getIn(i);
+	if (vn->isAddrTied() || vn->isPersist())
+	  break;
+      }
+      if (i == numInput())
+	crossCalls = true;
+    }
+  }
+  vector<const Varnode *> tiedList;
+  for(int4 i=0;i<numInput();++i) {
+    const Varnode *vn = getIn(i);
+    if (vn->isAddrTied())
+      tiedList.push_back(vn);
+  }
+  list<PcodeOp *>::iterator biter = basiciter;
+  do {
+    ++biter;
+    PcodeOp *op = *biter;
+    if (op->getEvalType() == PcodeOp::special) {
+      switch (op->code()) {
+	case CPUI_LOAD:
+	  if (output != (Varnode *)0) {
+	    if (output->isAddrTied()) return false;
+	  }
+	  break;
+	case CPUI_STORE:
+	  if (movingLoad)
+	    return false;
+	  else {
+	    if (!tiedList.empty()) return false;
+	    if (output != (Varnode *)0) {
+	      if (output->isAddrTied()) return false;
+	    }
+	  }
+	  break;
+	case CPUI_INDIRECT:		// Let thru, deal with what's INDIRECTed around separately
+	case CPUI_SEGMENTOP:
+	case CPUI_CPOOLREF:
+	  break;
+	case CPUI_CALL:
+	case CPUI_CALLIND:
+	case CPUI_NEW:
+	  if (!crossCalls) return false;
+	  break;
+	default:
+	  return false;
+      }
+    }
+    if (op->output != (Varnode *)0) {
+      if (movingLoad) {
+	if (op->output->isAddrTied()) return false;
+      }
+      for(int4 i=0;i<tiedList.size();++i) {
+	const Varnode *vn = tiedList[i];
+	if (vn->overlap(*op->output)>=0)
+	  return false;
+	if (op->output->overlap(*vn)>=0)
+	  return false;
+      }
+    }
+  } while(biter != point->basiciter);
+  return true;
+}
+
 /// Set the behavioral class (opcode) of this operation. For most applications this should only be called
 /// by the PcodeOpBank.  This is fairly low-level but does cache various boolean flags associated with the opcode
 /// \param t_op is the behavioural class to set
@@ -179,7 +280,8 @@ void PcodeOp::setOpcode(TypeOp *t_op)
 {
   flags &= ~(PcodeOp::branch | PcodeOp::call | PcodeOp::coderef | PcodeOp::commutative |
 	     PcodeOp::returns | PcodeOp::nocollapse | PcodeOp::marker | PcodeOp::booloutput |
-	     PcodeOp::unary | PcodeOp::binary | PcodeOp::special);
+	     PcodeOp::unary | PcodeOp::binary | PcodeOp::ternary | PcodeOp::special |
+	     PcodeOp::has_callspec | PcodeOp::no_copy_propagation);
   opcode = t_op;
   flags |= t_op->getFlags();
 }
@@ -314,9 +416,10 @@ void PcodeOp::saveXml(ostream &s) const
     }
     else if (vn->getSpace()->getType()==IPTR_CONSTANT) {
       if ((i==0)&&((code()==CPUI_STORE)||(code()==CPUI_LOAD))) {
-	AddrSpace *spc = Address::getSpaceFromConst(vn->getAddr());
-	s << "<spaceid name=\"";
-	s << spc->getName() << "\"/>\n";
+	AddrSpace *spc = vn->getSpaceFromConst();
+	s << "<spaceid";
+	a_v(s,"name",spc->getName());
+	s << "/>\n";
       }
       else
 	s << "<addr ref=\"0x" << hex << vn->getCreateIndex() << "\"/>\n";

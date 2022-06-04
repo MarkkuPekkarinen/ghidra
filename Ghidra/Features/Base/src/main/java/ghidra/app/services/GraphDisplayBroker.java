@@ -15,11 +15,12 @@
  */
 package ghidra.app.services;
 
+import java.util.List;
+
 import ghidra.app.plugin.core.graph.GraphDisplayBrokerListener;
 import ghidra.app.plugin.core.graph.GraphDisplayBrokerPlugin;
 import ghidra.framework.plugintool.ServiceInfo;
-import ghidra.service.graph.GraphDisplay;
-import ghidra.service.graph.GraphDisplayProvider;
+import ghidra.service.graph.*;
 import ghidra.util.exception.GraphException;
 import ghidra.util.task.TaskMonitor;
 
@@ -41,7 +42,7 @@ public interface GraphDisplayBroker {
 
 	/**
 	 * Adds a listener for notification when the set of graph display providers change or the currently
-	 * active graph display provider changes 
+	 * active graph display provider changes
 	 * @param listener the listener to be notified
 	 */
 	public void addGraphDisplayBrokerListener(GraphDisplayBrokerListener listener);
@@ -53,7 +54,9 @@ public interface GraphDisplayBroker {
 	public void removeGraphDisplayBrokerLisetener(GraphDisplayBrokerListener listener);
 
 	/**
-	 * A convenience method for getting a {@link GraphDisplay} from the currently active provider
+	 * A convenience method for getting a {@link GraphDisplay} from the currently active provider.
+	 * This method is intended to be used to display a new graph.
+	 * 
 	 * @param reuseGraph if true, the provider will attempt to re-use a current graph display
 	 * @param monitor the {@link TaskMonitor} that can be used to cancel the operation
 	 * @return a {@link GraphDisplay} object to sends graphs to be displayed or exported.
@@ -74,4 +77,21 @@ public interface GraphDisplayBroker {
 	 * @return the GraphDisplayProvider with the given name or null if none with that name exists.
 	 */
 	public GraphDisplayProvider getGraphDisplayProvider(String name);
+
+	/**
+	 * Returns a list of all discovered {@link AttributedGraphExporter}.
+	 * @return  a list of all discovered {@link AttributedGraphExporter}.
+	 */
+	public List<AttributedGraphExporter> getGraphExporters();
+
+	/**
+	 * Returns the {@link AttributedGraphExporter} with the given name or null in no exporter with
+	 * that name is known
+	 * 
+	 * @param name the name of the exporter to retrieve
+	 * @return  the {@link AttributedGraphExporter} with the given name or null if no exporter with
+	 * that name is known
+	 */
+	public AttributedGraphExporter getGraphExporters(String name);
+
 }

@@ -493,7 +493,8 @@ public class CodeUnitFormat {
 		InstructionScalarInfo info = new InstructionScalarInfo(representations, primaryRef);
 		if (info.hasSingleAddressWithNoScalars()) {
 			int addressIndex = info.getAddressIndex();
-			return markupAddressAsScalar(inst, primaryRef, representations, addressIndex);
+			return markupAddressAsRegister(inst, primaryRef, representations, addressIndex) ||
+				markupAddressAsScalar(inst, primaryRef, representations, addressIndex);
 		}
 
 		if (info.hasNoScalars()) {
@@ -562,6 +563,21 @@ public class CodeUnitFormat {
 			markupScalarWithEquate(scalar, i, equates, representations);
 		}
 		return primaryRef == null;
+	}
+
+	private boolean markupAddressAsRegister(Instruction instr, Reference primaryRef,
+			List<Object> representationList, int addressIndex) {
+		if (primaryRef != null) {
+			return false;
+		}
+		// NOTE: although preferrable, access type/size is not considered
+		Address addr = (Address) representationList.get(addressIndex);
+		Register reg = instr.getProgram().getRegister(addr);
+		if (reg != null) {
+			representationList.set(addressIndex, reg.getName());
+			return true;
+		}
+		return false;
 	}
 
 	private boolean markupAddressAsScalar(Instruction instr, Reference primaryRef,
@@ -1016,7 +1032,7 @@ public class CodeUnitFormat {
 		DataType dataType = data.getDataType();
 		int length = data.getLength();
 
-		if (length < dataType.getLength()) {
+		if ((length != 0 || !dataType.isZeroLength()) && dataType.getLength() > length) {
 			representationList.add("Data type \"" + dataType.getDisplayName() +
 				"\" is too big for available space. Size = " + dataType.getLength() +
 				" bytes, available = " + length + " bytes");
@@ -1061,12 +1077,27 @@ public class CodeUnitFormat {
 				representationList.setHasError(true);
 			}
 		}
-		representationList.add(dataType.getRepresentation(data, data, length));
+
 		representationList.setPrimaryReferenceHidden(ref != null);
+
 		if (data.isDefined() && dataValue == null) {
+			DataType baseDt = dataType;
+			if (baseDt instanceof TypeDef) {
+				baseDt = ((TypeDef) dataType).getBaseDataType();
+			}
+			if (baseDt instanceof Pointer) {
+				// Render pointer error
+				PointerDataType.getAddressValue(data, baseDt.getLength(), data,
+					m -> representationList.add(m));
+			}
 			representationList.setHasError(true);
 		}
-		else if ((dataValue instanceof Address) && ref == null &&
+
+		if (representationList.isEmpty()) {
+			representationList.add(dataType.getRepresentation(data, data, length));
+		}
+
+		if ((dataValue instanceof Address) && ref == null &&
 			data.getProgram().getMemory().getBlock((Address) dataValue) == null) {
 			representationList.setHasError(true);
 		}
@@ -1153,11 +1184,36 @@ public class CodeUnitFormat {
 			}
 		}
 
+		if (ref.isMemoryReference() && (ref instanceof OffsetReference)) {
+			return getOffsetReferenceRepresentation(cu, (OffsetReference) ref);
+		}
+
 		if (ref.isMemoryReference() || ref.isExternalReference()) {
 			return getMemoryReferenceLabel(cu, ref);
 		}
+
 		return null;
 
+	}
+
+	private Object getOffsetReferenceRepresentation(CodeUnit cu, OffsetReference offsetRef) {
+		Reference baseRef =
+			new MemReferenceImpl(offsetRef.getFromAddress(), offsetRef.getBaseAddress(),
+				RefType.DATA,
+				offsetRef.getSource(), offsetRef.getOperandIndex(), offsetRef.isPrimary());
+		Object baseRefObj = getMemoryReferenceLabel(cu, baseRef);
+		long offset = offsetRef.getOffset();
+		String sign = "+";
+		if (offset < 0) {
+			offset = -offset;
+			sign = "-";
+		}
+		Scalar offsetScalar = new Scalar(64, offsetRef.getOffset(), true);
+		OperandRepresentationList list = new OperandRepresentationList();
+		list.add(baseRefObj);
+		list.add(sign);
+		list.add(offsetScalar);
+		return list;
 	}
 
 	/**

@@ -50,7 +50,8 @@ import ghidra.util.SystemUtilities;
  *           (either programmatically or pressing &lt;CTRL&gt; M) and the user is restricted to the numbers/letters
  *           appropriate for that mode. See {@link #setAllowsHexPrefix(boolean)}</LI>
  *      <LI> Have a max value - a max value can be set (must be positive) such that the user can not type a
- *           number greater than the max. Otherwise, the number is unlimited. See {@link #setMaxValue(BigInteger)}</LI>
+ *           number whose absolute value is greater than the max. Otherwise, the value is unlimited if max is 
+ *           null/unspecified. See {@link #setMaxValue(BigInteger)}</LI>
  *      <LI> Show the number mode as hint text - If on either "Hex" or "Dec" is displayed lightly in the
  * 		     bottom right portion of the text field. See {@link #setShowNumberMode(boolean)}</LI>
  * </UL>
@@ -217,7 +218,7 @@ public class IntegerTextField {
 	 */
 	public void setValue(BigInteger newValue) {
 
-		if (!allowsNegative && newValue != null && newValue.compareTo(BigInteger.ZERO) < 0) {
+		if (!allowsNegative && newValue != null && newValue.signum() < 0) {
 			newValue = null;
 		}
 
@@ -303,7 +304,7 @@ public class IntegerTextField {
 		BigInteger currentValue = getValue();
 		allowsNegative = b;
 		if (!allowsNegative) {
-			if (currentValue != null && currentValue.compareTo(BigInteger.ZERO) < 0) {
+			if (currentValue != null && currentValue.signum() < 0) {
 				currentValue = null;
 			}
 		}
@@ -312,7 +313,8 @@ public class IntegerTextField {
 
 	/**
 	 * Returns the current maximum allowed value.  Null indicates that there is no maximum value.
-	 *
+	 * If negative values are permitted (see {@link #setAllowNegativeValues(boolean)}) this value
+	 * will establish the upper and lower limit of the absolute value.
 	 * @return the current maximum value allowed.
 	 */
 	public BigInteger getMaxValue() {
@@ -322,17 +324,25 @@ public class IntegerTextField {
 	/**
 	 * Sets the maximum allowed value.  The maximum must be a positive number.  Null indicates that
 	 * there is no maximum value.
+	 * <p>
+	 * If negative values are permitted (see {@link #setAllowNegativeValues(boolean)}) this value
+	 * will establish the upper and lower limit of the absolute value.
 	 *
 	 * @param maxValue the maximum value to allow.
 	 */
 	public void setMaxValue(BigInteger maxValue) {
-		if (maxValue != null && maxValue.compareTo(BigInteger.ZERO) < 0) {
+		if (maxValue != null && maxValue.signum() < 0) {
 			throw new IllegalArgumentException("Max value must be positive");
 		}
 		BigInteger currentValue = getValue();
 		this.maxValue = maxValue;
-		if (!passesMaxCheck(currentValue)) {
-			setValue(maxValue);
+		if (maxValue != null && !passesMaxCheck(currentValue)) {
+			if (currentValue.signum() < 0) {
+				setValue(maxValue.negate());
+			}
+			else {
+				setValue(maxValue);
+			}
 		}
 	}
 
@@ -370,6 +380,15 @@ public class IntegerTextField {
 	 */
 	public void setEnabled(boolean enabled) {
 		textField.setEnabled(enabled);
+	}
+
+	/**
+	 * Sets the editable mode for the JTextField component
+	 * 
+	 * @param editable boolean flag, if true component is editable
+	 */
+	public void setEditable(boolean editable) {
+		textField.setEditable(editable);
 	}
 
 	/**
@@ -450,8 +469,7 @@ public class IntegerTextField {
 		if (maxValue == null) {
 			return true;
 		}
-
-		return value.compareTo(maxValue) <= 0;
+		return value.abs().compareTo(maxValue) <= 0;
 	}
 
 	private void updateNumberMode(String text) {

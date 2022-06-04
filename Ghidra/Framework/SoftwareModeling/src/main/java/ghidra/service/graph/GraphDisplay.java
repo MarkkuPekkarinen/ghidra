@@ -17,7 +17,7 @@ package ghidra.service.graph;
 
 import java.util.Set;
 
-import docking.action.DockingAction;
+import docking.action.DockingActionIf;
 import docking.widgets.EventTrigger;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
@@ -26,13 +26,66 @@ import ghidra.util.task.TaskMonitor;
  * Interface for objects that display (or consume) graphs.  Normally, a graph display represents
  * a visual component for displaying and interacting with a graph.  Some implementation may not
  * be a visual component, but instead consumes/processes the graph (i.e. graph exporter). In this
- * case, there is no interactive element and once the graph has been set on the display, it is 
+ * case, there is no interactive element and once the graph has been set on the display, it is
  * closed.
  */
 public interface GraphDisplay {
 	public static final int ALIGN_LEFT = 0;  // aligns graph text to the left
 	public static final int ALIGN_CENTER = 1; // aligns graph text to the center
 	public static final int ALIGN_RIGHT = 2; // aligns graph text to the right
+
+	/**
+	 * values are color names or rgb in hex '0xFF0000' is red
+	 */
+	public static final String SELECTED_VERTEX_COLOR = "selectedVertexColor";
+
+	/**
+	 * values are color names or rgb in hex '0xFF0000' is red
+	 */
+	public static final String SELECTED_EDGE_COLOR = "selectedEdgeColor";
+
+	/**
+	 * values are defined as String symbols in LayoutFunction class
+	 *
+	 * KAMADA_KAWAI,FRUCTERMAN_REINGOLD,CIRCLE_MINCROSS,TIDIER_TREE,TIDIER_RADIAL_TREE,
+	 * MIN_CROSS_TOP_DOWN,MIN_CROSS_LONGEST_PATH,MIN_CROSS_NETWORK_SIMPLEX,MIN_CROSS_COFFMAN_GRAHAM,
+	 * EXP_MIN_CROSS_TOP_DOWN,EXP_MIN_CROSS_LONGEST_PATH,EXP_MIN_CROSS_NETWORK_SIMPLEX,
+	 * EXP_MIN_CROSS_COFFMAN_GRAHAM,TREE,RADIAL,BALLOON,GEM
+	 *
+	 * may have no meaning for a different graph visualization library
+	 */
+	public static final String INITIAL_LAYOUT_ALGORITHM = "initialLayoutAlgorithm";
+
+	/**
+	 * true or false
+	 * may have no meaning for a different graph visualization library
+	 */
+	public static final String DISPLAY_VERTICES_AS_ICONS = "displayVerticesAsIcons";
+
+	/**
+	 * values are the strings N,NE,E,SE,S,SW,W,NW,AUTO,CNTR
+	 * may have no meaning for a different graph visualization library
+	 */
+	public static final String VERTEX_LABEL_POSITION = "vertexLabelPosition";
+
+	/**
+	 * true or false, whether edge selection via a mouse click is enabled.
+	 * May not be supported by another graph visualization library
+	 */
+	public static final String ENABLE_EDGE_SELECTION = "enableEdgeSelection";
+
+	/**
+	 * a comma-separated list of edge type names in priority order
+	 */
+	public static final String EDGE_TYPE_PRIORITY_LIST = "edgeTypePriorityList";
+
+	/**
+	 * a comma-separated list of edge type names.
+	 * any will be considered a favored edge for the min-cross layout
+	 * algorithms.
+	 * May have no meaning with a different graph visualization library
+	 */
+	public static final String FAVORED_EDGES = "favoredEdges";
 
 	/**
 	 * Sets a {@link GraphDisplayListener} to be notified when the user changes the vertex focus
@@ -43,7 +96,7 @@ public interface GraphDisplay {
 	public void setGraphDisplayListener(GraphDisplayListener listener);
 
 	/**
-	 * Tells the graph display window to focus the vertex with the given id.
+	 * Tells the graph display window to focus the vertex with the given id
 	 * 
 	 * @param vertex the vertex to focus
 	 * @param eventTrigger Provides a hint to the GraphDisplay as to why we are updating the
@@ -63,7 +116,8 @@ public interface GraphDisplay {
 
 	/**
 	 * Returns the currently focused vertex or null if no vertex is focused
-	 * @return  the currently focused vertex or null if no vertex is focused.
+	 * 
+	 * @return  the currently focused vertex or null if no vertex is focused
 	 */
 	public AttributedVertex getFocusedVertex();
 
@@ -74,7 +128,7 @@ public interface GraphDisplay {
 	 * @param eventTrigger Provides a hint to the GraphDisplay as to why we are updating the
 	 * graph location so that the GraphDisplay can decide if it should send out a notification via
 	 * the {@link GraphDisplayListener#selectionChanged(Set)}. For example, if we are updating
-	 * the the location due to an event from the main application, we don't want to notify the 
+	 * the the location due to an event from the main application, we don't want to notify the
 	 * application the graph changed to avoid event cycles. See {@link EventTrigger} for more
 	 * information.
 	 */
@@ -82,6 +136,7 @@ public interface GraphDisplay {
 
 	/**
 	 * Returns a set of vertex ids for all the currently selected vertices
+	 * 
 	 * @return  a set of vertex ids for all the currently selected vertices
 	 */
 	public Set<AttributedVertex> getSelectedVertices();
@@ -92,41 +147,33 @@ public interface GraphDisplay {
 	public void close();
 
 	/**
-	 * Defines a vertex attribute type for this graph window
-	 * 
-	 * @param name the name of the attribute which may be attached to vertices.
-	 */
-	public void defineVertexAttribute(String name);
-
-	/**
-	 * Defines an edge attribute type for this graph window
-	 * 
-	 * @param name the name of the attribute which may be attached to edges.
-	 */
-	public void defineEdgeAttribute(String name);
-
-	/**
-	 * Sets the name of the attribute which should be used as the primary vertex label in the display.
-	 * @param attributeName the name of the attribute to use as the display label for vertices.
-	 * @param alignment (ALIGN_LEFT, ALIGN_RIGHT, or ALIGN_CENTER)
-	 * @param size the font size to use for the display label
-	 * @param monospace true if the font should be monospaced
-	 * @param maxLines the maximum number lines to display in the vertex labels
-	 */
-	public void setVertexLabel(String attributeName, int alignment, int size, boolean monospace,
-			int maxLines);
-
-	/**
 	 * Sets the graph to be displayed or consumed by this graph display
+	 * 
 	 * @param graph the graph to display or consume
 	 * @param title a title for the graph
 	 * @param monitor a {@link TaskMonitor} which can be used to cancel the graphing operation
-	 * @param append if true, append the new graph to any existing graph.
+	 * @param append if true, append the new graph to any existing graph
+	 * @throws CancelledException thrown if the graphing operation was cancelled
+	 * @deprecated You should now use the form that takes in a {@link GraphDisplayOptions}
+	 */
+	public default void setGraph(AttributedGraph graph, String title, boolean append,
+			TaskMonitor monitor) throws CancelledException {
+		setGraph(graph, new GraphDisplayOptions(graph.getGraphType()), title, append, monitor);
+	}
+
+	/**
+	 * Sets the graph to be displayed or consumed by this graph display
+	 * 
+	 * @param graph the graph to display or consume
+	 * @param options {@link GraphDisplayOptions} for configuring how the display will
+	 * render vertices and edges based on there vertex type and edge type respectively.
+	 * @param title a title for the graph
+	 * @param monitor a {@link TaskMonitor} which can be used to cancel the graphing operation
+	 * @param append if true, append the new graph to any existing graph
 	 * @throws CancelledException thrown if the graphing operation was cancelled
 	 */
-	public void setGraph(AttributedGraph graph, String title, boolean append,
-			TaskMonitor monitor)
-			throws CancelledException;
+	public void setGraph(AttributedGraph graph, GraphDisplayOptions options, String title,
+			boolean append, TaskMonitor monitor) throws CancelledException;
 
 	/**
 	 * Clears all graph vertices and edges from this graph display
@@ -135,6 +182,7 @@ public interface GraphDisplay {
 
 	/**
 	 * Updates a vertex to a new name
+	 * 
 	 * @param vertex the vertex to rename
 	 * @param newName the new name for the vertex
 	 */
@@ -142,6 +190,7 @@ public interface GraphDisplay {
 
 	/**
 	 * Returns the title of the current graph
+	 * 
 	 * @return the title of the current graph
 	 */
 	public String getGraphTitle();
@@ -149,8 +198,8 @@ public interface GraphDisplay {
 	/**
 	 * Adds the action to the graph display. Not all GraphDisplays support adding custom
 	 * actions, so this may have no effect.
-	 * @param action the action to add.
+	 * 
+	 * @param action the action to add
 	 */
-	public void addAction(DockingAction action);
-
+	public void addAction(DockingActionIf action);
 }

@@ -85,9 +85,9 @@ class ReferenceProvider extends ComponentProviderAdapter {
 		}
 	}
 
-	void symbolRemoved(Symbol symbol) {
+	void symbolRemoved(long symbolId) {
 		if (isVisible()) {
-			referenceKeyModel.symbolRemoved(symbol);
+			referenceKeyModel.symbolRemoved(symbolId);
 		}
 	}
 
@@ -132,6 +132,10 @@ class ReferenceProvider extends ComponentProviderAdapter {
 
 	void open() {
 		setVisible(true);
+	}
+
+	boolean isBusy() {
+		return referenceKeyModel.isBusy();
 	}
 
 	@Override

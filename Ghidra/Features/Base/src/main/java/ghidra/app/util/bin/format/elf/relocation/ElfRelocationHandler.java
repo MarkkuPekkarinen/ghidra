@@ -17,11 +17,18 @@ package ghidra.app.util.bin.format.elf.relocation;
 
 import java.util.Map;
 
+import org.apache.commons.lang3.StringUtils;
+
 import ghidra.app.util.bin.format.elf.*;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.data.DataUtilities;
+import ghidra.program.model.data.DataUtilities.ClearDataMode;
+import ghidra.program.model.data.PointerTypedef;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.program.model.util.CodeUnitInsertionException;
+import ghidra.util.Msg;
 import ghidra.util.classfinder.ExtensionPoint;
 import ghidra.util.exception.NotFoundException;
 
@@ -70,6 +77,66 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 			throws MemoryAccessException, NotFoundException;
 
 	/**
+	 * Apply a pointer-typedef with a specified component-offset.
+	 * @param program
+	 * @param addr address where data should be applied
+	 * @param componentOffset component offset
+	 */
+	public static void applyComponentOffsetPointer(Program program, Address addr,
+			long componentOffset) {
+		// TODO: we could also assign non-default address space setting if needed
+		PointerTypedef dt =
+			new PointerTypedef(null, null, -1, program.getDataTypeManager(), componentOffset);
+		try {
+			DataUtilities.createData(program, addr, dt, -1, false,
+				ClearDataMode.CLEAR_ALL_UNDEFINED_CONFLICT_DATA);
+		}
+		catch (CodeUnitInsertionException e) {
+			Msg.error(ElfRelocationHandler.class,
+				"Failed to apply component-offset pointer at " + addr);
+		}
+	}
+
+	/**
+	 * Determine if symbolAddr is contained within the EXTERNAL block with a non-zero adjustment.  
+	 * If so, relocationAddress will be marked with a <code>EXTERNAL Data Elf Relocation with pointer-offset</code> 
+	 * warning bookmark.
+	 * NOTE: This method should only be invoked when the symbol offset will be adjusted with a non-zero 
+	 * value (i.e., addend).
+	 * @param program
+	 * @param relocationAddress relocation address to be bookmarked if EXTERNAL block relocation
+	 * @param symbolAddr symbol address correspondng to relocation (may be null)
+	 * @param symbolName symbol name (may not be null if symbolAddr is not null)
+	 * @param adjustment relocation symbol offset adjustment/addend
+	 * @param log import log
+	 */
+	public static void warnExternalOffsetRelocation(Program program,
+			Address relocationAddress, Address symbolAddr, String symbolName, long adjustment,
+			MessageLog log) {
+
+		if (symbolAddr == null || adjustment == 0 ||
+			!program.getMemory().isExternalBlockAddress(symbolAddr)) {
+			return;
+		}
+
+		String sign = "+";
+		if (adjustment < 0) {
+			adjustment = -adjustment;
+			sign = "-";
+		}
+		String adjStr = sign + "0x" + Long.toHexString(adjustment);
+
+		symbolName = symbolName == null ? "<no name>" : symbolName;
+		Msg.warn(ElfRelocationHandler.class,
+			"EXTERNAL Data Elf Relocation with offset: at " + relocationAddress +
+			" (External Location = " + symbolName + adjStr + ")");
+		BookmarkManager bookmarkManager = program.getBookmarkManager();
+		bookmarkManager.setBookmark(relocationAddress, BookmarkType.WARNING, "EXTERNAL Relocation",
+			"EXTERNAL Data Elf Relocation with offset: External Location = " + symbolName +
+				adjStr);
+	}
+
+	/**
 	 * Generate error log entry and bookmark at relocationAddress indicating 
 	 * an unhandled relocation.
 	 * @param program 
@@ -82,7 +149,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	public static void markAsUnhandled(Program program, Address relocationAddress, long type,
 			long symbolIndex, String symbolName, MessageLog log) {
 
-		symbolName = symbolName == null ? "<no name>" : symbolName;
+		symbolName = StringUtils.isEmpty(symbolName) ? "<no name>" : symbolName;
 		log.appendMsg("Unhandled Elf Relocation: Type = " + type + " (0x" + Long.toHexString(type) +
 			") at " + relocationAddress + " (Symbol = " + symbolName + ")");
 		BookmarkManager bookmarkManager = program.getBookmarkManager();

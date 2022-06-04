@@ -46,7 +46,6 @@ import ghidra.util.task.TaskMonitor;
  */
 public class FillOutStructureCmd extends BackgroundCommand {
 
-
 	/**
 	 * Varnode with data-flow traceable to original pointer
 	 */
@@ -67,7 +66,7 @@ public class FillOutStructureCmd extends BackgroundCommand {
 	private int maxCallDepth = 1;
 
 	private NoisyStructureBuilder componentMap = new NoisyStructureBuilder();
-	private HashMap<Address, Integer> addressToCallInputMap = new HashMap<>();
+	private HashMap<Address, Address> addressToCallInputMap = new HashMap<>();
 
 	private Program currentProgram;
 	private ProgramLocation currentLocation;
@@ -75,8 +74,8 @@ public class FillOutStructureCmd extends BackgroundCommand {
 	private TaskMonitor monitor;
 	private PluginTool tool;
 
-	private List<OffsetPcodeOpPair> storePcodeOps = new ArrayList<OffsetPcodeOpPair>();
-	private List<OffsetPcodeOpPair> loadPcodeOps = new ArrayList<OffsetPcodeOpPair>();
+	private List<OffsetPcodeOpPair> storePcodeOps = new ArrayList<>();
+	private List<OffsetPcodeOpPair> loadPcodeOps = new ArrayList<>();
 
 	/**
 	 * Constructor.
@@ -147,17 +146,16 @@ public class FillOutStructureCmd extends BackgroundCommand {
 			}
 
 			fillOutStructureDef(var);
+			pushIntoCalls();
 
 			structDT = createStructure(structDT, var, rootFunction, isThisParam);
 			populateStructure(structDT);
 
-			pushIntoCalls(structDT);
-
 			DataType pointerDT = new PointerDataType(structDT);
 
 			// Delay adding to the manager until full structure is accumulated
-			pointerDT = currentProgram.getDataTypeManager().addDataType(pointerDT,
-				DataTypeConflictHandler.DEFAULT_HANDLER);
+			pointerDT = currentProgram.getDataTypeManager()
+					.addDataType(pointerDT, DataTypeConflictHandler.DEFAULT_HANDLER);
 			commitVariable(var, pointerDT, isThisParam);
 		}
 		catch (Exception e) {
@@ -173,6 +171,8 @@ public class FillOutStructureCmd extends BackgroundCommand {
 
 	/**
 	 * Method to create a structure data type for a variable in the given function.
+	 * Unlike the applyTo() action, this method will not modify the function, its variables,
+	 * or any existing data-types. A new structure is always created.
 	 * @param var a parameter, local variable, or global variable used in the given function
 	 * @param function the function to process
 	 * @return a filled-in structure or null if one could not be created
@@ -187,9 +187,9 @@ public class FillOutStructureCmd extends BackgroundCommand {
 
 		try {
 			fillOutStructureDef(var);
+			pushIntoCalls();
 			structDT = createStructure(null, var, function, false);
 			populateStructure(structDT);
-			pushIntoCalls(structDT);
 		}
 		catch (Exception e) {
 			return null;
@@ -224,18 +224,25 @@ public class FillOutStructureCmd extends BackgroundCommand {
 		return loadPcodeOps;
 	}
 
-
 	/**
-	 * Retrieve the (likely) storage address for a function parameter given its index
-	 * @param function is the function
-	 * @param paramIndex is the index of the parameter
-	 * @param pointerDt is the pointer to structure datatype
-	 * @return the storage address or null
+	 * Retrieve the (likely) storage address of a function parameter given
+	 * the inputs to a CALL p-code op and particular Varnode slot within the inputs.
+	 * We compute the address from the point of view of the called function (callee)
+	 * which may be different from the point of view of the caller, which may be
+	 * different from the address of the Varnode currently holding the parameter.
+	 * @param inputs is the array of Varnode inputs to the CALL
+	 * @param slot is the index of the Varnode holding the parameter we want.
+	 * @return the starting address of the parameter or null if the address can't be identified
 	 */
-	private Address computeParamAddress(Function function, int paramIndex, DataType pointerDt) {
+	private Address computeParamAddress(Varnode[] inputs, int slot) {
+		Address funcAddr = inputs[0].getAddress();
+		Function function = currentProgram.getFunctionManager().getFunctionAt(funcAddr);
+		if (function == null) {
+			return null;
+		}
 		Parameter[] parameters = function.getParameters();
-		if (paramIndex < parameters.length) {
-			return parameters[paramIndex].getMinAddress();
+		if (slot - 1 < parameters.length) {
+			return parameters[slot - 1].getMinAddress();
 		}
 		PrototypeModel model = function.getCallingConvention();
 		if (model == null) {
@@ -244,26 +251,29 @@ public class FillOutStructureCmd extends BackgroundCommand {
 				return null;
 			}
 		}
-		VariableStorage argLocation =
-			model.getArgLocation(paramIndex, null, pointerDt, currentProgram);
-		return argLocation.getMinAddress();
+		DataType typeList[] = new DataType[slot + 1];
+		typeList[0] = DataType.DEFAULT;		// Default function return data-type
+		for (int i = 1; i < slot + 1; ++i) {
+			typeList[i] = inputs[i].getHigh().getDataType();
+		}
+		VariableStorage[] storageLocations =
+			model.getStorageLocations(currentProgram, typeList, false);
+		return storageLocations[slot].getMinAddress();
 	}
 
 	/**
 	 * Recursively visit calls that take the structure pointer as a parameter.
 	 * Add any new references to the offsetToDataTypeMap.
-	 * @param structDT is the structure to populate
 	 */
-	private void pushIntoCalls(Structure structDT) {
+	private void pushIntoCalls() {
 		AddressSet doneSet = new AddressSet();
-		DataType pointerDT = new PointerDataType(structDT);
 
 		while (addressToCallInputMap.size() > 0) {
 			currentCallDepth += 1;
 			if (currentCallDepth > maxCallDepth) {
 				return;
 			}
-			HashMap<Address, Integer> savedList = addressToCallInputMap;
+			HashMap<Address, Address> savedList = addressToCallInputMap;
 			addressToCallInputMap = new HashMap<>();
 			Set<Address> keys = savedList.keySet();
 			Iterator<Address> keyIter = keys.iterator();
@@ -275,12 +285,10 @@ public class FillOutStructureCmd extends BackgroundCommand {
 				}
 				doneSet.addRange(addr, addr);
 				Function func = currentProgram.getFunctionManager().getFunctionAt(addr);
-				int paramIndex = savedList.get(addr);
-				Address storageAddr = computeParamAddress(func, paramIndex, pointerDT);
+				Address storageAddr = savedList.get(addr);
 				HighVariable paramHighVar = computeHighVariable(storageAddr, func);
 				if (paramHighVar != null) {
 					fillOutStructureDef(paramHighVar);
-					populateStructure(structDT);
 				}
 			}
 		}
@@ -369,15 +377,15 @@ public class FillOutStructureCmd extends BackgroundCommand {
 				sym = highFunc.getMappedSymbol(storageAddress, function.getEntryPoint());
 			}
 			if (sym == null) {
-				sym = highFunc.getLocalSymbolMap().findLocal(storageAddress,
-					function.getEntryPoint().subtractWrap(1L));
+				sym = highFunc.getLocalSymbolMap()
+						.findLocal(storageAddress, function.getEntryPoint().subtractWrap(1L));
 			}
 			if (sym == null) {
 				sym = highFunc.getLocalSymbolMap().findLocal(storageAddress, null);
 			}
 			if (sym == null) {
-				sym = highFunc.getLocalSymbolMap().findLocal(storageAddress,
-					function.getEntryPoint());
+				sym = highFunc.getLocalSymbolMap()
+						.findLocal(storageAddress, function.getEntryPoint());
 			}
 			if (sym == null) {
 				return null;
@@ -440,13 +448,8 @@ public class FillOutStructureCmd extends BackgroundCommand {
 			structDT = createNewStruct(var, (int) componentMap.getSize(), f, isThisParam);
 		}
 		else {
-			int len;
-			if (structDT.isNotYetDefined()) {
-				len = 0;
-			}
-			else {
-				len = structDT.getLength();
-			}
+			// FIXME: How should an existing packed structure be handled? Growing and offset-based placement does not apply
+			int len = structDT.isZeroLength() ? 0 : structDT.getLength();
 			if (componentMap.getSize() > len) {
 				structDT.growStructure((int) componentMap.getSize() - len);
 			}
@@ -505,19 +508,16 @@ public class FillOutStructureCmd extends BackgroundCommand {
 		if (isThisParam) {
 			Namespace rootNamespace = currentProgram.getGlobalNamespace();
 			Namespace newNamespace = createUniqueClassName(rootNamespace);
-			RenameLabelCmd command = new RenameLabelCmd(f.getEntryPoint(), f.getName(), f.getName(),
-				rootNamespace, newNamespace, SourceType.USER_DEFINED);
+			String name = f.getName();
+			Symbol symbol = f.getSymbol();
+			RenameLabelCmd command =
+				new RenameLabelCmd(symbol, name, newNamespace, SourceType.USER_DEFINED);
 			if (!command.applyTo(currentProgram)) {
 				return null;
 			}
 			Structure structDT = VariableUtilities.findOrCreateClassStruct(f);
-			int len;
-			if (structDT.isNotYetDefined()) {
-				len = 0; // getLength reports as at least size 1
-			}
-			else {
-				len = structDT.getLength();
-			}
+// FIXME: How should an existing packed structure be handled? Growing and offset-based placement does not apply
+			int len = structDT.isZeroLength() ? 0 : structDT.getLength();
 			if (len < size) {
 				structDT.growStructure(size - len);
 			}
@@ -525,9 +525,8 @@ public class FillOutStructureCmd extends BackgroundCommand {
 		}
 		String structName = createUniqueStructName(var, DEFAULT_CATEGORY, DEFAULT_BASENAME);
 
-		StructureDataType dt =
-			new StructureDataType(new CategoryPath(DEFAULT_CATEGORY), structName, size,
-				f.getProgram().getDataTypeManager());
+		StructureDataType dt = new StructureDataType(new CategoryPath(DEFAULT_CATEGORY), structName,
+			size, f.getProgram().getDataTypeManager());
 		return dt;
 	}
 
@@ -548,12 +547,10 @@ public class FillOutStructureCmd extends BackgroundCommand {
 				symbolTable.createClass(rootNamespace, newClassName, SourceType.USER_DEFINED);
 		}
 		catch (DuplicateNameException e) {
-			// Shouldn't happen
-			e.printStackTrace();
+			Msg.error(this, "Error creating class '" + newClassName + "'", e);
 		}
 		catch (InvalidInputException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			Msg.error(this, "Error creating class '" + newClassName + "'", e);
 		}
 		return newClass;
 	}
@@ -613,7 +610,7 @@ public class FillOutStructureCmd extends BackgroundCommand {
 	 */
 	private void fillOutStructureDef(HighVariable var) {
 		Varnode startVN = var.getRepresentative();
-		ArrayList<PointerRef> todoList = new ArrayList<PointerRef>();
+		ArrayList<PointerRef> todoList = new ArrayList<>();
 		HashSet<Varnode> doneList = new HashSet<>();
 
 		todoList.add(new PointerRef(startVN, 0));	// Base Varnode on the todo list
@@ -621,7 +618,7 @@ public class FillOutStructureCmd extends BackgroundCommand {
 		for (Varnode vn : instances) {
 			doneList.add(vn);		// Mark instances as done to avoid recursion issues
 			if (vn != startVN) {
-				todoList.add(new PointerRef(startVN, 0));	// Make sure all instances are on the todo list
+				todoList.add(new PointerRef(vn, 0));	// Make sure all instances are on the todo list
 			}
 		}
 
@@ -661,8 +658,7 @@ public class FillOutStructureCmd extends BackgroundCommand {
 						if (!inputs[1].isConstant() || !inputs[2].isConstant()) {
 							break;
 						}
-						newOff =
-							currentRef.offset + getSigned(inputs[1]) * inputs[2].getOffset();
+						newOff = currentRef.offset + getSigned(inputs[1]) * inputs[2].getOffset();
 						if (sanityCheck(newOff)) { // should this offset create a location in the structure?
 							putOnList(output, newOff, todoList, doneList);
 							// Don't do componentMap.addReference() as data-type info here is likely uninformed
@@ -724,7 +720,10 @@ public class FillOutStructureCmd extends BackgroundCommand {
 							// find it as an input
 							int slot = pcodeOp.getSlot(currentRef.varnode);
 							if (slot > 0 && slot < pcodeOp.getNumInputs()) {
-								putOnCallParamList(inputs[0].getAddress(), slot - 1);
+								Address storageAddr = computeParamAddress(inputs, slot);
+								if (storageAddr != null) {
+									addressToCallInputMap.put(inputs[0].getAddress(), storageAddr);
+								}
 							}
 						}
 						else {
@@ -740,16 +739,6 @@ public class FillOutStructureCmd extends BackgroundCommand {
 
 			}
 		}
-	}
-
-	/**
-	 * Note that flow has hit a CALL instruction at a particular input parameter so that
-	 * pushIntoCalls() can recurse into the call.
-	 * @param address is the destination of the CALL
-	 * @param j is the parameter index where flow hit
-	 */
-	private void putOnCallParamList(Address address, int j) {
-		addressToCallInputMap.put(address, j);
 	}
 
 	private long getSigned(Varnode varnode) {

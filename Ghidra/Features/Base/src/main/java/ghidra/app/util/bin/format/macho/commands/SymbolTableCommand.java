@@ -20,7 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import ghidra.app.util.bin.format.FactoryBundledWithBinaryReader;
+import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.format.macho.MachConstants;
 import ghidra.app.util.bin.format.macho.MachHeader;
 import ghidra.app.util.importer.MessageLog;
@@ -36,9 +36,7 @@ import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Represents a symtab_command structure.
- * 
- * @see <a href="https://opensource.apple.com/source/xnu/xnu-4570.71.2/EXTERNAL_HEADERS/mach-o/loader.h.auto.html">mach-o/loader.h</a> 
+ * Represents a symtab_command structure 
  */
 public class SymbolTableCommand extends LoadCommand {
 	private int symoff;
@@ -48,23 +46,8 @@ public class SymbolTableCommand extends LoadCommand {
 
 	private List<NList> symbols = new ArrayList<NList>();
 
-	public static SymbolTableCommand createSymbolTableCommand(FactoryBundledWithBinaryReader reader,
-			MachHeader header) throws IOException {
-		SymbolTableCommand symbolTableCommand =
-			(SymbolTableCommand) reader.getFactory().create(SymbolTableCommand.class);
-		symbolTableCommand.initSymbolTableCommand(reader, header);
-		return symbolTableCommand;
-	}
-
-	/**
-	 * DO NOT USE THIS CONSTRUCTOR, USE create*(GenericFactory ...) FACTORY METHODS INSTEAD.
-	 */
-	public SymbolTableCommand() {
-	}
-
-	private void initSymbolTableCommand(FactoryBundledWithBinaryReader reader, MachHeader header)
-			throws IOException {
-		initLoadCommand(reader);
+	public SymbolTableCommand(BinaryReader reader, MachHeader header) throws IOException {
+		super(reader);
 
 		symoff = reader.readNextInt();
 		nsyms = reader.readNextInt();
@@ -73,15 +56,15 @@ public class SymbolTableCommand extends LoadCommand {
 
 		long index = reader.getPointerIndex();
 
-		reader.setPointerIndex(header.getStartIndexInProvider() + symoff);
+		reader.setPointerIndex(header.getStartIndex() + symoff);
 
 		List<NList> nlistList = new ArrayList<>(nsyms);
-		long startIndex = header.getStartIndexInProvider();
+		long startIndex = header.getStartIndex();
 		boolean is32bit = header.is32bit();
 		reader.setPointerIndex(startIndex + symoff);
 
 		for (int i = 0; i < nsyms; ++i) {
-			nlistList.add(NList.createNList(reader, is32bit));
+			nlistList.add(new NList(reader, is32bit));
 		}
 		// sort the entries by the index in the string table, so don't jump around reading
 		List<NList> sortedList =

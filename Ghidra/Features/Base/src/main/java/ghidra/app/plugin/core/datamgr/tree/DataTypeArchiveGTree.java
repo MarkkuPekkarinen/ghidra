@@ -35,6 +35,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Composite;
 import ghidra.program.model.data.Enum;
+import ghidra.program.model.listing.Program;
 import ghidra.util.UniversalID;
 import ghidra.util.task.TaskMonitor;
 import resources.MultiIcon;
@@ -114,7 +115,9 @@ public class DataTypeArchiveGTree extends GTree {
 
 		List<GTreeNode> children = node.getChildren();
 		for (GTreeNode child : children) {
-			reclaimClosedNodes(child, monitor);
+			if (child instanceof CategoryNode) {
+				reclaimClosedNodes(child, monitor);
+			}
 		}
 	}
 
@@ -154,6 +157,10 @@ public class DataTypeArchiveGTree extends GTree {
 		setDataTransformer(
 			includeDataTypes ? new DataTypeTransformer() : new DefaultGTreeDataTransformer());
 		reloadTree();
+	}
+
+	public Program getProgram() {
+		return plugin.getProgram();
 	}
 
 	private void reloadTree() {
@@ -235,7 +242,7 @@ public class DataTypeArchiveGTree extends GTree {
 
 //==================================================================================================
 // Inner Classes
-//==================================================================================================	
+//==================================================================================================
 
 	private class DataTypeTransformer extends DefaultGTreeDataTransformer {
 
@@ -263,7 +270,7 @@ public class DataTypeArchiveGTree extends GTree {
 
 		private void addFunctionDefinitionStrings(FunctionDefinition function,
 				List<String> results) {
-			// the prototype string will include name, return type and parameter 
+			// the prototype string will include name, return type and parameter
 			// data types and names...so use that, unless it turns out to be bad
 			results.add(function.getPrototypeString());
 
@@ -324,11 +331,15 @@ public class DataTypeArchiveGTree extends GTree {
 			JLabel label = (JLabel) super.getTreeCellRendererComponent(tree, value, isSelected,
 				expanded, leaf, row, focus);
 
-			// Background icon uses the label's color so set it to match the 
-			// tree's background. Otherwise the icon's in the tree might have a 
-			// different background and look odd.
-			MultiIcon multiIcon = new MultiIcon(new BackgroundIcon(ICON_WIDTH, ICON_HEIGHT, false));
+			if (!label.isOpaque()) {
+				// work around an issue on some platforms where the label is painting a color that
+				// does not match the tree
+				label.setBackground(
+					isSelected ? getBackgroundSelectionColor() : tree.getBackground());
+			}
 
+			MultiIcon multiIcon = new MultiIcon(
+				new BackgroundIcon(ICON_WIDTH, ICON_HEIGHT, false));
 			Icon icon = getIcon();
 			multiIcon.addIcon(new CenterVerticalIcon(icon, ICON_HEIGHT));
 

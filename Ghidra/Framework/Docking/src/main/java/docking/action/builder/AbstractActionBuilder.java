@@ -52,7 +52,9 @@ import resources.ResourceManager;
  * the {@link #withContext(Class)} call.
  */
 public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends ActionContext, B extends AbstractActionBuilder<T, C, B>> {
+
 	private final Predicate<C> ALWAYS_TRUE = e -> true;
+
 	/**
 	 * Name for the {@code DockingAction}
 	 */
@@ -163,9 +165,10 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	private Predicate<C> enabledPredicate = null;
 
 	/**
-	 * Predicate for determining if an action should be included on the pop-up menu
+	 * Predicate for determining if an action should be included on the pop-up menu.
+	 * A null popupPredicate will cause default behavior which defers to the enabledPredicate.
 	 */
-	private Predicate<C> popupPredicate = ALWAYS_TRUE;
+	private Predicate<C> popupPredicate = null;
 
 	/**
 	 * Predicate for determining if an action is applicable for a given context
@@ -176,7 +179,23 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 * Set to true if the action supports using the default tool context if the local context is invalid
 	 */
 	private boolean supportsDefaultToolContext;
+	
+	/**
+	 * Specifies when the action should appear in a window.
+	 */
+	private When windowWhen;
 
+	/**
+	 * For use with the {@link AbstractActionBuilder#inWindow(When)} method to specify which windows (main window
+	 * or secondary windows) a global tool bar or menu action will appear in.
+	 *
+	 */
+	public enum When {
+		MAIN_WINDOW, 	// action should only appear in the main window
+		ALWAYS, 	    // action should appear in all windows
+		CONTEXT_MATCHES // action should appear if and only if the window has
+	}					// has a provider that generates the appropriate context.
+	
 	/**
 	 * Builder constructor
 	 * @param name the name of the action to be built
@@ -197,7 +216,7 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	/**
 	 * Builds the action.  To build and install the action in one step, use 
 	 * {@link #buildAndInstall(Tool)} or {@link #buildAndInstallLocal(ComponentProvider)}.
-	 * 
+	 * {@link #inWindow(When)}
 	 * @return the newly build action 
 	 */
 	public abstract T build();
@@ -531,8 +550,7 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	/**
 	 * Sets a predicate for dynamically determining if this action should be included in
 	 * an impending pop-up menu.  If this predicate is not set, the action will be included
-	 * in an impending pop-up, if it is enabled. See 
-	 * {@link DockingActionIf#isAddToPopup(ActionContext)}.
+	 * in an impending pop-up if it is enabled. See {@link DockingActionIf#isAddToPopup(ActionContext)}.
 	 * 
 	 * <p>Note: use this method when you wish for an action to be added to a popup menu regardless
 	 * of whether it is enabled.  As mentioned above, standard popup actions will only be added
@@ -590,6 +608,29 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 */
 	public B supportsDefaultToolContext(boolean b) {
 		supportsDefaultToolContext = b;
+		return self();
+	}
+	
+	/**
+	 * Specifies when a global action should appear in a window (main or secondary).
+	 * <P>
+	 * Global menu or toolbar actions can be configured to appear in 1) only the main 
+	 * window, or 2) all windows, or 3) any window that has a provider that
+	 * generates an action context that matches the context that this action
+	 * consumes. If the "context matches" options is chosen, then the 
+	 * {@link #withContext(Class)} method must also be called to specify the matching
+	 * context; otherwise an exception will be thrown when the action is built.
+	 * <P>
+	 *  
+	 *  The default is that the action will only appear in the main window.
+	 *
+	 * @param when use the {@link When} enum to specify the windowing behavior
+	 * of the action.
+	 * 
+	 * @return this builder (for chaining)
+	 */
+	public B inWindow(When when) {
+		this.windowWhen = when;
 		return self();
 	}
 
@@ -669,6 +710,11 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 			throw new IllegalStateException(
 				"Can't build a DockingAction without an action callback");
 		}
+		if (windowWhen == When.CONTEXT_MATCHES && actionContextClass == null) {
+			throw new IllegalStateException("The InWindow state was set to "
+					+ "\"CONTEXT_MATCHES\", but no context class was set. Use"
+					+ " the \"withContext\" method"); 
+		}
 	}
 
 	protected void decorateAction(DockingAction action) {
@@ -690,7 +736,17 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 		}
 
 		action.validContextWhen(adaptPredicate(validContextPredicate));
-		action.popupWhen(adaptPredicate(popupPredicate));
+		if (popupPredicate != null) {
+			action.popupWhen(adaptPredicate(popupPredicate));
+		}
+		
+		if (windowWhen == When.ALWAYS) {
+			action.setAddToAllWindows(true);
+		}
+		else if (windowWhen == When.CONTEXT_MATCHES) {
+			action.addToWindowWhen(actionContextClass);
+		}
+		// else action defaults to main window only
 	}
 
 	/**

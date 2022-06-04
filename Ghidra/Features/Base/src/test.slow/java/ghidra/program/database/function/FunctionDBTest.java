@@ -31,6 +31,7 @@ import ghidra.program.database.ProgramDB;
 import ghidra.program.database.symbol.FunctionSymbol;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
+import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.listing.Function.FunctionUpdateType;
@@ -1882,13 +1883,15 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 
 		Function f1 = createFunction("foo1", addr(0x100), new AddressSet(addr(0x100), addr(0x200)));
 		assertTrue(!f1.isThunk());
-		assertNull(f1.getThunkedFunction(false));
+		assertNull(f1.getThunkedFunction(true));
+		assertNull(f1.getFunctionThunkAddresses(true));
 
 		Function f2 = functionManager.createFunction(null, addr(0x300),
 			new AddressSet(addr(0x300), addr(0x400)), SourceType.DEFAULT);
 		assertEquals("FUN_00000300", f2.getName());
 		assertTrue(!f2.isThunk());
-		assertNull(f2.getThunkedFunction(false));
+		assertNull(f2.getThunkedFunction(true));
+		assertNull(f2.getFunctionThunkAddresses(true));
 
 		f1.setReturn(ByteDataType.dataType, VariableStorage.UNASSIGNED_STORAGE,
 			SourceType.USER_DEFINED);
@@ -1932,7 +1935,11 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 
 		assertEquals("foo1", f2.getName());
 		assertTrue(f2.isThunk());
-		assertEquals(f1, f2.getThunkedFunction(false));
+		assertEquals(f1, f2.getThunkedFunction(true));
+
+		Address[] thunkAddresses = f1.getFunctionThunkAddresses(true);
+		assertNotNull(thunkAddresses);
+		assertArrayEquals(new Address[] { f2.getEntryPoint() }, thunkAddresses);
 
 		assertEquals("byte foo1(int p1, int p2)", f1.getPrototypeString(false, false));
 		assertEquals("byte foo1(int p1, int p2)", f2.getPrototypeString(false, false));// TODO: Not sure what the correct behavior should be?
@@ -2048,6 +2055,36 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertEquals("byte fum(int p1, int p2, int p3, int p4)",
 			f1.getPrototypeString(false, false));
 
+		assertEquals(f2.getName(true), f1.getName(true));
+
+		SymbolTable symbolTable = program.getSymbolTable();
+		GhidraClass myClass = symbolTable.createClass(null, "MyClass", SourceType.USER_DEFINED);
+		f1.setParentNamespace(myClass);
+
+		f1.setParentNamespace(myClass);
+
+		assertEquals(f2.getName(true), f1.getName(true));
+
+		f1.setCallingConvention(CompilerSpec.CALLING_CONVENTION_thiscall);
+
+		assertEquals("byte fum(MyClass * this, int p1, int p2, int p3, int p4)",
+			f2.getPrototypeString(false, false));
+		assertEquals("byte fum(MyClass * this, int p1, int p2, int p3, int p4)",
+			f1.getPrototypeString(false, false));
+
+		assertEquals(f1.getSymbol(), symbolTable.getSymbol("fum", f1.getEntryPoint(), myClass));
+		assertNull(symbolTable.getSymbol("fum", f2.getEntryPoint(), myClass));
+
+		SymbolIterator symbols = symbolTable.getSymbols(myClass);
+		assertEquals(f1.getSymbol(), symbols.next());
+		assertFalse(symbols.hasNext());
+
+		symbols = symbolTable.getSymbols(program.getGlobalNamespace());
+		while (symbols.hasNext()) {
+			Symbol sym = symbols.next();
+			assertFalse(f2.getSymbol() == sym);
+			assertFalse(f2.getSymbol().equals(sym));
+		}
 	}
 
 	@Test

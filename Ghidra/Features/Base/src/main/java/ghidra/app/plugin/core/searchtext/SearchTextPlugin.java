@@ -30,8 +30,7 @@ import docking.widgets.fieldpanel.support.Highlight;
 import docking.widgets.table.threaded.*;
 import ghidra.GhidraOptions;
 import ghidra.app.CorePluginPackage;
-import ghidra.app.context.ListingActionContext;
-import ghidra.app.context.NavigatableActionContext;
+import ghidra.app.context.*;
 import ghidra.app.nav.Navigatable;
 import ghidra.app.nav.NavigatableRemovalListener;
 import ghidra.app.plugin.PluginCategoryNames;
@@ -62,8 +61,7 @@ import ghidra.util.task.*;
 import resources.ResourceManager;
 
 /**
- * Plugin to search text as it is displayed in the fields of the
- * Code Browser.
+ * Plugin to search text as it is displayed in the fields of the Code Browser.
  */
 //@formatter:off
 @PluginInfo(
@@ -93,7 +91,6 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 	private static final ImageIcon searchIcon = ResourceManager.loadImage("images/searchm_obj.gif");
 
 	private static final String DESCRIPTION = "Search program text for string";
-	private final static int DEFAULT_SEARCH_LIMIT = 500;
 	private final static Highlight[] NO_HIGHLIGHTS = new Highlight[0];
 
 	private boolean waitingForSearchAll;
@@ -114,6 +111,7 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 
 	/**
 	 * The constructor for the SearchTextPlugin.
+	 * 
 	 * @param plugintool The tool required by this plugin.
 	 */
 	public SearchTextPlugin(PluginTool plugintool) {
@@ -260,10 +258,7 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 	}
 
 	private ProgramLocation getStartLocation() {
-		if (currentLocation == null) {
-			currentLocation = navigatable.getLocation();
-		}
-		return currentLocation;
+		return currentLocation = navigatable.getLocation();
 	}
 
 	private void searchNext(Program program, Navigatable searchNavigatable, Searcher textSearcher) {
@@ -383,6 +378,8 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 				.description(DESCRIPTION)
 				.helpLocation(new HelpLocation(HelpTopics.SEARCH, "Search Text"))
 				.withContext(NavigatableActionContext.class)
+				.validContextWhen(c -> !(c instanceof RestrictedAddressSetContext))
+				.inWindow(ActionBuilder.When.CONTEXT_MATCHES)
 				.supportsDefaultToolContext(true)
 				.onAction(c -> {
 					setNavigatable(c.getNavigatable());
@@ -398,6 +395,7 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 				.supportsDefaultToolContext(true)
 				.helpLocation(new HelpLocation(HelpTopics.SEARCH, "Repeat Text Search"))
 				.withContext(NavigatableActionContext.class)
+				.inWindow(ActionBuilder.When.CONTEXT_MATCHES)
 				.enabledWhen(c -> searchedOnce)
 				.onAction(c -> {
 					setNavigatable(c.getNavigatable());
@@ -443,9 +441,6 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 		ToolOptions opt = tool.getOptions(PluginConstants.SEARCH_OPTION_NAME);
 		HelpLocation loc = new HelpLocation(HelpTopics.SEARCH, "HighlightText");
 
-		opt.registerOption(GhidraOptions.OPTION_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT, loc,
-			"Max number of matches on a search that will be displayed.");
-
 		opt.registerOption(PluginConstants.SEARCH_HIGHLIGHT_NAME, true, loc,
 			"Determines whether to highlight the matched string for a search in the listing.");
 		opt.registerOption(PluginConstants.SEARCH_HIGHLIGHT_COLOR_NAME,
@@ -455,7 +450,8 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 			PluginConstants.SEARCH_HIGHLIGHT_COLOR, loc,
 			"Color to use for highlighting when the match string occurs at the current address.");
 
-		searchLimit = opt.getInt(GhidraOptions.OPTION_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT);
+		searchLimit =
+			opt.getInt(GhidraOptions.OPTION_SEARCH_LIMIT, PluginConstants.DEFAULT_SEARCH_LIMIT);
 
 		doHighlight = opt.getBoolean(PluginConstants.SEARCH_HIGHLIGHT_NAME, true);
 		highlightColor = opt.getColor(PluginConstants.SEARCH_HIGHLIGHT_COLOR_NAME,
@@ -475,10 +471,9 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 			searchDialog.setHasSelection(context.hasSelection());
 		}
 
-		CodeViewerService codeViewerService = tool.getService(CodeViewerService.class);
-		String textSelection = codeViewerService.getCurrentFieldTextSelection();
-		ProgramLocation textField = codeViewerService.getCurrentLocation();
-		Address address = textField.getAddress();
+		String textSelection = navigatable.getTextSelection();
+		ProgramLocation location = navigatable.getLocation();
+		Address address = location.getAddress();
 		Listing listing = context.getProgram().getListing();
 		CodeUnit codeUnit = listing.getCodeUnitAt(address);
 		boolean isInstruction = false;
@@ -490,15 +485,16 @@ public class SearchTextPlugin extends ProgramPlugin implements OptionsChangeList
 				else {
 					isInstruction = false;
 				}
-				searchDialog.setValueFieldText(textSelection);
-				searchDialog.setCurrentField(textField, isInstruction);
+				searchDialog.setCurrentField(location, isInstruction);
 			}
+			searchDialog.setValueFieldText(textSelection);
 		}
 		searchDialog.show(context.getComponentProvider());
 	}
 
 	/**
 	 * Get the address set for the selection.
+	 * 
 	 * @return null if there is no selection
 	 */
 	private AddressSetView getAddressSet(Navigatable searchNavigatable, SearchOptions options) {

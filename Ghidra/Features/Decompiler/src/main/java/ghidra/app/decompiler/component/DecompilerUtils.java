@@ -31,7 +31,7 @@ public class DecompilerUtils {
 
 	/**
 	 * If the token refers to an individual Varnode, return it. Otherwise return null
-	 * 
+	 *
 	 * @param token the token to check
 	 * @return the Varnode or null otherwise
 	 */
@@ -215,9 +215,9 @@ public class DecompilerUtils {
 	}
 
 	/**
-	 * Returns the function represented by the given token.  This will be either the 
+	 * Returns the function represented by the given token.  This will be either the
 	 * decompiled function or a function referenced within the decompiled function.
-	 * 
+	 *
 	 * @param program the program
 	 * @param token the token
 	 * @return the function
@@ -270,10 +270,10 @@ public class DecompilerUtils {
 
 	/**
 	 * Similar to {@link #getTokens(ClangNode, AddressSetView)}, but uses the tokens from
-	 * the given view fields.  Sometimes the tokens in the model (represented by the 
-	 * {@link ClangNode}) are different than the fields in the view (such as when a list of 
+	 * the given view fields.  Sometimes the tokens in the model (represented by the
+	 * {@link ClangNode}) are different than the fields in the view (such as when a list of
 	 * comment tokens are condensed into a single comment token).
-	 * 
+	 *
 	 * @param fields the fields to check
 	 * @param address the address each returned token must match
 	 * @return the matching tokens
@@ -354,8 +354,7 @@ public class DecompilerUtils {
 	public static AddressSet findClosestAddressSet(Program program, AddressSpace functionSpace,
 			List<ClangToken> tokenList) {
 		AddressSet addressSet = new AddressSet();
-		for (int i = 0; i < tokenList.size(); ++i) {
-			ClangToken tok = tokenList.get(i);
+		for (ClangToken tok : tokenList) {
 			addTokenAddressRangeToSet(addressSet, tok, functionSpace);
 		}
 
@@ -435,6 +434,9 @@ public class DecompilerUtils {
 		FieldSelection fieldSelection = new FieldSelection();
 		for (ClangToken clangToken : tokens) {
 			ClangLine lineParent = clangToken.getLineParent();
+			if (lineParent == null) {
+				continue;
+			}
 			int lineNumber = lineParent.getLineNumber();
 			// lineNumber is one-based, we need zero-based
 			fieldSelection.addRange(lineNumber - 1, lineNumber);
@@ -571,33 +573,39 @@ public class DecompilerUtils {
 		}
 
 		Stack<ClangSyntaxToken> braceStack = new Stack<>();
-		for (int i = 0; i < list.size(); ++i) {
-			ClangToken token = (ClangToken) list.get(i);
-			if (token instanceof ClangSyntaxToken) {
-				ClangSyntaxToken syntaxToken = (ClangSyntaxToken) token;
+		for (ClangNode element : list) {
+			ClangToken token = (ClangToken) element;
+			if (!(token instanceof ClangSyntaxToken)) {
+				continue;
+			}
 
-				if (startToken == syntaxToken) {
-					// found our starting token, take the current value on the stack
-					ClangSyntaxToken matchingBrace = braceStack.pop();
-					return matchingBrace;
-				}
-
-				if (!isBrace(syntaxToken)) {
-					continue;
-				}
+			ClangSyntaxToken syntaxToken = (ClangSyntaxToken) token;
+			if (startToken == syntaxToken) {
 
 				if (braceStack.isEmpty()) {
-					braceStack.push(syntaxToken);
-					continue;
+					return null; // this can happen if the start token has a bad parent values
 				}
 
-				ClangSyntaxToken lastToken = braceStack.peek();
-				if (isMatchingBrace(lastToken, syntaxToken)) {
-					braceStack.pop();
-				}
-				else {
-					braceStack.push(syntaxToken);
-				}
+				// found our starting token, take the current value on the stack
+				ClangSyntaxToken matchingBrace = braceStack.pop();
+				return matchingBrace;
+			}
+
+			if (!isBrace(syntaxToken)) {
+				continue;
+			}
+
+			if (braceStack.isEmpty()) {
+				braceStack.push(syntaxToken);
+				continue;
+			}
+
+			ClangSyntaxToken lastToken = braceStack.peek();
+			if (isMatchingBrace(lastToken, syntaxToken)) {
+				braceStack.pop();
+			}
+			else {
+				braceStack.push(syntaxToken);
 			}
 		}
 		return null;
@@ -629,6 +637,62 @@ public class DecompilerUtils {
 		return text.startsWith("goto");
 	}
 
+	/**
+	 * Within a token stream, after seeing an initial comment token, collect the contiguous
+	 * sequence of tokens that are part of the comment and group them into a single
+	 * ClangCommentToken.  This makes post processing on the full comment string easier.
+	 * A single comment string can contain white space that manifests as ClangSyntaxTokens
+	 * with white space as text.
+	 * @param alltoks is the token stream
+	 * @param i is the position of the initial comment token
+	 * @param first is the initial comment token
+	 * @param current is the ClangLine object currently being scanned
+	 * @param builder is used to collect the full comment string
+	 * @return the position of the first token after the comment string
+	 */
+	private static int consumeCommentTokens(List<ClangNode> alltoks, int i, ClangCommentToken first,
+			ClangLine current, StringBuilder builder) {
+		builder.setLength(0);
+		builder.append(first.getText());
+		i += 1;
+		while (i < alltoks.size()) {
+			ClangToken tok = (ClangToken) alltoks.get(i);
+			if (tok instanceof ClangCommentToken) {
+				if (first.getSyntaxType() != tok.getSyntaxType()) {
+					break;
+				}
+				builder.append(tok.getText());
+			}
+			else if (tok instanceof ClangSyntaxToken) {
+				// Comments can have blank space tokens embedded in them
+				String val = tok.getText();
+				if (val.isBlank()) {
+					builder.append(val);
+				}
+				else {
+					break;
+				}
+			}
+			else {
+				break;
+			}
+			i += 1;
+		}
+		ClangCommentToken commentToken = ClangCommentToken.derive(first, builder.toString());
+		commentToken.setLineParent(current);
+		current.addToken(commentToken);
+
+		return i;
+	}
+
+	/**
+	 * A token hierarchy is flattened and then split into individual lines at the
+	 * ClangBreak tokens.  An array of the lines, each as a ClangLine object that owns
+	 * its respective tokens, is returned.  Sequences of comment tokens are collapsed into
+	 * a single ClangCommentToken.
+	 * @param group is the token hierarchy
+	 * @return the array of ClangLine objects
+	 */
 	public static ArrayList<ClangLine> toLines(ClangTokenGroup group) {
 
 		List<ClangNode> alltoks = new ArrayList<>();
@@ -650,12 +714,20 @@ public class DecompilerUtils {
 		else {
 			current = new ClangLine(lineNumber++, 0); // otherwise use zero indent
 		}
+
+		StringBuilder commentBuilder = new StringBuilder();
 		for (; i < alltoks.size(); ++i) {
+
 			ClangToken tok = (ClangToken) alltoks.get(i);
 			if (tok instanceof ClangBreak) {
 				lines.add(current);
 				brk = (ClangBreak) tok;
 				current = new ClangLine(lineNumber++, brk.getIndent());
+			}
+			else if (tok instanceof ClangCommentToken) {
+				i = consumeCommentTokens(alltoks, i, (ClangCommentToken) tok, current,
+					commentBuilder);
+				i -= 1;
 			}
 			else {
 				tok.setLineParent(current);
@@ -669,7 +741,7 @@ public class DecompilerUtils {
 
 	/**
 	 * Returns the data type for the given context if the context pertains to a data type
-	 * 
+	 *
 	 * @param context the context
 	 * @return the data type or null
 	 */
@@ -682,6 +754,17 @@ public class DecompilerUtils {
 		if (token == null) {
 			token = context.getTokenAtCursor();
 		}
+
+		return getDataType(token);
+	}
+
+	/**
+	 * Returns the data type for the given  token
+	 * 
+	 * @param token the token
+	 * @return the data type or null
+	 */
+	public static DataType getDataType(ClangToken token) {
 
 		Varnode varnode = DecompilerUtils.getVarnodeRef(token);
 		if (varnode != null) {

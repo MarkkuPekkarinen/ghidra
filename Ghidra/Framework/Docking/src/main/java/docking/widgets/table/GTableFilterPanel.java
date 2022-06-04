@@ -28,7 +28,6 @@ import javax.swing.table.TableModel;
 
 import org.jdom.Element;
 
-import docking.ActionContext;
 import docking.DockingWindowManager;
 import docking.help.HelpService;
 import docking.menu.*;
@@ -199,13 +198,13 @@ public class GTableFilterPanel<ROW_OBJECT> extends JPanel {
 			String filterLabel) {
 		this.table = table;
 
+		buildPanel(filterLabel);
+
 		uniquePreferenceKey = createUniqueFilterPreferenceKey(table);
 
 		transformer = new DefaultRowFilterTransformer<>(tableModel, table.getColumnModel());
 
 		textFilterModel = installTableModel(tableModel);
-
-		buildPanel(filterLabel);
 
 		TableColumnModel columnModel = table.getColumnModel();
 		columnModel.addColumnModelListener(columnModelListener);
@@ -413,12 +412,12 @@ public class GTableFilterPanel<ROW_OBJECT> extends JPanel {
 				}
 
 				@Override
-				protected void doActionPerformed(ActionContext context) {
+				protected void actionPerformed() {
 					showFilterDialog(tableModel);
 				}
 
 			};
-		columnFilterAction.setPerformActionOnPrimaryButtonClick(true);
+
 		HelpLocation helpLocation = new HelpLocation("Trees", "Column_Filters");
 		columnFilterAction.setHelpLocation(helpLocation);
 
@@ -478,10 +477,11 @@ public class GTableFilterPanel<ROW_OBJECT> extends JPanel {
 				columnFilterDialog = new ColumnFilterDialog<>(this, table, tableModel);
 			}
 			else {
-				Msg.showError(this, this, "Column Filter Error", "This table contains no filterable columns!");
+				Msg.showError(this, this, "Column Filter Error",
+					"This table contains no filterable columns!");
 				return;
 			}
-			
+
 		}
 
 		columnFilterDialog.setCloseCallback(() -> {

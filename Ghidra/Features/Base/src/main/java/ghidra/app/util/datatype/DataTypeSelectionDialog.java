@@ -17,7 +17,8 @@ package ghidra.app.util.datatype;
 
 import java.awt.BorderLayout;
 
-import javax.swing.*;
+import javax.swing.JComponent;
+import javax.swing.JPanel;
 import javax.swing.event.*;
 
 import docking.DialogComponentProvider;
@@ -25,6 +26,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.util.HelpLocation;
+import ghidra.util.Swing;
 import ghidra.util.data.DataTypeParser;
 import ghidra.util.data.DataTypeParser.AllowedDataTypes;
 
@@ -63,7 +65,7 @@ public class DataTypeSelectionDialog extends DialogComponentProvider {
 	private void buildEditor() {
 		removeWorkPanel();
 
-		editor = new DataTypeSelectionEditor(pluginTool, maxSize, allowedTypes);
+		editor = new DataTypeSelectionEditor(pluginTool, allowedTypes);
 		editor.setPreferredDataTypeManager(dtm);
 		editor.setConsumeEnterKeyPress(false); // we want to handle Enter key presses
 		editor.addCellEditorListener(new CellEditorListener() {
@@ -114,7 +116,7 @@ public class DataTypeSelectionDialog extends DialogComponentProvider {
 
 	@Override
 	protected void dialogShown() {
-		SwingUtilities.invokeLater(() -> editor.requestFocus());
+		Swing.runLater(() -> editor.requestFocus());
 	}
 
 	// overridden to set the user choice to null
@@ -171,6 +173,7 @@ public class DataTypeSelectionDialog extends DialogComponentProvider {
 	 * This method is useful for widgets that have embedded editors that launch this dialog.  For
 	 * these editors, like tables, it is nice to be able to tab through various editors.  This
 	 * method allows these editors to keep this functionality, even though a new dialog was shown.
+	 * @param doesCommit true commits edits on Tab press
 	 */
 	public void setTabCommitsEdit(boolean doesCommit) {
 		editor.setTabCommitsEdit(doesCommit);

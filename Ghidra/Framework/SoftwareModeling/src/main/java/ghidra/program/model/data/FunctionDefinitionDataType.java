@@ -97,11 +97,13 @@ public class FunctionDefinitionDataType extends GenericDataType implements Funct
 		Parameter[] parameters = function.getParameters();
 
 		ArrayList<ParameterDefinition> paramList = new ArrayList<ParameterDefinition>();
-		for (int i = 0; i < parameters.length; i++) {
-			if (formalSignature && parameters[i].isAutoParameter()) {
+		int ordinalAdjustment = 0;
+		for (Parameter parameter : parameters) {
+			if (formalSignature && parameter.isAutoParameter()) {
+				--ordinalAdjustment;
 				continue;
 			}
-			paramList.add(getParameterDefinition(parameters[i], formalSignature));
+			paramList.add(getParameterDefinition(parameter, formalSignature, ordinalAdjustment));
 		}
 		params = paramList.toArray(new ParameterDefinition[paramList.size()]);
 
@@ -117,10 +119,11 @@ public class FunctionDefinitionDataType extends GenericDataType implements Funct
 		}
 	}
 
-	private ParameterDefinition getParameterDefinition(Parameter param, boolean useFormalType) {
+	private ParameterDefinition getParameterDefinition(Parameter param, boolean useFormalType,
+			int ordinalAdjustment) {
 		return new ParameterDefinitionImpl(param.getName(),
 			useFormalType ? param.getFormalDataType() : param.getDataType(), param.getComment(),
-			param.getOrdinal());
+			param.getOrdinal() + ordinalAdjustment);
 	}
 
 	private void init(FunctionSignature sig) {
@@ -148,11 +151,6 @@ public class FunctionDefinitionDataType extends GenericDataType implements Funct
 			params[i] = new ParameterDefinitionImpl(args[i].getName(),
 				dt.clone(getDataTypeManager()), args[i].getComment(), i);
 		}
-	}
-
-	@Override
-	public boolean isDynamicallySized() {
-		return false;
 	}
 
 	@Override
@@ -350,8 +348,7 @@ public class FunctionDefinitionDataType extends GenericDataType implements Funct
 				return;
 			}
 		}
-		for (int i = 0; i < params.length; i++) {
-			ParameterDefinition param = params[i];
+		for (ParameterDefinition param : params) {
 			if (param.getDataType() == oldDt) {
 				try {
 					param.setDataType(newDt);
@@ -391,9 +388,9 @@ public class FunctionDefinitionDataType extends GenericDataType implements Funct
 		if (returnType == dt) {
 			returnType = DataType.DEFAULT;
 		}
-		for (int i = 0; i < params.length; i++) {
-			if (params[i].getDataType() == dt) {
-				params[i].setDataType(DataType.DEFAULT);
+		for (ParameterDefinition param : params) {
+			if (param.getDataType() == dt) {
+				param.setDataType(DataType.DEFAULT);
 			}
 		}
 	}

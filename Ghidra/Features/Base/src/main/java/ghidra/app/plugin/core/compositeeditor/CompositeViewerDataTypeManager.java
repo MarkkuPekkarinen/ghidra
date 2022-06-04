@@ -1,6 +1,5 @@
 /* ###
  * IP: GHIDRA
- * REVIEWED: YES
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,16 +25,17 @@ public class CompositeViewerDataTypeManager extends StandAloneDataTypeManager {
 	 */
 	private DataTypeManager originalDTM;
 	private int transactionID;
+
 	/**
 	 * Creates a data type manager that the structure editor will use
 	 * internally for updating the structure being edited.
 	 * @param rootName the root name for this data type manager (usually the program name).
 	 * @param composite the composite data type that is being edited. (cannot be null).
 	 */
-	public CompositeViewerDataTypeManager(String rootName, Composite composite, Category category) {
-		super(rootName);
+	public CompositeViewerDataTypeManager(String rootName, Composite composite) {
+		super(rootName, composite.getDataTypeManager().getDataOrganization());
 		transactionID = startTransaction(""); 
-		originalDTM = category.getDataTypeManager();
+		originalDTM = composite.getDataTypeManager();
 		universalID = originalDTM.getUniversalID(); // mimic original DTM
 		super.resolve(composite, null);
 	}
@@ -52,9 +52,8 @@ public class CompositeViewerDataTypeManager extends StandAloneDataTypeManager {
 	}
 
 	@Override
-	public DataOrganization getDataOrganization() {
-		// get the alignment from the original data type manager.
-		return originalDTM.getDataOrganization();
+	public boolean allowsDefaultBuiltInSettings() {
+		return originalDTM.allowsDefaultBuiltInSettings();
 	}
 
 }

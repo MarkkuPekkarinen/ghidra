@@ -38,6 +38,7 @@ import ghidra.framework.plugintool.*;
 import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Program;
+import ghidra.program.util.GhidraProgramUtilities;
 import ghidra.program.util.ProgramSelection;
 import ghidra.util.HelpLocation;
 import ghidra.util.classfinder.ClassSearcher;
@@ -62,21 +63,15 @@ import ghidra.util.task.TaskLauncher;
 public class AutoAnalysisPlugin extends Plugin implements AutoAnalysisManagerListener {
 
 	private static final String SHOW_ANALYSIS_OPTIONS = "Show Analysis Options";
-
 	private static final String ANALYZE_GROUP_NAME = "Analyze";
 
 	private DockingAction autoAnalyzeAction;
-	private DockingAction analyzeAllAction;
 
 	private HelpLocation helpLocation;
 
 	private List<Analyzer> analyzers = new ArrayList<>();
 	private List<OneShotAnalyzerAction> oneShotActions = new ArrayList<>();
 
-	/**
-	 * Creates a new instance of the plugin giving it the tool that it will work
-	 * in.
-	 */
 	public AutoAnalysisPlugin(PluginTool tool) {
 		super(tool);
 
@@ -110,6 +105,7 @@ public class AutoAnalysisPlugin extends Plugin implements AutoAnalysisManagerLis
 		// they are inserted
 		int subGroupIndex = 0;
 
+		//@formatter:off
 		autoAnalyzeAction =
 			new ActionBuilder("Auto Analyze", getName())
 					.supportsDefaultToolContext(true)
@@ -123,14 +119,14 @@ public class AutoAnalysisPlugin extends Plugin implements AutoAnalysisManagerLis
 					.onAction(this::analyzeCallback)
 					.buildAndInstall(tool);
 
-		analyzeAllAction =
-			new ActionBuilder("Analyze All Open", getName())
+		new ActionBuilder("Analyze All Open", getName())
 					.supportsDefaultToolContext(true)
 					.menuPath("&Analysis", "Analyze All &Open...")
 					.menuGroup(ANALYZE_GROUP_NAME, "" + subGroupIndex++)
 					.onAction(c -> analyzeAllCallback())
 					.validContextWhen(ac -> ac instanceof ListingActionContext)
 					.buildAndInstall(tool);
+		//@formatter:on
 
 		tool.setMenuGroup(new String[] { "Analysis", "One Shot" }, ANALYZE_GROUP_NAME);
 
@@ -190,6 +186,9 @@ public class AutoAnalysisPlugin extends Plugin implements AutoAnalysisManagerLis
 
 		analysisMgr.initializeOptions(); // options may have changed
 
+		// At this point, any analysis that is done is consider to be true for analyzed.
+		GhidraProgramUtilities.setAnalyzedFlag(program, true);
+
 		// start analysis to set the flag, but it probably won't do more.  A bit goofy but better
 		// than the way it was
 		//TODO simplify all this after creating a taskManager per program instead of per tool.
@@ -200,30 +199,17 @@ public class AutoAnalysisPlugin extends Plugin implements AutoAnalysisManagerLis
 		analysisMgr.reAnalyzeAll(selection);
 	}
 
-	/**
-	 * Get the description of this plugin.
-	 */
 	public static String getDescription() {
 		return "Provides coordination and a service for All Auto Analysis tasks";
 	}
 
-	/**
-	 * Get the descriptive name.
-	 */
 	public static String getDescriptiveName() {
 		return "AutoAnalysisManager";
 	}
 
-	/**
-	 * Get the category.
-	 */
 	public static String getCategory() {
 		return "Analysis";
 	}
-
-	/***************************************************************************
-	 * Implementation of AutoAnalysis Service
-	 */
 
 	protected void programClosed(Program program) {
 
@@ -271,7 +257,8 @@ public class AutoAnalysisPlugin extends Plugin implements AutoAnalysisManagerLis
 	private void programActivated(final Program program) {
 
 		program.getOptions(StoredAnalyzerTimes.OPTIONS_LIST)
-				.registerOption(StoredAnalyzerTimes.OPTION_NAME, OptionType.CUSTOM_TYPE, null, null,
+				.registerOption(
+					StoredAnalyzerTimes.OPTION_NAME, OptionType.CUSTOM_TYPE, null, null,
 					"Cumulative analysis task times", new StoredAnalyzerTimesPropertyEditor());
 
 		// invokeLater() to ensure that all other plugins have been notified of the program

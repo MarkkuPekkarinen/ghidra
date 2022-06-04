@@ -25,10 +25,14 @@ import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
 import ghidra.program.model.lang.UndefinedValueException;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.*;
+import ghidra.program.model.mem.DumbMemBufferImpl;
+import ghidra.program.model.mem.Memory;
 import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Symbol;
+import ghidra.util.exception.AssertException;
+import ghidra.util.exception.CancelledException;
+import ghidra.util.task.TaskMonitor;
 import mdemangler.*;
 import mdemangler.datatype.MDDataType;
 import mdemangler.datatype.complex.MDComplexType;
@@ -134,7 +138,7 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 
 		try {
 			Address spareDataAddress = getSpareDataAddress();
-			if (spareDataAddress != null && spareDataAddress.getOffset() != 0L &&
+			if (spareDataAddress != null && spareDataAddress.getOffset() != 0 &&
 				!loadedAndInitializedSet.contains(spareDataAddress)) {
 				throw new InvalidDataTypeException(getName() + " data type at " + getAddress() +
 					" doesn't point to a spare data address in a loaded and initialized memory block.");
@@ -237,7 +241,7 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 		// included in the length of the structure and must have a properly sized char array
 		// created immediately following the structure in memory.
 
-		struct.setFlexibleArrayComponent(CharDataType.dataType, "name", null);
+		struct.add(new ArrayDataType(CharDataType.dataType, 0, -1), "name", null);
 
 		return MSDataTypeUtils.getMatchingDataType(program, struct);
 	}
@@ -248,15 +252,18 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 	 * @return true if the data type has a vf table pointer. Otherwise, it has a hash value.
 	 */
 	private static boolean hasVFPointer(Program program) {
-		// Should be true when 64 bit or RTTI.
-		if (MSDataTypeUtils.is64Bit(program)) {
+
+		Address typeInfoVftableAddress = null;
+		try {
+			typeInfoVftableAddress = RttiUtil.findTypeInfoVftableAddress(program, TaskMonitor.DUMMY);
+		}
+		catch (CancelledException e) {
+			throw new AssertException(e);
+		}
+		if (typeInfoVftableAddress != null) {
 			return true;
 		}
-		Address address = RttiUtil.getTypeInfoTypeDescriptorAddress(program);
-		if (address == null) {
-			return false;
-		}
-		return RttiUtil.isTypeInfoTypeDescriptorAddress(program, address);
+		return false;
 	}
 
 	/**
@@ -274,8 +281,7 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 	@Override
 	protected int getDataTypeLength() {
 		Structure struct = (Structure) getDataType();
-		DataTypeComponent nameComponent = struct.getFlexibleArrayComponent();
-		int preNameLength = nameComponent.getOffset();
+		int preNameLength = struct.getLength();
 		int totalLength = preNameLength;
 		// Add the length of the name string too if we can get it.
 		Address nameAddress = getAddress().add(preNameLength);
@@ -350,10 +356,11 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 			throw new UndefinedValueException(
 				"No vf table pointer is defined for this TypeDescriptor model.");
 		}
+		
+		Address vfTableAddress;
 		// component 0 is either vf table pointer or hash value.
-		Address vfTableAddress =
-			EHDataTypeUtilities.getAddress(getDataType(), VF_TABLE_OR_HASH_ORDINAL, getMemBuffer());
-		return vfTableAddress.getOffset() != 0 ? vfTableAddress : null;
+		vfTableAddress = EHDataTypeUtilities.getAddress(getDataType(), VF_TABLE_OR_HASH_ORDINAL, getMemBuffer());
+		return (vfTableAddress != null && vfTableAddress.getOffset() != 0) ? vfTableAddress : null;
 	}
 
 	/**
@@ -385,7 +392,7 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 		// component 1 is the spare data.
 		Address spareAddress =
 			EHDataTypeUtilities.getAddress(getDataType(), SPARE_ORDINAL, getMemBuffer());
-		return spareAddress.getOffset() != 0 ? spareAddress : null;
+		return (spareAddress != null && spareAddress.getOffset() != 0) ? spareAddress : null;
 	}
 
 	/**
@@ -605,7 +612,7 @@ public class TypeDescriptorModel extends AbstractCreateDataTypeModel {
 		if (nsSymbol == null) {
 			return false; // global namespace.
 		}
-		return !nsSymbol.checkIsValid();
+		return nsSymbol.isDeleted();
 	}
 
 	/**

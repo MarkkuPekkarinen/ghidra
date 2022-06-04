@@ -71,6 +71,7 @@ void EmitXml::endBlock(int4 id) {
 
 /// Tell the emitter that a new line is desired at the current indent level
 void EmitXml::tagLine(void) {
+  emitPending();
   *s << "<break " << highlight[(int4)no_color] << " indent=\"0x" << hex <<
     indentlevel << "\"/>";
 }
@@ -79,6 +80,7 @@ void EmitXml::tagLine(void) {
 /// is overridden only for the line, then it returns to its previous value.
 /// \param indent is the desired indent level for the new line
 void EmitXml::tagLine(int4 indent) {
+  emitPending();
   *s << "<break " << highlight[(int4)no_color] << " indent=\"0x" << hex <<
     indent << "\"/>";
 }
@@ -231,7 +233,8 @@ void EmitXml::tagType(const char *ptr,syntax_highlight hl,const Datatype *ct) {
 /// \param hl indicates how the identifier should be highlighted
 /// \param ct is the data-type associated with the field
 /// \param o is the (byte) offset of the field within its structured data-type
-void EmitXml::tagField(const char *ptr,syntax_highlight hl,const Datatype *ct,int4 o) {
+/// \param op is the PcodeOp associated with the field (usually PTRSUB or SUBPIECE)
+void EmitXml::tagField(const char *ptr,syntax_highlight hl,const Datatype *ct,int4 o,const PcodeOp *op) {
   *s << "<field " << highlight[(int4)hl];
   if (ct != (const Datatype *)0) {
     *s << " name=\"";
@@ -241,6 +244,8 @@ void EmitXml::tagField(const char *ptr,syntax_highlight hl,const Datatype *ct,in
     }
     
     *s << "\" off=\"" << dec << o << '\"';
+    if (op != (const PcodeOp *)0)
+      *s << " opref=\"0x" << hex << op->getTime() << "\"";
   }
   *s << '>';
   xml_escape(*s,ptr);
@@ -259,8 +264,9 @@ void EmitXml::tagField(const char *ptr,syntax_highlight hl,const Datatype *ct,in
 void EmitXml::tagComment(const char *ptr,syntax_highlight hl,
 			   const AddrSpace *spc,uintb off) {
   *s << "<comment " << highlight[(int4)hl];
-  *s << " space=\"" << spc->getName();
-  *s << "\" off=\"0x" << hex << off << "\">";
+  a_v(*s,"space",spc->getName());
+  a_v_u(*s,"off",off);
+  *s << '>';
   xml_escape(*s,ptr);
   *s << "</comment>";
 }
@@ -276,8 +282,9 @@ void EmitXml::tagComment(const char *ptr,syntax_highlight hl,
 void EmitXml::tagLabel(const char *ptr,syntax_highlight hl,
 			 const AddrSpace *spc,uintb off) {
   *s << "<label " << highlight[(int4)hl];
-  *s << " space=\"" << spc->getName();
-  *s << "\" off=\"0x" << hex << off << "\">";
+  a_v(*s,"space",spc->getName());
+  a_v_u(*s,"off",off);
+  *s << '>';
   xml_escape(*s,ptr);
   *s << "</label>";
 }
@@ -415,7 +422,7 @@ void TokenSplit::print(EmitXml *emit) const
     emit->tagType(tok.c_str(),hl,ptr_second.ct);
     break;
   case field_t: // tagField
-    emit->tagField(tok.c_str(),hl,ptr_second.ct,(int4)off);
+    emit->tagField(tok.c_str(),hl,ptr_second.ct,(int4)off,op);
     break;
   case comm_t:	// tagComment
     emit->tagComment(tok.c_str(),hl,ptr_second.spc,off);
@@ -595,11 +602,21 @@ void EmitPrettyPrint::overflow(void)
     else
       break;
   }
+  int4 newspaceremain;
   if (!indentstack.empty())
-    spaceremain = indentstack.back();
+    newspaceremain = indentstack.back();
   else
-    spaceremain = maxlinesize;
+    newspaceremain = maxlinesize;
+  if (newspaceremain == spaceremain)
+    return;		// Line breaking doesn't give us any additional space
+  if (commentmode && (newspaceremain == spaceremain + commentfill.size()))
+    return;		// Line breaking doesn't give us any additional space
+  spaceremain = newspaceremain;
   lowlevel->tagLine(maxlinesize-spaceremain);
+  if (commentmode &&(commentfill.size() != 0)) {
+    lowlevel->print(commentfill.c_str(),EmitXml::comment_color);
+    spaceremain -= commentfill.size();
+  }
 }
 
 /// Content and markup is sent to the low-level emitter if appropriate. The
@@ -911,6 +928,7 @@ void EmitPrettyPrint::endBlock(int4 id)
 void EmitPrettyPrint::tagLine(void)
 
 {
+  emitPending();
   checkbreak();
   TokenSplit &tok( tokqueue.push() );
   tok.tagLine();
@@ -920,6 +938,7 @@ void EmitPrettyPrint::tagLine(void)
 void EmitPrettyPrint::tagLine(int4 indent)
 
 {
+  emitPending();
   checkbreak();
   TokenSplit &tok( tokqueue.push() );
   tok.tagLine(indent);
@@ -1038,12 +1057,12 @@ void EmitPrettyPrint::tagType(const char *ptr,syntax_highlight hl,const Datatype
   scan();
 }
 
-void EmitPrettyPrint::tagField(const char *ptr,syntax_highlight hl,const Datatype *ct,int4 o)
+void EmitPrettyPrint::tagField(const char *ptr,syntax_highlight hl,const Datatype *ct,int4 o,const PcodeOp *op)
 
 {
   checkstring();
   TokenSplit &tok( tokqueue.push() );
-  tok.tagField(ptr,hl,ct,o);
+  tok.tagField(ptr,hl,ct,o,op);
   scan();
 }
 

@@ -19,6 +19,7 @@ import java.util.Date;
 
 import ghidra.framework.store.LockException;
 import ghidra.program.database.IntRangeMap;
+import ghidra.program.database.data.DataTypeUtilities;
 import ghidra.program.database.map.AddressMap;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
@@ -60,6 +61,9 @@ public interface Program extends DataTypeManagerDomainObject {
 	public static final String DATE_CREATED = "Date Created";
 	/** Name of ghidra version property */
 	public static final String CREATED_WITH_GHIDRA_VERSION = "Created With Ghidra Version";
+	/** Name of ghidra preferred root namespace category property */
+	public static final String PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY =
+		"Preferred Root Namespace Category";
 	/** Creation date to ask for analysis */
 	public static final String ANALYSIS_START_DATE = "2007-Jan-01";
 	/** Format string of analysis date */
@@ -76,22 +80,29 @@ public interface Program extends DataTypeManagerDomainObject {
 	 */
 	public Listing getListing();
 
+	/**
+	 * Get the internal program address map
+	 * @return internal address map
+	 */
+	// FIXME!! Should not expose on interface - anything using this should use ProgramDB or avoid using map!
 	public AddressMap getAddressMap();
 
 	/**
 	 * Returns the program's datatype manager.
 	 */
 	@Override
-	public DataTypeManager getDataTypeManager();
+	public ProgramBasedDataTypeManager getDataTypeManager();
 
 	/**
 	 * Returns the programs function manager.
+	 * @return the function manager
 	 */
 	public FunctionManager getFunctionManager();
 
 	/**
 	 * Returns the user-specific data manager for
 	 * this program.
+	 * @return the program-specific user data manager
 	 */
 	public ProgramUserData getProgramUserData();
 
@@ -104,6 +115,7 @@ public interface Program extends DataTypeManagerDomainObject {
 	/**
 	
 	 * Returns the external manager.
+	 * @return the external manager
 	 */
 	public ExternalManager getExternalManager();
 
@@ -121,11 +133,13 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 * Get the reference manager.
+	 * @return the reference manager
 	 */
 	public ReferenceManager getReferenceManager();
 
 	/**
 	 * Get the bookmark manager.
+	 * @return the bookmark manager
 	 */
 	public BookmarkManager getBookmarkManager();
 
@@ -151,6 +165,37 @@ public interface Program extends DataTypeManagerDomainObject {
 	public void setCompiler(String compiler);
 
 	/**
+	 * Gets the preferred root data type category path which corresponds
+	 * to the global namespace of a namespace-based storage area.  Preference
+	 * will be given to this category when searching for data types
+	 * within a specific namespace.
+	 * 
+	 * This setting corresponds to the Program Information option 
+	 * <i>"Preferred Root Namespace Category</i>.  See {@link DataTypeUtilities} 
+	 * and its various find methods for its usage details.
+	 *
+	 * @return data type category path for root namespace or null if not set or is invalid. 
+	 */
+	public CategoryPath getPreferredRootNamespaceCategoryPath();
+
+	/**
+	 * Sets the preferred data type category path which corresponds
+	 * to the root of a namespace hierarchy storage area.  Preference
+	 * will be given to this category when searching for data types
+	 * within a specific namespace.
+	 * 
+	 * This setting corresponds to the Program Information option 
+	 * <i>"Preferred Root Namespace Category</i>.  See {@link DataTypeUtilities} 
+	 * and its various find methods for its usage details.
+	 * 
+	 * @param categoryPath data type category path for root namespace or null 
+	 * to clear option.  The specified path must be absolute and start with "/"
+	 * and must not end with one (e.g., <i>/ClassDataTypes</i>).  An invalid
+	 * path setting will be ignored.
+	 */
+	public void setPreferredRootNamespaceCategoryPath(String categoryPath);
+
+	/**
 	 * Gets the path to the program's executable file.
 	 * For example, <code>C:\Temp\test.exe</code>.
 	 * This will allow plugins to execute the program.
@@ -169,18 +214,19 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 * Returns a value corresponding to the original file format.
+	 * @return original file format used to load program or null if unknown
 	 */
 	public String getExecutableFormat();
 
 	/**
 	 * Sets the value corresponding to the original file format.
-	 * @param format the format string to set.
+	 * @param format the binary file format string to set.
 	 */
 	public void setExecutableFormat(String format);
 
 	/**
 	 * Returns a value corresponding to the original binary file MD5 hash.
-	 * May be null if program source did not correspond to a binary file.
+	 * @return original loaded file MD5 or null
 	 */
 	public String getExecutableMD5();
 
@@ -198,7 +244,7 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 * Returns a value corresponding to the original binary file SHA256 hash.
-	 * May be null if program source did not correspond to a binary file.
+	 * @return original loaded file SHA256 or null
 	 */
 	public String getExecutableSHA256();
 
@@ -212,6 +258,7 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 * Gets the relocation table.
+	 * @return relocation table object
 	 */
 	public RelocationTable getRelocationTable();
 
@@ -245,6 +292,7 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 * Returns the program context.
+	 * @return the program context object
 	 */
 	public ProgramContext getProgramContext();
 
@@ -270,6 +318,7 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 *  Returns the AddressFactory for this program.
+	 *  @return the program address factory
 	 */
 	public AddressFactory getAddressFactory();
 
@@ -308,16 +357,16 @@ public interface Program extends DataTypeManagerDomainObject {
 	/**
 	 * Returns the largest register located at the specified address
 	 * 
-	 * @param addr
-	 * @return largest register or null
+	 * @param addr register minimum address
+	 * @return largest register at addr or null
 	 */
 	public Register getRegister(Address addr);
 
 	/**
 	 * Returns all registers located at the specified address
 	 * 
-	 * @param addr
-	 * @return largest register
+	 * @param addr register minimum address
+	 * @return all registers at addr
 	 */
 	public Register[] getRegisters(Address addr);
 
@@ -337,7 +386,8 @@ public interface Program extends DataTypeManagerDomainObject {
 	public Register getRegister(Varnode varnode);
 
 	/**
-	 * Returns the current program image base address;
+	 * Returns the current program image base address
+	 * @return program image base address within default space
 	 */
 	public Address getImageBase();
 
@@ -365,6 +415,7 @@ public interface Program extends DataTypeManagerDomainObject {
 	 * Sets the language for the program. If the new language is "compatible" with the old language,
 	 * the addressMap is adjusted then the program is "re-disassembled".
 	 * @param language the new language to use.
+	 * @param compilerSpecID the new compiler specification ID
 	 * @param forceRedisassembly if true a redisassembly will be forced.  This should always be false.
 	 * @param monitor the task monitor
 	 * @throws IllegalStateException thrown if any error occurs, including a cancelled monitor, which leaves this 
@@ -380,6 +431,7 @@ public interface Program extends DataTypeManagerDomainObject {
 
 	/**
 	 * Returns the global namespace for this program
+	 * @return the global namespace
 	 */
 	public Namespace getGlobalNamespace();
 
@@ -430,6 +482,7 @@ public interface Program extends DataTypeManagerDomainObject {
 	/**
 	 * Returns an ID that is unique for this program.  This provides an easy way to store
 	 * references to a program across client persistence.
+	 * @return unique program ID
 	 */
 	public long getUniqueProgramID();
 }

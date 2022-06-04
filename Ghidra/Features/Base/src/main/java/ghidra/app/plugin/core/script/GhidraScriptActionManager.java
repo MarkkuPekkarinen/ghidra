@@ -246,6 +246,12 @@ class GhidraScriptActionManager {
 			"Manage Script Directories", ResourceManager.loadImage("images/text_list_bullets.png"),
 			provider::showBundleStatusComponent);
 
+		new ActionBuilder("Script Quick Launch", plugin.getName())
+				.keyBinding(KeyStroke.getKeyStroke(KeyEvent.VK_S,
+					DockingUtils.CONTROL_KEY_MODIFIER_MASK | InputEvent.SHIFT_DOWN_MASK))
+				.onAction(this::chooseScript)
+				.buildAndInstall(plugin.getTool());
+
 		Icon icon = ResourceManager.loadImage("images/red-cross.png");
 		Predicate<ActionContext> test = context -> {
 			Object contextObject = context.getContextObject();
@@ -263,33 +269,27 @@ class GhidraScriptActionManager {
 				.onAction(context -> showGhidraScriptJavadoc())
 				.buildAndInstallLocal(provider);
 
-		// XXX In order to override a method of the new DockingAction and use the builder, we
-		// need to override the build method of the ActionBuilder.  When the ActionBuilder is 
-		// updated, this code can be cleaned up.
-		new ActionBuilder("Ghidra API Help", plugin.getName()) {
-			@Override
-			public DockingAction build() {
-				validate();
-				DockingAction action = new DockingAction(name, owner, keyBindingType) {
-					@Override
-					public void actionPerformed(ActionContext context) {
-						actionCallback.accept(context);
-					}
-
-					@Override
-					public boolean shouldAddToWindow(boolean isMainWindow,
-							Set<Class<?>> contextTypes) {
-						return true;
-					}
-				};
-				decorateAction(action);
-				return action;
-			}
-		}.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP)
+		new ActionBuilder("Ghidra API Help", plugin.getName())
+				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP)
 				.menuPath(ToolConstants.MENU_HELP, "Ghidra API Help")
 				.helpLocation(new HelpLocation("Misc", "Welcome_to_Ghidra_Help"))
+				.inWindow(ActionBuilder.When.ALWAYS)
 				.onAction(context -> showGhidraScriptJavadoc())
 				.buildAndInstall(plugin.getTool());
+	}
+
+	private void chooseScript(ActionContext actioncontext1) {
+
+		List<ScriptInfo> scriptInfos = provider.getScriptInfos();
+		ScriptSelectionDialog dialog = new ScriptSelectionDialog(plugin, scriptInfos);
+		dialog.show();
+
+		ScriptInfo chosenInfo = dialog.getUserChoice();
+		if (chosenInfo == null) {
+			return;
+		}
+
+		provider.runScript(chosenInfo.getSourceFile());
 	}
 
 	private void showGhidraScriptJavadoc() {

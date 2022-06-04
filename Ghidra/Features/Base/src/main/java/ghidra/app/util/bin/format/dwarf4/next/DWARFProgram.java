@@ -15,9 +15,10 @@
  */
 package ghidra.app.util.bin.format.dwarf4.next;
 
+import java.util.*;
+
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.*;
 
 import org.apache.commons.collections4.ListValuedMap;
 import org.apache.commons.collections4.multimap.ArrayListValuedHashMap;
@@ -27,9 +28,9 @@ import ghidra.app.util.bin.format.dwarf4.*;
 import ghidra.app.util.bin.format.dwarf4.attribs.DWARFAttributeFactory;
 import ghidra.app.util.bin.format.dwarf4.encoding.*;
 import ghidra.app.util.bin.format.dwarf4.expression.DWARFExpressionException;
+import ghidra.app.util.bin.format.dwarf4.external.ExternalDebugInfo;
 import ghidra.app.util.bin.format.dwarf4.next.sectionprovider.*;
-import ghidra.app.util.opinion.ElfLoader;
-import ghidra.app.util.opinion.MachoLoader;
+import ghidra.app.util.opinion.*;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.data.CategoryPath;
@@ -54,12 +55,8 @@ public class DWARFProgram implements Closeable {
 	private static final int NAME_HASH_REPLACEMENT_SIZE = 8 + 2 + 2;
 	private static final String ELLIPSES_STR = "...";
 
-	public static boolean alreadyDWARFImported(Program prog) {
-		return DWARFFunctionImporter.hasDWARFProgModule(prog, DWARF_ROOT_NAME);
-	}
-
 	/**
-	 * Returns true if the {@link Program program} probably DWARF information.
+	 * Returns true if the {@link Program program} probably has DWARF information.
 	 * <p>
 	 * If the program is an Elf binary, it must have (at least) ".debug_info" and ".debug_abbr" program sections.
 	 * <p>
@@ -67,21 +64,42 @@ public class DWARFProgram implements Closeable {
 	 * original binary file on the native filesystem.  (ie. outside of Ghidra).  See the DSymSectionProvider
 	 * for more info.
 	 * <p>
-	 * @param program
-	 * @param monitor
-	 * @return
+	 * @param program {@link Program} to test
+	 * @return boolean true if program probably has DWARF info, false if not
 	 */
-	public static boolean isDWARF(Program program, TaskMonitor monitor) {
-		String format = program.getExecutableFormat();
+	public static boolean isDWARF(Program program) {
+		String format = Objects.requireNonNullElse(program.getExecutableFormat(), "");
 
-		if (ElfLoader.ELF_NAME.equals(format)) {
-			return true;
-		}
-		else if (MachoLoader.MACH_O_NAME.equals(format) &&
-			DSymSectionProvider.getDSYMForProgram(program) != null) {
-			return true;
+		switch (format) {
+			case ElfLoader.ELF_NAME:
+			case PeLoader.PE_NAME:
+				return BaseSectionProvider.hasDWARFSections(program) ||
+					ExternalDebugInfo.fromProgram(program) != null;
+			case MachoLoader.MACH_O_NAME:
+				return DSymSectionProvider.getDSYMForProgram(program) != null;
 		}
 		return false;
+	}
+
+	/**
+	 * Returns true if the specified {@link Program program} has DWARF information.
+	 * <p>
+	 * This is similar to {@link #isDWARF(Program)}, but is a stronger check that is more
+	 * expensive as it could involve searching for external files.
+	 * <p>
+	 * 
+	 * @param program {@link Program} to test
+	 * @param monitor {@link TaskMonitor} that can be used to cancel
+	 * @return boolean true if the program has DWARF info, false if not
+	 */
+	public static boolean hasDWARFData(Program program, TaskMonitor monitor) {
+		if (!isDWARF(program)) {
+			return false;
+		}
+		try (DWARFSectionProvider dsp =
+			DWARFSectionProviderFactory.createSectionProviderFor(program, monitor)) {
+			return dsp != null;
+		}
 	}
 
 	private final Program program;
@@ -347,6 +365,26 @@ public class DWARFProgram implements Closeable {
 			}
 		}
 
+		if (name == null && diea.isStructureType()) {
+			String fingerprint = DWARFUtil.getStructLayoutFingerprint(diea);
+
+			// check to see if there are struct member defs that ref this anon type
+			// and build a name using the field names
+			List<DIEAggregate> referringMembers = (diea != null)
+					? diea.getProgram().getTypeReferers(diea, DWARFTag.DW_TAG_member)
+					: null;
+
+			String referringMemberNames = getReferringMemberFieldNames(referringMembers);
+			if (!referringMemberNames.isEmpty()) {
+				parentDNI = getName(referringMembers.get(0).getParent());
+				referringMemberNames = "_for_" + referringMemberNames;
+			}
+			name =
+				"anon_" + DWARFUtil.getContainerTypeName(diea) + "_" + fingerprint +
+					referringMemberNames;
+			return parentDNI.createChild(null, name, DWARFUtil.getSymbolTypeFromDIE(diea));
+		}
+
 		boolean isAnon = false;
 		if (name == null) {
 			switch (diea.getTag()) {
@@ -398,14 +436,6 @@ public class DWARFProgram implements Closeable {
 
 		String origName = isAnon ? null : name;
 		String workingName = ensureSafeNameLength(name);
-		switch (diea.getTag()) {
-			// fixup DWARF entries that are related to Ghidra symbols
-			case DWARFTag.DW_TAG_subroutine_type:
-			case DWARFTag.DW_TAG_subprogram:
-			case DWARFTag.DW_TAG_inlined_subroutine:
-				workingName = SymbolUtilities.replaceInvalidChars(workingName, false);
-				break;
-		}
 
 		DWARFNameInfo result =
 			parentDNI.createChild(origName, workingName, DWARFUtil.getSymbolTypeFromDIE(diea));
@@ -437,6 +467,36 @@ public class DWARFProgram implements Closeable {
 
 	}
 
+	private String getReferringMemberFieldNames(List<DIEAggregate> referringMembers) {
+		if (referringMembers == null || referringMembers.isEmpty()) {
+			return "";
+		}
+		DIEAggregate commonParent = referringMembers.get(0).getParent();
+		StringBuilder result = new StringBuilder();
+		for (DIEAggregate referringMember : referringMembers) {
+			if (commonParent != referringMember.getParent()) {
+				// if there is an inbound referring link that isn't from the same parent,
+				// abort
+				return "";
+			}
+			String memberName = referringMember.getName();
+			if (memberName == null) {
+				int positionInParent =
+					DWARFUtil.getMyPositionInParent(referringMember.getHeadFragment());
+				if (positionInParent == -1) {
+					continue;
+				}
+				DWARFNameInfo parentDNI = getName(commonParent);
+				memberName = parentDNI.getName() + "_" + Integer.toString(positionInParent);
+			}
+			if (result.length() > 0) {
+				result.append("_");
+			}
+			result.append(memberName);
+		}
+		return result.toString();
+	}	
+	
 	/**
 	 * Transform a string with a C++ template-like syntax into a hopefully shorter version that
 	 * uses a fixed-length hash of the original string.
@@ -770,8 +830,7 @@ public class DWARFProgram implements Closeable {
 				if (refdOffset == -1) {
 					continue;
 				}
-				DWARFCompilationUnit targetCU = getCompilationUnitFor(refdOffset);
-				if (targetCU != null && targetCU != die.getCompilationUnit()) {
+				if (!die.getCompilationUnit().containsOffset(refdOffset)) {
 					return true;
 				}
 			}

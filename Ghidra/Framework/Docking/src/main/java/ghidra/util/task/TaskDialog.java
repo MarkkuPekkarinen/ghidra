@@ -19,6 +19,7 @@ import java.awt.BorderLayout;
 import java.awt.Component;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.swing.JPanel;
@@ -34,7 +35,9 @@ import ghidra.util.timer.GTimerMonitor;
 
 /**
  * Dialog that is displayed to show activity for a Task that is running outside of the
- * Swing Thread.
+ * Swing Thread.   This dialog uses a delay before showing in order to give the background task
+ * thread a chance to finish.  This prevents a flashing dialog for tasks that finish before the
+ * delay time period.
  *
  * <p>Implementation note:
  * if this class is constructed with a {@code hasProgress} value of {@code false},
@@ -46,6 +49,16 @@ import ghidra.util.timer.GTimerMonitor;
  *
  * <p>This dialog can be toggled between indeterminate mode and progress mode via calls to
  * {@link #setIndeterminate(boolean)}.
+ * 
+ * <p><b>API Usage Note: </b>If this dialog is used outside of the task API, then the client must
+ * be sure to call {@link #taskProcessed()}<b> from the background thread performing the work</b>.
+ * Otherwise, this dialog will always wait for the {@code delay} amount of time for the background
+ * thread to finish.  This happens since the default completed notification mechanism is performed
+ * on the Swing thread.   If a client has triggered blocking on the Swing thread, then the
+ * notification on the Swing thread must wait, causing the full delay to take place.   Calling
+ * {@link #taskProcessed()} from the background thread allows the dialog to get notified before the
+ * {@code delay} period has expired.  The blocking issue only exists with a non-0 {@code delay}
+ * value.
  */
 public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 
@@ -54,18 +67,52 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 
 	public final static int DEFAULT_WIDTH = 275;
 
+	/*
+	 * Note: all paths of finishing should end up calling this runnable.
+	 * 
+	 * Workflow:
+	 * 
+	 * Dialog Close Button Pressed:
+	 * 	-calls cancelCallback()
+	 *  -calls verifyCancel runnable
+	 *  -calls iternalCancel()
+	 *  -triggers taskProcessed()
+	 *  -calls closeDialog runnable
+	 * 
+	 * Cancel Button Pressed:
+	 * 	-(same as Dialog Close Button Pressed)
+	 * 
+	 * Task Monitor Stop Button Pressed:
+	 *  -triggers taskProcessed()
+	 *  -calls closeDialog runnable
+	 * 
+	 * Public API dispose() is Called:
+	 *  -calls iternalCancel()
+	 *  -triggers taskProcessed()
+	 *  -calls closeDialog runnable
+	 * 
+	 * Task Monitor Cancelled by API:
+	 *  -triggers taskProcessed()
+	 *  -calls closeDialog runnable
+	 * 
+	 * Task Finishes Normally:
+	 *  -triggers taskProcessed()
+	 *  -calls closeDialog runnable
+	 * 
+	 * 
+	 */
 	private Runnable closeDialog = () -> {
 		close();
-		dispose();
+		cleanup();
 	};
 	private Runnable verifyCancel = () -> {
 		if (promptToVerifyCancel()) {
-			cancel();
+			internalCancel();
 		}
 	};
 
-	private GTimerMonitor showTimer;
-	private CountDownLatch finished = new CountDownLatch(1);
+	private GTimerMonitor showTimer = GTimerMonitor.DUMMY;
+	private CountDownLatch finished;
 	private boolean supportsProgress;
 
 	private JPanel mainPanel;
@@ -78,17 +125,19 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	private SwingUpdateManager messageUpdater =
 		new SwingUpdateManager(100, 250, () -> setStatusText(newMessage.getAndSet(null)));
 
+	private AtomicBoolean shown = new AtomicBoolean();
+
 	/**
 	 * Constructor
 	 *
-	 * @param centerOnComp component to be centered over when shown,
-	 * otherwise center over parent.  If both centerOnComp and parent
-	 * are null, dialog will be centered on screen.
+	 * @param centerOnComp component to be centered over when shown, otherwise center over parent.
+	 * If both centerOnComp and parent are null, dialog will be centered on screen.
 	 * @param task the Task that this dialog will be associated with
+	 * @param finished the finished latch used by the background thread to notify of completion
 	 */
-	public TaskDialog(Component centerOnComp, Task task) {
+	TaskDialog(Component centerOnComp, Task task, CountDownLatch finished) {
 		this(centerOnComp, task.getTaskTitle(), task.isModal(), task.canCancel(),
-			task.hasProgress());
+			task.hasProgress(), finished);
 	}
 
 	/**
@@ -109,7 +158,21 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	 * @param hasProgress true if the dialog should show a progress bar
 	 */
 	public TaskDialog(String title, boolean canCancel, boolean isModal, boolean hasProgress) {
-		this(null, title, isModal, canCancel, hasProgress);
+		this(title, isModal, canCancel, hasProgress, new CountDownLatch(1));
+	}
+
+	/**
+	 * Constructor
+	 *
+	 * @param title title for the dialog
+	 * @param canCancel true if the task can be canceled
+	 * @param isModal true if the dialog should be modal
+	 * @param hasProgress true if the dialog should show a progress bar
+	 * @param finished the finished latch used by the background thread to notify of completion
+	 */
+	public TaskDialog(String title, boolean canCancel, boolean isModal, boolean hasProgress,
+			CountDownLatch finished) {
+		this(null, title, isModal, canCancel, hasProgress, finished);
 	}
 
 	/**
@@ -121,12 +184,14 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	 * @param isModal true if the dialog should be modal
 	 * @param canCancel true if the task can be canceled
 	 * @param hasProgress true if the dialog should show a progress bar
+	 * @param finished the finished latch used by the background thread to notify of completion
 	 */
 	private TaskDialog(Component centerOnComp, String title, boolean isModal, boolean canCancel,
-			boolean hasProgress) {
+			boolean hasProgress, CountDownLatch finished) {
 		super(title, isModal, true, canCancel, true);
 		this.centerOnComponent = centerOnComp;
 		this.supportsProgress = hasProgress;
+		this.finished = finished;
 		setup(canCancel);
 	}
 
@@ -167,11 +232,26 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 		return userSaysYes;
 	}
 
+	private boolean isInstalled(Component c) {
+		Component[] components = mainPanel.getComponents();
+		for (Component component : components) {
+			if (c == component) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Adds the panel that contains the progress bar to the dialog
 	 */
 	private void installProgressMonitor() {
 		Swing.runIfSwingOrRunLater(() -> {
+
+			if (isInstalled(monitorComponent)) {
+				return;
+			}
+
 			mainPanel.removeAll();
 			mainPanel.add(monitorComponent, BorderLayout.CENTER);
 			repack();
@@ -184,6 +264,11 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	 */
 	private void installActivityDisplay() {
 		Swing.runIfSwingOrRunLater(() -> {
+
+			if (isInstalled(activityPanel)) {
+				return;
+			}
+
 			mainPanel.removeAll();
 			mainPanel.add(activityPanel, BorderLayout.CENTER);
 			repack();
@@ -192,6 +277,7 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 
 	@Override
 	protected void cancelCallback() {
+		// note: this is called from the cancel button and when the dialog close button is pressed
 		Swing.runLater(verifyCancel);
 	}
 
@@ -207,16 +293,19 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	}
 
 	/**
-	 * Called after the task has been executed
+	 * Called after the task has been executed or when the task is cancelled
 	 */
-	public synchronized void taskProcessed() {
+	public void taskProcessed() {
 		finished.countDown();
-		monitorComponent.notifyChangeListeners();
 		Swing.runLater(closeDialog);
 	}
 
-	public synchronized boolean isCompleted() {
-		return finished.getCount() == 0;
+	/**
+	 * Returns true if this dialog's task has completed normally or been cancelled
+	 * @return true if this dialog's task has completed normally or been cancelled
+	 */
+	public boolean isCompleted() {
+		return finished.getCount() == 0 || isCancelled();
 	}
 
 	/**
@@ -237,6 +326,14 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 		else {
 			doShowNonModal(delay);
 		}
+	}
+
+	/**
+	 * Returns true if this dialog was ever made visible
+	 * @return true if shown
+	 */
+	public boolean wasShown() {
+		return shown.get();
 	}
 
 	private void doShowModal(int delay) {
@@ -272,6 +369,7 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 
 		Swing.runIfSwingOrRunLater(() -> {
 			if (!isCompleted()) {
+				shown.set(true);
 				DockingWindowManager.showDialog(centerOnComponent, TaskDialog.this);
 			}
 		});
@@ -288,18 +386,17 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 		}
 	}
 
+	/**
+	 * Cancels the task and closes this dialog
+	 */
+	@Override
 	public void dispose() {
+		internalCancel();
+	}
 
+	private void cleanup() {
+		showTimer.cancel();
 		messageUpdater.dispose();
-
-		Runnable disposeTask = () -> {
-			if (showTimer != null) {
-				showTimer.cancel();
-				showTimer = null;
-			}
-		};
-
-		Swing.runNow(disposeTask);
 	}
 
 //==================================================================================================
@@ -330,15 +427,21 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	@Override
 	public void initialize(long max) {
 
-		if (!supportsProgress) {
+		if (max <= 0) {
 			return;
 		}
 
-		if (!monitorComponent.isShowing()) {
-			installProgressMonitor();
+		monitorComponent.initialize(max);
+		if (!supportsProgress) {
+			supportsProgress = true;
+			setIndeterminate(false);
 		}
 
-		monitorComponent.initialize(max);
+		// Note: it is not clear why we only wish to show progress if the monitor is not
+		// visible.  This seems wrong.   If someone knows, please update this code.
+		//if (!monitorComponent.isShowing()) {
+		installProgressMonitor();
+		//}
 	}
 
 	@Override
@@ -355,6 +458,17 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 	public void setIndeterminate(boolean indeterminate) {
 		supportsProgress = !indeterminate;
 		monitorComponent.setIndeterminate(indeterminate);
+
+		// Assumption: if the client calls this method to show progress, then we should honor
+		// that request.  If we find that nested monitor usage causes dialogs to incorrectly
+		// toggle monitors, then we need to update those clients to use a wrapping style
+		// monitor that prevents the behavior.
+		if (supportsProgress) {
+			installProgressMonitor();
+		}
+		else {
+			installActivityDisplay();
+		}
 	}
 
 	@Override
@@ -369,11 +483,15 @@ public class TaskDialog extends DialogComponentProvider implements TaskMonitor {
 
 	@Override
 	public synchronized void cancel() {
+		internalCancel();
+	}
+
+	private void internalCancel() {
 		if (monitorComponent.isCancelled()) {
 			return;
 		}
-		// Mark as cancelled, must be detected by task which should terminate
-		// and invoke setCompleted which will dismiss dialog.
+
+		// mark as cancelled; the task will terminate and the callback will dismiss this dialog
 		monitorComponent.cancel();
 	}
 

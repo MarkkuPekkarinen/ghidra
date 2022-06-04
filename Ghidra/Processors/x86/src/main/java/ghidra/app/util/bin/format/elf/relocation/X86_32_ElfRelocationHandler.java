@@ -59,12 +59,15 @@ public class X86_32_ElfRelocationHandler extends ElfRelocationHandler {
 
 		ElfSymbol sym = null;
 		long symbolValue = 0;
+		Address symbolAddr = null;
 		String symbolName = null;
+
 		if (symbolIndex != 0) {
 			sym = elfRelocationContext.getSymbol(symbolIndex);
 		}
 
 		if (sym != null) {
+			symbolAddr = elfRelocationContext.getSymbolAddress(sym);
 			symbolValue = elfRelocationContext.getSymbolValue(sym);
 			symbolName = sym.getNameAsString();
 		}
@@ -81,6 +84,11 @@ public class X86_32_ElfRelocationHandler extends ElfRelocationHandler {
 			case X86_32_ElfRelocationConstants.R_386_32:
 				value = (int) (symbolValue + addend);
 				memory.setInt(relocationAddress, value);
+				if (addend != 0) {
+					warnExternalOffsetRelocation(program, relocationAddress,
+						symbolAddr, symbolName, addend, elfRelocationContext.getLog());
+					applyComponentOffsetPointer(program, relocationAddress, addend);
+				}
 				break;
 			case X86_32_ElfRelocationConstants.R_386_PC32:
 				value = (int) (symbolValue + addend - offset);

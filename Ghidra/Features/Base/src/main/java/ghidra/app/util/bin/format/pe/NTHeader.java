@@ -20,7 +20,6 @@ import java.io.RandomAccessFile;
 
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.StructConverter;
-import ghidra.app.util.bin.format.FactoryBundledWithBinaryReader;
 import ghidra.app.util.bin.format.pe.PortableExecutable.SectionLayout;
 import ghidra.program.model.data.*;
 import ghidra.util.*;
@@ -30,7 +29,7 @@ import ghidra.util.task.TaskMonitorAdapter;
 
 /**
  * A class to represent the <b><code>IMAGE_NT_HEADERS32</code></b> and
- * IMAGE_NT_HEADERS64 structs as defined in 
+ * IMAGE_NT_HEADERS64 structs as defined in
  * <code>winnt.h</code>.
  * <pre>
  * typedef struct _IMAGE_NT_HEADERS {
@@ -39,8 +38,8 @@ import ghidra.util.task.TaskMonitorAdapter;
  *    IMAGE_OPTIONAL_HEADER32 OptionalHeader;
  * };
  * </pre>
- * 
- * 
+ *
+ *
  */
 public class NTHeader implements StructConverter, OffsetValidator {
 	/**
@@ -52,7 +51,7 @@ public class NTHeader implements StructConverter, OffsetValidator {
 	private int signature;
 	private FileHeader fileHeader;
 	private OptionalHeader optionalHeader;
-	private FactoryBundledWithBinaryReader reader;
+	private BinaryReader reader;
 	private int index;
 	private boolean advancedProcess = true;
 	private boolean parseCliHeaders = false;
@@ -68,23 +67,8 @@ public class NTHeader implements StructConverter, OffsetValidator {
 	 * @throws InvalidNTHeaderException if the bytes the specified index
 	 * do not constitute an accurate NT header.
 	 */
-	public static NTHeader createNTHeader(FactoryBundledWithBinaryReader reader, int index,
-			SectionLayout layout, boolean advancedProcess, boolean parseCliHeaders)
-			throws InvalidNTHeaderException, IOException {
-		NTHeader ntHeader = (NTHeader) reader.getFactory().create(NTHeader.class);
-		ntHeader.initNTHeader(reader, index, layout, advancedProcess, parseCliHeaders);
-		return ntHeader;
-	}
-
-	/**
-	 * DO NOT USE THIS CONSTRUCTOR, USE create*(GenericFactory ...) FACTORY METHODS INSTEAD.
-	 */
-	public NTHeader() {
-	}
-
-	private void initNTHeader(FactoryBundledWithBinaryReader reader, int index, SectionLayout layout,
-			boolean advancedProcess, boolean parseCliHeaders)
-			throws InvalidNTHeaderException, IOException {
+	public NTHeader(BinaryReader reader, int index, SectionLayout layout, boolean advancedProcess,
+			boolean parseCliHeaders) throws InvalidNTHeaderException, IOException {
 		this.reader = reader;
 		this.index = index;
 		this.layout = layout;
@@ -172,9 +156,9 @@ public class NTHeader implements StructConverter, OffsetValidator {
 		//low alignment mode?
 		//
 		if (optionalHeader != null) {
-			if (optionalHeader.getFileAlignment() == optionalHeader.getSectionAlignment()
-					&& optionalHeader.getSectionAlignment() < 800
-					&& optionalHeader.getFileAlignment() > 1) {
+			if (optionalHeader.getFileAlignment() == optionalHeader.getSectionAlignment() &&
+				optionalHeader.getSectionAlignment() < 800 &&
+				optionalHeader.getFileAlignment() > 1) {
 				return rva;
 			}
 		}
@@ -254,14 +238,14 @@ public class NTHeader implements StructConverter, OffsetValidator {
 
 		tmpIndex += 4;
 
-		fileHeader = FileHeader.createFileHeader(reader, tmpIndex, this);
+		fileHeader = new FileHeader(reader, tmpIndex, this);
 		if (fileHeader.getSizeOfOptionalHeader() == 0) {
 			Msg.warn(this, "Section headers overlap optional header");
 		}
 		tmpIndex += FileHeader.IMAGE_SIZEOF_FILE_HEADER;
 
 		try {
-			optionalHeader = OptionalHeaderImpl.createOptionalHeader(this, reader, tmpIndex);
+			optionalHeader = new OptionalHeaderImpl(this, reader, tmpIndex);
 		}
 		catch (NotYetImplementedException e) {//TODO
 			Msg.error(this, "Unexpected Exception: " + e.getMessage());
@@ -270,6 +254,10 @@ public class NTHeader implements StructConverter, OffsetValidator {
 
 		fileHeader.processSections(optionalHeader);
 		fileHeader.processSymbols();
+		if ((fileHeader.getMachine() &
+			FileHeader.IMAGE_FILE_MACHINE_MASK) == FileHeader.IMAGE_FILE_MACHINE_AMD64) {
+			fileHeader.processImageRuntimeFunctionEntries();
+		}
 
 		if (advancedProcess) {
 			optionalHeader.processDataDirectories(TaskMonitorAdapter.DUMMY_MONITOR);
@@ -278,7 +266,7 @@ public class NTHeader implements StructConverter, OffsetValidator {
 
 	void writeHeader(RandomAccessFile raf, DataConverter dc) throws IOException {
 
-		raf.seek( index );
+		raf.seek(index);
 
 		raf.write(dc.getBytes(signature));
 
