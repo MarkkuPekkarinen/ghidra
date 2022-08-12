@@ -25,6 +25,7 @@ import ghidra.app.util.bin.ByteProvider;
 import ghidra.app.util.bin.StructConverter;
 import ghidra.app.util.bin.format.macho.*;
 import ghidra.app.util.bin.format.macho.commands.*;
+import ghidra.app.util.bin.format.macho.commands.ExportTrie.ExportEntry;
 import ghidra.app.util.bin.format.macho.commands.dyld.*;
 import ghidra.app.util.bin.format.macho.dyld.DyldChainedPtr;
 import ghidra.app.util.bin.format.macho.dyld.DyldChainedPtr.DyldChainType;
@@ -125,7 +126,8 @@ public class MachoProgramBuilder {
 		processEntryPoint();
 		processMemoryBlocks(machoHeader, provider.getName(), true, true);
 		processUnsupportedLoadCommands();
-		processSymbolTables();
+		boolean exportsFound = processExports(machoHeader);
+		processSymbolTables(machoHeader, !exportsFound);
 		processIndirectSymbols();
 		setRelocatableProperty();
 		processLibraries();
@@ -277,10 +279,6 @@ public class MachoProgramBuilder {
 					}
 				}
 			}
-			else {
-				log.appendMsg(
-					"Skipping segment: " + segment.getSegmentName() + " (" + source + ")");
-			}
 		}
 
 		// Create memory blocks for sections.  They will be in the segments we just created, so the
@@ -301,10 +299,6 @@ public class MachoProgramBuilder {
 							section.getSegmentName(), section.getSectionName(),
 							section.getAddress(), section.getSize(), source));
 					}
-				}
-				else {
-					log.appendMsg("Skipping section: " + section.getSegmentName() + "." +
-						section.getSectionName() + " (" + source + ")");
 				}
 			}
 		}
@@ -405,10 +399,48 @@ public class MachoProgramBuilder {
  			log.appendMsg(loadCommand.getCommandName());
  		}
  	}
+ 	
+	protected boolean processExports(MachHeader header) throws Exception {
+		List<ExportEntry> exports = new ArrayList<>();
+ 		SegmentCommand textSegment = header.getSegment(SegmentNames.SEG_TEXT);
+ 		if (textSegment == null) {
+ 			log.appendMsg("Cannot process exports, __TEXT segment not found!");
+			return false;
+ 		}
 
-	protected void processSymbolTables() throws Exception {
+		// Old way - export tree in DyldInfoCommand
+		List<DyldInfoCommand> dyldInfoCommands = header.getLoadCommands(DyldInfoCommand.class);
+		for (DyldInfoCommand dyldInfoCommand : dyldInfoCommands) {
+			exports.addAll(dyldInfoCommand.getExportTrie().getExports(e -> !e.isReExport()));
+
+		}
+
+		// New way - export tree in DyldExportsTrieCommand
+		List<DyldExportsTrieCommand> dyldExportsTrieCommands =
+			header.getLoadCommands(DyldExportsTrieCommand.class);
+		for (DyldExportsTrieCommand dyldExportsTreeCommand : dyldExportsTrieCommands) {
+			exports.addAll(dyldExportsTreeCommand.getExportTrie().getExports(e -> !e.isReExport()));
+		}
+
+		Address baseAddr = space.getAddress(textSegment.getVMaddress());
+		for (ExportEntry export : exports) {
+			String name = SymbolUtilities.replaceInvalidChars(export.getName(), true);
+			Address exportAddr = baseAddr.add(export.getAddress());
+			program.getSymbolTable().addExternalEntryPoint(exportAddr);
+			try {
+				program.getSymbolTable().createLabel(exportAddr, name, SourceType.IMPORTED);
+			}
+			catch (Exception e) {
+				log.appendMsg("Unable to create symbol: " + e.getMessage());
+			}
+		}
+
+		return !exports.isEmpty();
+ 	}
+
+	protected void processSymbolTables(MachHeader header, boolean processExports) throws Exception {
 		monitor.setMessage("Processing symbol tables...");
-		List<SymbolTableCommand> commands = machoHeader.getLoadCommands(SymbolTableCommand.class);
+		List<SymbolTableCommand> commands = header.getLoadCommands(SymbolTableCommand.class);
 		for (SymbolTableCommand symbolTableCommand : commands) {
 			List<NList> symbols = symbolTableCommand.getSymbols();
 			for (NList symbol : symbols) {
@@ -440,7 +472,7 @@ public class MachoProgramBuilder {
 					continue;
 				}
 
-				if (symbol.isExternal() || symbol.isPrivateExternal()) {
+				if (processExports && symbol.isExternal()) {
 					program.getSymbolTable().addExternalEntryPoint(addr);
 				}
 
@@ -458,7 +490,12 @@ public class MachoProgramBuilder {
 					continue;
 				}
 				try {
-					program.getSymbolTable().createLabel(addr, string, SourceType.IMPORTED);
+					if (!symbol.isExternal() || processExports) {
+						program.getSymbolTable().createLabel(addr, string, SourceType.IMPORTED);
+						if (symbol.isExternal()) {
+							program.getSymbolTable().addExternalEntryPoint(addr);
+						}
+					}
 				}
 				catch (Exception e) {
 					log.appendMsg("Unable to create symbol: " + e.getMessage());
@@ -1164,7 +1201,6 @@ public class MachoProgramBuilder {
  		while (iter.hasNext()) {
  			RelocationInfo relocationInfo = iter.next();
  			Address address = relocationMap.get(relocationInfo);
- 			byte[] origBytes = getOriginalRelocationBytes(relocationInfo, address);
  			MachoRelocation relocation = null;
 
  			if (handler == null) {
@@ -1198,7 +1234,7 @@ public class MachoProgramBuilder {
 				.add(address, relocationInfo.getType(), new long[] { relocationInfo.getValue(),
 					relocationInfo.getLength(), relocationInfo.isPcRelocated() ? 1 : 0,
 					relocationInfo.isExternal() ? 1 : 0, relocationInfo.isScattered() ? 1 : 0 },
-					origBytes, relocation.getTargetDescription());
+						null, relocation.getTargetDescription());
 		}
 	}
 	
@@ -1440,20 +1476,6 @@ public class MachoProgramBuilder {
 		}
 	}
 
-	private byte[] getOriginalRelocationBytes(RelocationInfo relocation,
-			Address relocationAddress) {
-
-		int relocationSize = (int) Math.pow(2, relocation.getLength());
-		byte[] originalRelocationBytes = new byte[relocationSize];
-		try {
-			memory.getBytes(relocationAddress, originalRelocationBytes);
-		}
-		catch (MemoryAccessException e) {
-			// fall through
-		}
-		return originalRelocationBytes;
-	}
-
 	/**
 	 * Fixes up any chained fixups.  Relies on the __thread_starts section being present.
 	 * 
@@ -1618,8 +1640,6 @@ public class MachoProgramBuilder {
 		long imageBaseOffset = program.getImageBase().getOffset();
 		Address chainStart = memory.getProgram().getLanguage().getDefaultSpace().getAddress(page);
 
-		byte origBytes[] = new byte[8];
-
 		long next = -1;
 		boolean start = true;
 		while (next != 0) {
@@ -1681,10 +1701,10 @@ public class MachoProgramBuilder {
 				newChainValue += imageBaseOffset;
 			}
 
-			if (!start || program.getRelocationTable().getRelocation(chainLoc) == null) {
+			if (!start || !program.getRelocationTable().hasRelocation(chainLoc)) {
 				addRelocationTableEntry(chainLoc,
 					(start ? 0x8000 : 0x4000) | (isAuthenticated ? 4 : 0) | (isBound ? 2 : 0) | 1,
-					newChainValue, origBytes, symName);
+					newChainValue, symName);
 				DyldChainedPtr.setChainValue(memory, chainLoc, pointerFormat, newChainValue);
 			}
 			// delay creating data until after memory has been changed
@@ -1696,13 +1716,11 @@ public class MachoProgramBuilder {
 		}
 	}
 
-	private void addRelocationTableEntry(Address chainLoc, int type, long chainValue,
-			byte[] origBytes, String name) throws MemoryAccessException {
+	private void addRelocationTableEntry(Address chainLoc, int type, long chainValue, String name) {
 		if (shouldAddChainedFixupsRelocations) {
 			// Add entry to relocation table for the pointer fixup
-			memory.getBytes(chainLoc, origBytes);
 			program.getRelocationTable()
-					.add(chainLoc, type, new long[] { chainValue }, origBytes, name);
+					.add(chainLoc, type, new long[] { chainValue }, null, name);
 		}
 	}
 
