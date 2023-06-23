@@ -47,9 +47,13 @@ public class ElfLoaderOptionsFactory {
 	public static final String INCLUDE_OTHER_BLOCKS = "Import Non-Loaded Data";// as OTHER overlay blocks
 	static final boolean INCLUDE_OTHER_BLOCKS_DEFAULT = true;
 
-	public static final String RESOLVE_EXTERNAL_SYMBOLS_OPTION_NAME =
-		"Fixup Unresolved External Symbols";
-	public static final boolean RESOLVE_EXTERNAL_SYMBOLS_DEFAULT = true;
+	public static final String DISCARDABLE_SEGMENT_SIZE_OPTION_NAME =
+		"Max Zero-Segment Discard Size";
+
+	// Maximum length of discardable segment
+	// If program contains section headers, any zeroed segment smaller than this size
+	// will be eligible for removal.
+	private static final int DEFAULT_DISCARDABLE_SEGMENT_SIZE = 0xff;
 
 	private ElfLoaderOptionsFactory() {
 	}
@@ -87,8 +91,8 @@ public class ElfLoaderOptionsFactory {
 			Loader.COMMAND_LINE_ARG_PREFIX + "-includeOtherBlocks"));
 
 		options.add(
-			new Option(RESOLVE_EXTERNAL_SYMBOLS_OPTION_NAME, RESOLVE_EXTERNAL_SYMBOLS_DEFAULT,
-				Boolean.class, Loader.COMMAND_LINE_ARG_PREFIX + "-resolveExternalSymbols"));
+			new Option(DISCARDABLE_SEGMENT_SIZE_OPTION_NAME, DEFAULT_DISCARDABLE_SEGMENT_SIZE,
+				Integer.class, Loader.COMMAND_LINE_ARG_PREFIX + "-maxSegmentDiscardSize"));
 
 		ElfLoadAdapter extensionAdapter = ElfExtensionFactory.getLoadAdapter(elf);
 		if (extensionAdapter != null) {
@@ -174,10 +178,27 @@ public class ElfLoaderOptionsFactory {
 				}
 			}
 			else if (name.equals(IMAGE_BASE_OPTION_NAME)) {
-				return validateAddressSpaceOffsetOption(option, language.getDefaultSpace());
+				String err = validateAddressSpaceOffsetOption(option, language.getDefaultSpace());
+				if (err != null) {
+					return err;
+				}
 			}
 			else if (name.equals(IMAGE_DATA_IMAGE_BASE_OPTION_NAME)) {
-				return validateAddressSpaceOffsetOption(option, language.getDefaultDataSpace());
+				String err =
+					validateAddressSpaceOffsetOption(option, language.getDefaultDataSpace());
+				if (err != null) {
+					return err;
+				}
+			}
+			else if (name.equals(DISCARDABLE_SEGMENT_SIZE_OPTION_NAME)) {
+				if (!Integer.class.isAssignableFrom(option.getValueClass())) {
+					return "Invalid type for option: " + name + " - " + option.getValueClass();
+				}
+				int val = (Integer) option.getValue();
+				if (val < 0 || val > DEFAULT_DISCARDABLE_SEGMENT_SIZE) {
+					return "Option value out-of-range: " + name + " (0.." +
+						DEFAULT_DISCARDABLE_SEGMENT_SIZE + ")";
+				}
 			}
 		}
 		return null;
@@ -220,6 +241,11 @@ public class ElfLoaderOptionsFactory {
 	
 	public static String getDataImageBaseOption(List<Option> options) {
 		return OptionUtils.getOption(IMAGE_DATA_IMAGE_BASE_OPTION_NAME, options, (String) null);
+	}
+
+	public static int getMaxSegmentDiscardSize(List<Option> options) {
+		return OptionUtils.getOption(DISCARDABLE_SEGMENT_SIZE_OPTION_NAME, options,
+			DEFAULT_DISCARDABLE_SEGMENT_SIZE);
 	}
 
 }

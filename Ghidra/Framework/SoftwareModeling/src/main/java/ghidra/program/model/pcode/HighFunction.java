@@ -204,20 +204,6 @@ public class HighFunction extends PcodeSyntaxTree {
 		}
 	}
 
-	@Override
-	public Varnode newVarnode(int sz, Address addr) {
-		// translate into function overlay space if possible
-		addr = func.getEntryPoint().getAddressSpace().getOverlayAddress(addr);
-		return super.newVarnode(sz, addr);
-	}
-
-	@Override
-	public Varnode newVarnode(int sz, Address addr, int id) {
-		// translate into function overlay space if possible
-		addr = func.getEntryPoint().getAddressSpace().getOverlayAddress(addr);
-		return super.newVarnode(sz, addr, id);
-	}
-
 	private void decodeHigh(Decoder decoder) throws DecoderException {
 		int el = decoder.openElement(ELEM_HIGH);
 		String classstring = decoder.readString(ATTRIB_CLASS);
@@ -267,7 +253,6 @@ public class HighFunction extends PcodeSyntaxTree {
 			}
 			if (subel == ELEM_ADDR.id()) {
 				Address addr = AddressXML.decode(decoder);
-				addr = func.getEntryPoint().getAddressSpace().getOverlayAddress(addr);
 				if (!func.getEntryPoint().equals(addr)) {
 					throw new DecoderException("Mismatched address in function tag");
 				}
@@ -445,7 +430,12 @@ public class HighFunction extends PcodeSyntaxTree {
 		if (id != 0) {
 			encoder.writeUnsignedInteger(ATTRIB_ID, id);
 		}
-		encoder.writeString(ATTRIB_NAME, func.getName());
+		String funcName = func.getName();
+		encoder.writeString(ATTRIB_NAME, funcName);
+		String altName = getDataTypeManager().getNameTransformer().simplify(funcName);
+		if (!altName.equals(funcName)) {
+			encoder.writeString(ATTRIB_LABEL, altName);
+		}
 		encoder.writeSignedInteger(ATTRIB_SIZE, size);
 		if (func.isInline()) {
 			encoder.writeBool(ATTRIB_INLINE, true);
@@ -459,7 +449,7 @@ public class HighFunction extends PcodeSyntaxTree {
 		else {
 			AddressXML.encode(encoder, entryPoint);		// Address is forced on XML
 		}
-		localSymbols.encodeLocalDb(encoder, namespace);
+		localSymbols.encodeLocalDb(encoder, namespace, getDataTypeManager().getNameTransformer());
 		proto.encodePrototype(encoder, getDataTypeManager());
 		if ((jumpTables != null) && (jumpTables.size() > 0)) {
 			encoder.openElement(ELEM_JUMPTABLELIST);
@@ -484,6 +474,15 @@ public class HighFunction extends PcodeSyntaxTree {
 			encoder.closeElement(ELEM_OVERRIDE);
 		}
 		encoder.closeElement(ELEM_FUNCTION);
+	}
+
+	@Override
+	public void setVolatile(Varnode vn, boolean val) {
+		if (val) {
+			// Volatile varnodes are modeled as annotations with no HighVariable
+			// Give the volatile a chance to populate a global symbol
+			globalSymbols.populateAnnotation(vn);
+		}
 	}
 
 	public static Namespace findOverrideSpace(Function func) {
@@ -581,9 +580,11 @@ public class HighFunction extends PcodeSyntaxTree {
 	 * from the root (global) namespace up to the given namespace
 	 * @param encoder is the stream encoder
 	 * @param namespace is the namespace being described
+	 * @param transformer is used to computer the displayed version of each namespace
 	 * @throws IOException for errors in the underlying stream
 	 */
-	static public void encodeNamespace(Encoder encoder, Namespace namespace) throws IOException {
+	static public void encodeNamespace(Encoder encoder, Namespace namespace,
+			NameTransformer transformer) throws IOException {
 		encoder.openElement(ELEM_PARENT);
 		if (namespace != null) {
 			ArrayList<Namespace> arr = new ArrayList<>();
@@ -601,7 +602,12 @@ public class HighFunction extends PcodeSyntaxTree {
 				Namespace curScope = arr.get(i);
 				encoder.openElement(ELEM_VAL);
 				encoder.writeUnsignedInteger(ATTRIB_ID, curScope.getID());
-				encoder.writeString(ATTRIB_CONTENT, curScope.getName());
+				String nm = curScope.getName();
+				String altName = transformer.simplify(nm);
+				if (!nm.equals(altName)) {
+					encoder.writeString(ATTRIB_LABEL, altName);
+				}
+				encoder.writeString(ATTRIB_CONTENT, nm);
 				encoder.closeElement(ELEM_VAL);
 			}
 		}

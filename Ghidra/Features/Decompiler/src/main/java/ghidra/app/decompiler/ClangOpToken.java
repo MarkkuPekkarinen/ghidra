@@ -13,23 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * Created on Jun 12, 2003
- *
- * To change the template for this generated file go to
- * Window>Preferences>Java>Code Generation>Code and Comments
- */
 package ghidra.app.decompiler;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.pcode.*;
 
 /**
- * 
- *
- * Token representing an operation in C code text. This could be a keyword like
- * "if" or "while" but could also be an operator like '+' or '*'
- * The token may contain an id for the pcode object representing the operation
+ * A token representing a source code "operation". This could be a keyword like
+ * "if" or "while" but could also be an operator like '+' or '*'.
+ * The token may contain an id for the p-code object representing the operation.
  */
 public class ClangOpToken extends ClangToken {
 	private PcodeOp op;
@@ -49,7 +41,7 @@ public class ClangOpToken extends ClangToken {
 		if (op == null) {
 			return null;
 		}
-		return op.getSeqnum().getTarget().getPhysicalAddress();
+		return op.getSeqnum().getTarget();
 	}
 
 	@Override
@@ -57,7 +49,7 @@ public class ClangOpToken extends ClangToken {
 		if (op == null) {
 			return null;
 		}
-		return op.getSeqnum().getTarget().getPhysicalAddress();
+		return op.getSeqnum().getTarget();
 	}
 
 	@Override

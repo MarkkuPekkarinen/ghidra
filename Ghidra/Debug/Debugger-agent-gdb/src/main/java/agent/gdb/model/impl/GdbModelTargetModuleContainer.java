@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 import agent.gdb.manager.GdbInferior;
 import agent.gdb.manager.GdbModule;
 import ghidra.async.AsyncFence;
+import ghidra.dbg.DebuggerObjectModel.RefreshBehavior;
 import ghidra.dbg.agent.DefaultTargetObject;
 import ghidra.dbg.error.DebuggerUserException;
 import ghidra.dbg.target.*;
@@ -99,13 +100,13 @@ public class GdbModelTargetModuleContainer
 	}
 
 	@Override
-	protected CompletableFuture<Void> requestElements(boolean refresh) {
-		// Ignore 'refresh' because inferior.getKnownModules may exclude executable
-		return doRefresh();
+	protected CompletableFuture<Void> requestElements(RefreshBehavior refresh) {
+		// listModules is now cached by the manager
+		return doRefresh(refresh.isRefresh(elements.keySet()));
 	}
 
-	protected CompletableFuture<Void> doRefresh() {
-		return inferior.listModules().thenCompose(byName -> {
+	protected CompletableFuture<Void> doRefresh(boolean force) {
+		return inferior.listModules(force).thenCompose(byName -> {
 			for (String modName : inferior.getKnownModules().keySet()) {
 				if (!byName.keySet().contains(modName)) {
 					impl.deleteModelObject(byName.get(modName));
@@ -128,7 +129,7 @@ public class GdbModelTargetModuleContainer
 	}
 
 	protected CompletableFuture<?> refreshInternal() {
-		return doRefresh().exceptionally(ex -> {
+		return doRefresh(false).exceptionally(ex -> {
 			impl.reportError(this, "Problem refreshing inferior's modules", ex);
 			return null;
 		});

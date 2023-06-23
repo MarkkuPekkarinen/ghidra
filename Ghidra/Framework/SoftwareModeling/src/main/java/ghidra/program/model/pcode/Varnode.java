@@ -292,15 +292,7 @@ public class Varnode {
 	 * @return the lone descendant PcodeOp
 	 */
 	public PcodeOp getLoneDescend() {
-		Iterator<PcodeOp> iter = getDescendants();
-		if (!iter.hasNext()) {
-			return null;		// If there are no descendants return null
-		}
-		PcodeOp op = iter.next();
-		if (iter.hasNext()) {
-			return null;		// If there is more than one descendant return null
-		}
-		return op;
+		return null;
 	}
 
 	/**
@@ -337,10 +329,6 @@ public class Varnode {
 		StringBuilder buffer = new StringBuilder();
 		Address addr = address;
 		AddressSpace space = addr.getAddressSpace();
-		if (space.isOverlaySpace()) {
-			space = space.getPhysicalSpace();
-			addr = space.getAddress(addr.getOffset());
-		}
 		buffer.append(space.getName());
 		buffer.append(":0x");
 		long off = addr.getUnsignedOffset();
@@ -442,6 +430,11 @@ public class Varnode {
 					vn = factory.setInput(vn, true);
 				}
 			}
+			else if (attribId == ATTRIB_VOLATILE.id()) {
+				if (decoder.readBool()) {
+					factory.setVolatile(vn, true);
+				}
+			}
 		}
 		decoder.closeElement(el);
 		return vn;
@@ -504,8 +497,15 @@ public class Varnode {
 			if (attribId == 0) {
 				break;
 			}
-			else if (attribId >= ATTRIB_PIECE1.id() && attribId <= ATTRIB_PIECE9.id()) {
-				int index = attribId - ATTRIB_PIECE1.id();
+			else if (attribId == ATTRIB_UNKNOWN.id()) {
+				attribId = decoder.getIndexedAttributeId(ATTRIB_PIECE);
+			}
+
+			if (attribId >= ATTRIB_PIECE.id()) {
+				int index = attribId - ATTRIB_PIECE.id();
+				if (index > AddressXML.MAX_PIECES) {
+					continue;
+				}
 				if (index != list.size()) {
 					throw new DecoderException("\"piece\" attributes must be in order");
 				}

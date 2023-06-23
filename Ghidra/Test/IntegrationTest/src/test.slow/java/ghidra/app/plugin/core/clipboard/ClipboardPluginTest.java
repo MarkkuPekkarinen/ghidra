@@ -1345,7 +1345,7 @@ public class ClipboardPluginTest extends AbstractGhidraHeadedIntegrationTest {
 		final DockingActionIf action = getAction(plugin, "Byte Viewer Options");
 		assertTrue(action.isEnabled());
 
-		SwingUtilities.invokeLater(() -> action.actionPerformed(new ActionContext()));
+		SwingUtilities.invokeLater(() -> action.actionPerformed(new DefaultActionContext()));
 		waitForSwing();
 		ByteViewerOptionsDialog d = waitForDialogComponent(ByteViewerOptionsDialog.class);
 		return d;
@@ -1717,7 +1717,8 @@ public class ClipboardPluginTest extends AbstractGhidraHeadedIntegrationTest {
 
 		@Override
 		public Point getStartMouseDragLocation() {
-			return new Point(10, 5);
+			// offset the x enough to move past the line number panel
+			return new Point(20, 5);
 		}
 
 		@Override

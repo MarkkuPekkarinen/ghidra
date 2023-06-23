@@ -20,6 +20,8 @@ extern "C" {
 #include "pcodeparse.hh"
 #include "blockaction.hh"
 
+namespace ghidra {
+
 // Constructing this registers the capability
 IfaceDecompCapability IfaceDecompCapability::ifaceDecompCapability;
 
@@ -57,6 +59,7 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcMapexternalref(),"map","externalref");
   status->registerCom(new IfcMaplabel(),"map","label");
   status->registerCom(new IfcMapconvert(),"map","convert");
+  status->registerCom(new IfcMapunionfacet(), "map", "unionfacet");
   status->registerCom(new IfcPrintdisasm(),"disassemble");
   status->registerCom(new IfcDecompile(),"decompile");
   status->registerCom(new IfcDump(),"dump");
@@ -113,6 +116,7 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcRename(),"rename");
   status->registerCom(new IfcRetype(),"retype");
   status->registerCom(new IfcRemove(),"remove");
+  status->registerCom(new IfcIsolate(),"isolate");
   status->registerCom(new IfcLockPrototype(),"prototype","lock");
   status->registerCom(new IfcUnlockPrototype(),"prototype","unlock");
   status->registerCom(new IfcCommentInstr(),"comment","instruction");
@@ -124,6 +128,7 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcCallGraphList(),"callgraph","list");
   status->registerCom(new IfcCallFixup(),"fixup","call");
   status->registerCom(new IfcCallOtherFixup(),"fixup","callother");
+  status->registerCom(new IfcFixupApply(),"fixup","apply");
   status->registerCom(new IfcVolatile(),"volatile");
   status->registerCom(new IfcReadonly(),"readonly");
   status->registerCom(new IfcPointerSetting(),"pointer","setting");
@@ -709,6 +714,39 @@ void IfcMapconvert::execute(istream &s)
   s >> hex >> hash;		// Parse the hash value
 
   dcp->fd->getScopeLocal()->addEquateSymbol("", format, value, addr, hash);
+}
+
+/// \class IfcMapunionfacet
+/// \brief Create a union field forcing directive: `map facet <union> <fieldnum> <address> <hash>`
+///
+/// Creates a \e facet directive that associates a given field of a \e union data-type with
+/// a varnode in the context of a specific p-code op accessing it. The varnode and p-code op
+/// are specified by dynamic hash.
+void IfcMapunionfacet::execute(istream &s)
+
+{
+  Datatype *ct;
+  string unionName;
+  int4 fieldNum;
+  int4 size;
+  uint8 hash;
+
+  if (dcp->fd == (Funcdata *)0)
+    throw IfaceExecutionError("No function loaded");
+  s >> ws >> unionName;
+  ct = dcp->conf->types->findByName(unionName);
+  if (ct == (Datatype *)0 || ct->getMetatype() != TYPE_UNION)
+    throw IfaceParseError("Bad union data-type: " + unionName);
+  s >> ws >> dec >> fieldNum;
+  if (fieldNum < -1 || fieldNum >= ct->numDepend())
+    throw IfaceParseError("Bad field index");
+  Address addr = parse_machaddr(s,size,*dcp->conf->types); // Read pc address of hash
+
+  s >> hex >> hash;		// Parse the hash value
+  ostringstream s2;
+  s2 << "unionfacet" << dec << (fieldNum + 1) << '_' << hex << addr.getOffset();
+  Symbol *sym = dcp->fd->getScopeLocal()->addUnionFacetSymbol(s2.str(), ct, fieldNum, addr, hash);
+  dcp->fd->getScopeLocal()->setAttribute(sym, Varnode::typelock | Varnode::namelock);
 }
 
 /// \class IfcPrintdisasm
@@ -1328,6 +1366,29 @@ void IfcRetype::execute(istream &s)
     sym->getScope()->renameSymbol(sym,newname);
     sym->getScope()->setAttribute(sym,Varnode::namelock);
   }
+}
+
+/// \class IfcIsolate
+/// \brief Mark a symbol as isolated from speculative merging: `isolate <name>`
+void IfcIsolate::execute(istream &s)
+
+{
+  string symbolName;
+
+  s >> ws >> symbolName;
+  if (symbolName.size() == 0)
+    throw IfaceParseError("Missing symbol name");
+
+  Symbol *sym;
+  vector<Symbol *> symList;
+  dcp->readSymbol(symbolName,symList);
+  if (symList.empty())
+    throw IfaceExecutionError("No symbol named: "+symbolName);
+  if (symList.size() == 1)
+    sym = symList[0];
+  else
+    throw IfaceExecutionError("More than one symbol named: "+symbolName);
+  sym->setIsolated(true);
 }
 
 /// The Varnode is selected from the \e current function.  It is specified as a
@@ -2849,6 +2910,43 @@ void IfcCallOtherFixup::execute(istream &s)
   *status->optr << "Successfully registered callotherfixup" << endl;
 }
 
+/// \class IfcFixupApply
+/// \brief Apply a call-fixup to a particular function: `fixup apply <fixup> <function>`
+///
+/// The call-fixup and function are named from the command-line. If they both exist,
+/// the fixup is set on the function's prototype.
+void IfcFixupApply::execute(istream &s)
+
+{
+  if (dcp->conf == (Architecture *)0)
+    throw IfaceExecutionError("No load image present");
+
+  string fixupName,funcName;
+
+  s >> ws;
+  if (s.eof())
+    throw IfaceParseError("Missing fixup name");
+  s >> fixupName >> ws;
+  if (s.eof())
+    throw IfaceParseError("Missing function name");
+  s >> funcName;
+
+  int4 injectid = dcp->conf->pcodeinjectlib->getPayloadId(InjectPayload::CALLFIXUP_TYPE, fixupName);
+  if (injectid < 0)
+    throw IfaceExecutionError("Unknown fixup: " + fixupName);
+
+  string basename;
+  Scope *funcscope = dcp->conf->symboltab->resolveScopeFromSymbolName(funcName,"::",basename,(Scope *)0);
+  if (funcscope == (Scope *)0)
+    throw IfaceExecutionError("Bad namespace: "+funcName);
+  Funcdata *fd = funcscope->queryFunction( basename ); // Is function already in database
+  if (fd == (Funcdata *)0)
+    throw IfaceExecutionError("Unknown function name: "+funcName);
+
+  fd->getFuncProto().setInjectId(injectid);
+  *status->optr << "Successfully applied callfixup" << endl;
+}
+
 /// \class IfcVolatile
 /// \brief Mark a memory range as volatile: `volatile <address+size>`
 ///
@@ -3516,3 +3614,5 @@ void IfcSource::execute(istream &s)
   s >> filename;
   status->pushScript(filename,filename+"> ");
 }
+
+} // End namespace ghidra

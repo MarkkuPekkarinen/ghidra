@@ -17,6 +17,7 @@ package ghidra.app.plugin.core.debug.gui.watch;
 
 import org.junit.*;
 
+import db.Transaction;
 import ghidra.app.plugin.core.debug.service.tracemgr.DebuggerTraceManagerServicePlugin;
 import ghidra.app.services.DebuggerTraceManagerService;
 import ghidra.pcode.exec.PcodeExecutor;
@@ -27,7 +28,6 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.test.ToyProgramBuilder;
 import ghidra.trace.database.ToyDBTraceBuilder;
 import ghidra.trace.model.thread.TraceThread;
-import ghidra.util.database.UndoableTransaction;
 import help.screenshot.GhidraScreenShotGenerator;
 
 public class DebuggerWatchesPluginScreenShots extends GhidraScreenShotGenerator {
@@ -56,7 +56,7 @@ public class DebuggerWatchesPluginScreenShots extends GhidraScreenShotGenerator 
 	public void testCaptureDebuggerWatchesPlugin() throws Throwable {
 		TraceThread thread;
 		long snap0, snap1;
-		try (UndoableTransaction tid = tb.startTransaction()) {
+		try (Transaction tx = tb.startTransaction()) {
 			snap0 = tb.trace.getTimeManager().createSnapshot("First").getKey();
 			snap1 = tb.trace.getTimeManager().createSnapshot("Second").getKey();
 
@@ -69,14 +69,18 @@ public class DebuggerWatchesPluginScreenShots extends GhidraScreenShotGenerator 
 
 			PcodeExecutor<byte[]> executor0 =
 				TraceSleighUtils.buildByteExecutor(tb.trace, snap0, thread, 0);
-			executor0.executeSleighLine("RSP = 0x7ffefff8");
-			executor0.executeSleighLine("*:4 (RSP+8) = 0x4030201");
+			executor0.executeSleigh("""
+					RSP = 0x7ffefff8;
+					*:4 (RSP+8) = 0x4030201;
+					""");
 
 			PcodeExecutor<byte[]> executor1 =
 				TraceSleighUtils.buildByteExecutor(tb.trace, snap1, thread, 0);
-			executor1.executeSleighLine("RSP = 0x7ffefff8");
-			executor1.executeSleighLine("*:4 (RSP+8) = 0x1020304");
-			executor1.executeSleighLine("*:4 0x7fff0004:8 = 0x4A9A70C8");
+			executor1.executeSleigh("""
+					RSP = 0x7ffefff8;
+					*:4 (RSP+8) = 0x1020304;
+					*:4 0x7fff0004:8 = 0x4A9A70C8;
+					""");
 		}
 
 		watchesProvider.addWatch("RSP");
@@ -91,6 +95,8 @@ public class DebuggerWatchesPluginScreenShots extends GhidraScreenShotGenerator 
 		traceManager.activateSnap(snap0);
 		waitForSwing();
 		traceManager.activateSnap(snap1);
+		waitForSwing();
+		watchesProvider.waitEvaluate(1000);
 		waitForSwing();
 
 		captureIsolatedProvider(watchesProvider, 800, 400);

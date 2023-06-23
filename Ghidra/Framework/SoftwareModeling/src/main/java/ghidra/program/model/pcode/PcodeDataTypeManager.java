@@ -31,6 +31,7 @@ import ghidra.program.model.data.Enum;
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.DecompilerLanguage;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.NameTransformer;
 
 /**
  *
@@ -98,6 +99,7 @@ public class PcodeDataTypeManager {
 	private DataTypeManager progDataTypes;		// DataTypes from a particular program
 	private DataTypeManager builtInDataTypes = BuiltInDataTypeManager.getDataTypeManager();
 	private DataOrganization dataOrganization;
+	private NameTransformer nameTransformer;
 	private DecompilerLanguage displayLanguage;
 	private boolean voidInputIsVarargs;			// true if we should consider void parameter lists as varargs
 	// Some C header conventions use an empty prototype to mean a
@@ -107,11 +109,12 @@ public class PcodeDataTypeManager {
 	private VoidDataType voidDt;
 	private int pointerWordSize;				// Wordsize to assign to all pointer datatypes
 
-	public PcodeDataTypeManager(Program prog) {
+	public PcodeDataTypeManager(Program prog, NameTransformer simplifier) {
 
 		program = prog;
 		progDataTypes = prog.getDataTypeManager();
 		dataOrganization = progDataTypes.getDataOrganization();
+		nameTransformer = simplifier;
 		voidInputIsVarargs = true;				// By default, do not lock-in void parameter lists
 		displayLanguage = prog.getCompilerSpec().getDecompilerOutputLanguage();
 		if (displayLanguage != DecompilerLanguage.C_LANGUAGE) {
@@ -124,6 +127,14 @@ public class PcodeDataTypeManager {
 
 	public Program getProgram() {
 		return program;
+	}
+
+	public NameTransformer getNameTransformer() {
+		return nameTransformer;
+	}
+
+	public void setNameTransformer(NameTransformer newTransformer) {
+		nameTransformer = newTransformer;
 	}
 
 	/**
@@ -249,7 +260,15 @@ public class PcodeDataTypeManager {
 		else if (meta.equals("float")) {
 			int size = (int) decoder.readSignedInteger(ATTRIB_SIZE);
 			decoder.closeElement(el);
+			// NOTE: Float lookup by length must use "raw" encoding size since
 			return AbstractFloatDataType.getFloatDataType(size, progDataTypes);
+		}
+		else if (meta.equals("partunion")) {
+			int size = (int) decoder.readSignedInteger(ATTRIB_SIZE);
+			int offset = (int) decoder.readSignedInteger(ATTRIB_OFFSET);
+			DataType dt = decodeDataType(decoder);
+			decoder.closeElement(el);
+			return new PartialUnion(progDataTypes, dt, offset, size);
 		}
 		else {	// We typically reach here if the decompiler invents a new type
 				// probably an unknown with a non-standard size
@@ -326,7 +345,7 @@ public class PcodeDataTypeManager {
 		}
 		encoder.writeSignedInteger(ATTRIB_SIZE, ptrLen);
 		if (pointerWordSize != 1) {
-			encoder.writeSignedInteger(ATTRIB_WORDSIZE, pointerWordSize);
+			encoder.writeUnsignedInteger(ATTRIB_WORDSIZE, pointerWordSize);
 		}
 		if (spc != null) {
 			encoder.writeSpace(ATTRIB_SPACE, spc);
@@ -391,7 +410,7 @@ public class PcodeDataTypeManager {
 		encodeNameIdAttributes(encoder, type);
 		encoder.writeSignedInteger(ATTRIB_SIZE, pointer.getLength());
 		if (pointerWordSize != 1) {
-			encoder.writeSignedInteger(ATTRIB_WORDSIZE, pointerWordSize);
+			encoder.writeUnsignedInteger(ATTRIB_WORDSIZE, pointerWordSize);
 		}
 		if (space != null) {
 			encoder.writeSpace(ATTRIB_SPACE, space);
@@ -946,7 +965,12 @@ public class PcodeDataTypeManager {
 				((BuiltIn) type).getDecompilerDisplayName(displayLanguage));
 		}
 		else {
+			String name = type.getName();
+			String displayName = nameTransformer.simplify(name);
 			encoder.writeString(ATTRIB_NAME, type.getName());
+			if (!name.equals(displayName)) {
+				encoder.writeString(ATTRIB_LABEL, displayName);
+			}
 			long id = progDataTypes.getID(type);
 			if (id > 0) {
 				encoder.writeUnsignedInteger(ATTRIB_ID, id);

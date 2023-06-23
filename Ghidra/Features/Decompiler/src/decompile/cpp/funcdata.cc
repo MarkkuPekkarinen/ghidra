@@ -15,6 +15,8 @@
  */
 #include "funcdata.hh"
 
+namespace ghidra {
+
 AttributeId ATTRIB_NOCODE = AttributeId("nocode",84);
 
 ElementId ELEM_AST = ElementId("ast",115);
@@ -28,7 +30,7 @@ ElementId ELEM_VARNODES = ElementId("varnodes",119);
 /// \param addr is the entry address for the function
 /// \param sym is the symbol representing the function
 /// \param sz is the number of bytes (of code) in the function body
-Funcdata::Funcdata(const string &nm,Scope *scope,const Address &addr,FunctionSymbol *sym,int4 sz)
+Funcdata::Funcdata(const string &nm,const string &disp,Scope *scope,const Address &addr,FunctionSymbol *sym,int4 sz)
   : baseaddr(addr),
     funcp(),
     vbank(scope->getArch()),
@@ -45,6 +47,7 @@ Funcdata::Funcdata(const string &nm,Scope *scope,const Address &addr,FunctionSym
   glb = scope->getArch();
   minLanedSize = glb->getMinimumLanedRegisterSize();
   name = nm;
+  displayName = disp;
 
   size = sz;
   AddrSpace *stackid = glb->getStackSpace();
@@ -81,7 +84,8 @@ void Funcdata::clear(void)
 
 {				// Clear everything associated with decompilation (analysis)
 
-  flags &= ~(highlevel_on|blocks_generated|processing_started|typerecovery_on|restart_pending);
+  flags &= ~(highlevel_on|blocks_generated|processing_started|typerecovery_start|typerecovery_on|
+      double_precis_on|restart_pending);
   clean_up_index = 0;
   high_level_index = 0;
   cast_phase_index = 0;
@@ -100,6 +104,7 @@ void Funcdata::clear(void)
   clearJumpTables();
   // Do not clear overrides
   heritage.clear();
+  covermerge.clear();
 #ifdef OPACTION_DEBUG
   opactdbg_count = 0;
 #endif
@@ -174,8 +179,8 @@ void Funcdata::stopProcessing(void)
 bool Funcdata::startTypeRecovery(void)
 
 {
-  if ((flags & typerecovery_on)!=0) return false; // Already started
-  flags |= typerecovery_on;
+  if ((flags & typerecovery_start)!=0) return false; // Already started
+  flags |= typerecovery_start;
   return true;
 }
 
@@ -730,9 +735,13 @@ uint8 Funcdata::decode(Decoder &decoder)
       if (decoder.readBool())
 	flags |= no_code;
     }
+    else if (attribId == ATTRIB_LABEL)
+      displayName = decoder.readString();
   }
   if (name.size() == 0)
     throw LowlevelError("Missing function name");
+  if (displayName.size() == 0)
+    displayName = name;
   if (size == -1)
     throw LowlevelError("Missing function size");
   baseaddr = Address::decode( decoder );
@@ -884,6 +893,21 @@ bool Funcdata::setUnionField(const Datatype *parent,const PcodeOp *op,int4 slot,
     }
     (*res.first).second = resolve;
   }
+  if (op->code() == CPUI_MULTIEQUAL && slot >= 0) {
+    // Data-type propagation doesn't happen between MULTIEQUAL input slots holding the same Varnode
+    // So if this is a MULTIEQUAL, copy resolution to any other input slots holding the same Varnode
+    const Varnode *vn = op->getIn(slot);		// The Varnode being directly set
+    for(int4 i=0;i<op->numInput();++i) {
+      if (i == slot) continue;
+      if (op->getIn(i) != vn) continue;		// Check that different input slot holds same Varnode
+      ResolveEdge dupedge(parent,op,i);
+      res = unionMap.emplace(dupedge,resolve);
+      if (!res.second) {
+	if (!(*res.first).second.isLocked())
+	  (*res.first).second = resolve;
+      }
+    }
+  }
   return true;
 }
 
@@ -908,39 +932,22 @@ void Funcdata::forceFacingType(Datatype *parent,int4 fieldNum,PcodeOp *op,int4 s
   setUnionField(parent, op, slot, resolve);
 }
 
-/// \brief Copy a Varnode's read facing resolve to another PcodeOp
-///
-/// \param op is the new PcodeOp reading the Varnode
-/// \param slot is the new read slot
-/// \param oldOp is the PcodeOp to inherit the resolve from
-/// \param oldSlot is the old read slot
-void Funcdata::inheritReadResolution(const PcodeOp *op,int4 slot,PcodeOp *oldOp,int4 oldSlot)
-
-{
-  Datatype *ct = op->getIn(slot)->getType();
-  if (!ct->needsResolution()) return;
-  map<ResolveEdge,ResolvedUnion>::const_iterator iter;
-  ResolveEdge edge(ct,oldOp,oldSlot);
-  iter = unionMap.find(edge);
-  if (iter == unionMap.end()) return;
-  setUnionField(ct,op,slot,(*iter).second);
-}
-
-/// \brief Copy any write facing for a specific data-type from one PcodeOp to another
+/// \brief Copy a read/write facing resolution for a specific data-type from one PcodeOp to another
 ///
 /// \param parent is the data-type that needs resolution
-/// \param op is the destination PcodeOp
-/// \param oldOp is the source PcodeOp
-/// \return the resolution index that was copied or -1 if there was no resolution
-int4 Funcdata::inheritWriteResolution(Datatype *parent,const PcodeOp *op,PcodeOp *oldOp)
+/// \param op is the new reading PcodeOp
+/// \param slot is the new slot (-1 for write, >=0 for read)
+/// \param oldOp is the PcodeOp to inherit the resolution from
+/// \param oldSlot is the old slot (-1 for write, >=0 for read)
+int4 Funcdata::inheritResolution(Datatype *parent,const PcodeOp *op,int4 slot,PcodeOp *oldOp,int4 oldSlot)
 
 {
   map<ResolveEdge,ResolvedUnion>::const_iterator iter;
-  ResolveEdge edge(parent,oldOp,-1);
+  ResolveEdge edge(parent,oldOp,oldSlot);
   iter = unionMap.find(edge);
   if (iter == unionMap.end())
     return -1;
-  setUnionField(parent,op,-1,(*iter).second);
+  setUnionField(parent,op,slot,(*iter).second);
   return (*iter).second.getFieldNum();
 }
 
@@ -1059,3 +1066,4 @@ void Funcdata::debugPrintRange(int4 i) const
 
 #endif
 
+} // End namespace ghidra

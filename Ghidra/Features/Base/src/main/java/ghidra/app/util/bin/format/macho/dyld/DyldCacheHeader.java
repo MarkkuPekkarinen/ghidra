@@ -359,19 +359,19 @@ public class DyldCacheHeader implements StructConverter {
 	/**
 	 * Parses the structures referenced by this {@link DyldCacheHeader} from a file.
 	 * 
-	 * @param parseSymbols True if symbols should be parsed (could be very slow); otherwise, false
+	 * @param parseLocalSymbols True if local symbols should be parsed; otherwise, false
 	 * @param log The log
 	 * @param monitor A cancellable task monitor
 	 * @throws CancelledException if the user cancelled the operation
 	 */
-	public void parseFromFile(boolean parseSymbols, MessageLog log, TaskMonitor monitor)
+	public void parseFromFile(boolean parseLocalSymbols, MessageLog log, TaskMonitor monitor)
 			throws CancelledException {
 		if (headerType >= 1) {
 			parseMappingInfo(log, monitor);
 			parseImageInfo(log, monitor);
 		}
 		if (headerType >= 3) {
-			if (parseSymbols) {
+			if (parseLocalSymbols) {
 				parseLocalSymbolsInfo(log, monitor);
 			}
 		}
@@ -424,7 +424,7 @@ public class DyldCacheHeader implements StructConverter {
 			reader.setPointerIndex(mappingWithSlideOffset);
 			for (int i = 0; i < mappingWithSlideCount; ++i) {
 				cacheMappingAndSlideInfoList.add(new DyldCacheMappingAndSlideInfo(reader));
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -454,13 +454,14 @@ public class DyldCacheHeader implements StructConverter {
 	 * Marks up this {@link DyldCacheHeader} with data structures and comments.
 	 * 
 	 * @param program The {@link Program} to mark up
+	 * @param markupLocalSymbols True if the local symbols should be marked up; otherwise, false
 	 * @param space The {@link Program}'s {@link AddressSpace}
 	 * @param monitor A cancellable task monitor
 	 * @param log The log
 	 * @throws CancelledException if the user cancelled the operation
 	 */
-	public void markup(Program program, AddressSpace space, TaskMonitor monitor, MessageLog log)
-			throws CancelledException {
+	public void markup(Program program, boolean markupLocalSymbols, AddressSpace space,
+			TaskMonitor monitor, MessageLog log) throws CancelledException {
 		if (headerType >= 1) {
 			markupHeader(program, space, monitor, log);
 			markupMappingInfo(program, space, monitor, log);
@@ -471,7 +472,9 @@ public class DyldCacheHeader implements StructConverter {
 			markupSlideInfo(program, space, monitor, log);
 		}
 		if (headerType >= 3) {
-			markupLocalSymbolsInfo(program, space, monitor, log);
+			if (markupLocalSymbols) {
+				markupLocalSymbolsInfo(program, space, monitor, log);
+			}
 		}
 		if (headerType >= 6) {
 			markupBranchPools(program, space, monitor, log);
@@ -747,7 +750,7 @@ public class DyldCacheHeader implements StructConverter {
 			reader.setPointerIndex(mappingOffset);
 			for (int i = 0; i < mappingCount; ++i) {
 				mappingInfoList.add(new DyldCacheMappingInfo(reader));
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -769,7 +772,7 @@ public class DyldCacheHeader implements StructConverter {
 			reader.setPointerIndex(offset);
 			for (int i = 0; i < count; ++i) {
 				imageInfoList.add(new DyldCacheImageInfo(reader));
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -815,7 +818,7 @@ public class DyldCacheHeader implements StructConverter {
 			reader.setPointerIndex(branchPoolsOffset);
 			for (int i = 0; i < branchPoolsCount; ++i) {
 				branchPoolList.add(reader.readNextLong());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -834,7 +837,7 @@ public class DyldCacheHeader implements StructConverter {
 			reader.setPointerIndex(imagesTextOffset);
 			for (int i = 0; i < imagesTextCount; ++i) {
 				imageTextInfoList.add(new DyldCacheImageTextInfo(reader));
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -854,7 +857,7 @@ public class DyldCacheHeader implements StructConverter {
 			reader.setPointerIndex(subCacheArrayOffset);
 			for (int i = 0; i < subCacheArrayCount; ++i) {
 				subcacheEntryList.add(new DyldSubcacheEntry(reader, headerType));
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -891,7 +894,7 @@ public class DyldCacheHeader implements StructConverter {
 		monitor.initialize(1);
 		try {
 			DataUtilities.createData(program, space.getAddress(getBaseAddress()), toDataType(), -1,
-				false, DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
+				DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 			monitor.incrementProgress(1);
 		}
 		catch (CodeUnitInsertionException | DuplicateNameException | IOException e) {
@@ -908,9 +911,9 @@ public class DyldCacheHeader implements StructConverter {
 			Address addr = fileOffsetToAddr(mappingOffset, program, space);
 			for (DyldCacheMappingInfo mappingInfo : mappingInfoList) {
 				Data d = DataUtilities.createData(program, addr, mappingInfo.toDataType(), -1,
-					false, DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
+					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				addr = addr.add(d.getLength());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -928,9 +931,9 @@ public class DyldCacheHeader implements StructConverter {
 			Address addr = fileOffsetToAddr(mappingWithSlideOffset, program, space);
 			for (DyldCacheMappingAndSlideInfo mappingInfo : cacheMappingAndSlideInfoList) {
 				Data d = DataUtilities.createData(program, addr, mappingInfo.toDataType(), -1,
-					false, DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
+					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				addr = addr.add(d.getLength());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -948,11 +951,11 @@ public class DyldCacheHeader implements StructConverter {
 			Address addr = fileOffsetToAddr(imagesOffset != 0 ? imagesOffset : imagesOffsetOld,
 				program, space);
 			for (DyldCacheImageInfo imageInfo : imageInfoList) {
-				Data d = DataUtilities.createData(program, addr, imageInfo.toDataType(), -1, false,
+				Data d = DataUtilities.createData(program, addr, imageInfo.toDataType(), -1,
 					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				program.getListing().setComment(addr, CodeUnit.EOL_COMMENT, imageInfo.getPath());
 				addr = addr.add(d.getLength());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -987,7 +990,7 @@ public class DyldCacheHeader implements StructConverter {
 			if (slideInfoList.size() > 0) {
 				for (DyldCacheSlideInfoCommon info : slideInfoList) {
 					Address addr = fileOffsetToAddr(info.getSlideInfoOffset(), program, space);
-					DataUtilities.createData(program, addr, info.toDataType(), -1, false,
+					DataUtilities.createData(program, addr, info.toDataType(), -1,
 						DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				}
 			}
@@ -1006,7 +1009,7 @@ public class DyldCacheHeader implements StructConverter {
 		try {
 			if (localSymbolsInfo != null) {
 				Address addr = fileOffsetToAddr(localSymbolsOffset, program, space);
-				DataUtilities.createData(program, addr, localSymbolsInfo.toDataType(), -1, false,
+				DataUtilities.createData(program, addr, localSymbolsInfo.toDataType(), -1,
 					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				localSymbolsInfo.markup(program, addr, monitor, log);
 			}
@@ -1026,10 +1029,10 @@ public class DyldCacheHeader implements StructConverter {
 			Address addr = fileOffsetToAddr(branchPoolsOffset, program, space);
 			for (Long element : branchPoolList) {
 				Data d = DataUtilities.createData(program, addr, Pointer64DataType.dataType,
-					Pointer64DataType.dataType.getLength(), false,
+					Pointer64DataType.dataType.getLength(),
 					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				addr = addr.add(d.getLength());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -1046,7 +1049,7 @@ public class DyldCacheHeader implements StructConverter {
 		try {
 			if (accelerateInfo != null && headerType < 9) {
 				Address addr = space.getAddress(accelerateInfoAddr);
-				DataUtilities.createData(program, addr, accelerateInfo.toDataType(), -1, false,
+				DataUtilities.createData(program, addr, accelerateInfo.toDataType(), -1,
 					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				accelerateInfo.markup(program, addr, monitor, log);
 			}
@@ -1066,11 +1069,11 @@ public class DyldCacheHeader implements StructConverter {
 			Address addr = fileOffsetToAddr(imagesTextOffset, program, space);
 			for (DyldCacheImageTextInfo imageTextInfo : imageTextInfoList) {
 				Data d = DataUtilities.createData(program, addr, imageTextInfo.toDataType(), -1,
-					false, DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
+					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				program.getListing()
 						.setComment(addr, CodeUnit.EOL_COMMENT, imageTextInfo.getPath());
 				addr = addr.add(d.getLength());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}
@@ -1088,9 +1091,9 @@ public class DyldCacheHeader implements StructConverter {
 			Address addr = fileOffsetToAddr(subCacheArrayOffset, program, space);
 			for (DyldSubcacheEntry subcacheEntry : subcacheEntryList) {
 				Data d = DataUtilities.createData(program, addr, subcacheEntry.toDataType(), -1,
-					false, DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
+					DataUtilities.ClearDataMode.CHECK_FOR_SPACE);
 				addr = addr.add(d.getLength());
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				monitor.incrementProgress(1);
 			}
 		}

@@ -41,7 +41,7 @@ import ghidra.program.util.ProgramChangeRecord;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
-import ghidra.util.task.TaskMonitorAdapter;
+import ghidra.util.task.TaskMonitor;
 
 /**
  *
@@ -75,7 +75,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		transactionID = program.startTransaction("Test");
 		program.getMemory()
 				.createInitializedBlock("test", addr(100), 500, (byte) 0,
-					TaskMonitorAdapter.DUMMY_MONITOR, false);
+					TaskMonitor.DUMMY, false);
 		functionManager = program.getFunctionManager();
 	}
 
@@ -159,7 +159,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertEquals(SourceType.USER_DEFINED, f.getSymbol().getSource());
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		Symbol s = (Symbol) lastCaptureRecord.getObject();
@@ -240,7 +240,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertEquals(asv, f.getBody());
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		Function localF = (Function) lastCaptureRecord.getObject();
@@ -271,7 +271,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertEquals(asv, f.getBody());
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		Function localF = (Function) lastCaptureRecord.getObject();
@@ -574,7 +574,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertTrue(dt.isEquivalent(f.getReturnType()));
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 	}
 
@@ -1248,7 +1248,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		}
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		Parameter[] params = f.getParameters();
@@ -1261,7 +1261,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		// delete the typedef data type
 		localTransactionID = program.startTransaction("test");
 		try {
-			program.getDataTypeManager().remove(td, TaskMonitorAdapter.DUMMY_MONITOR);
+			program.getDataTypeManager().remove(td, TaskMonitor.DUMMY);
 		}
 		finally {
 			program.endTransaction(localTransactionID, true);
@@ -1286,7 +1286,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertEquals(20, f.getStackPurgeSize());
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 	}
 
@@ -1308,7 +1308,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertTrue(f.addParameter(stackVar, SourceType.USER_DEFINED) instanceof ParameterDB);// causes both symbol created and function change events
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		stackVar = new LocalVariableImpl("TestStack1", dt[1], 8, program);
@@ -1319,7 +1319,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		assertTrue(f.addParameter(stackVar, SourceType.USER_DEFINED) instanceof ParameterDB);// causes both symbol created and function change events
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		stackVar = new LocalVariableImpl("TestStack2", dt[2], 12, program);
@@ -1792,7 +1792,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f.setInline(true);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1804,7 +1804,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f.setInline(false);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1825,7 +1825,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f.setNoReturn(true);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1837,7 +1837,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f.setNoReturn(false);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1857,7 +1857,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f.setCallFixup("TEST");
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1869,7 +1869,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f.setCallFixup(null);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1902,7 +1902,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 			SourceType.USER_DEFINED);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 		assertEquals(1, captureRecords.size());
 
@@ -1912,7 +1912,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 			SourceType.USER_DEFINED);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNull(lastCaptureRecord);// no event expected for function "foo2" (not yet a thunk)
 
 		functionManager.invalidateCache(false);
@@ -1926,7 +1926,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f2.setThunkedFunction(f1);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 
 		functionManager.invalidateCache(false);
@@ -1949,7 +1949,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f1.setName("fum", SourceType.USER_DEFINED);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 		assertEquals(2, captureRecords.size());
 
@@ -1972,7 +1972,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 			SourceType.USER_DEFINED);// add to "thunked" func
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 		assertEquals(2, captureRecords.size());
 
@@ -1994,7 +1994,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 			SourceType.USER_DEFINED);// add to thunk
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 		assertEquals(2, captureRecords.size());
 
@@ -2015,7 +2015,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f2.setName("test", SourceType.USER_DEFINED);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 		assertEquals(1, captureRecords.size());
 
@@ -2037,7 +2037,7 @@ public class FunctionDBTest extends AbstractGhidraHeadedIntegrationTest
 		f2.setName(null, SourceType.DEFAULT);
 
 		program.flushEvents();
-		waitForPostedSwingRunnables();
+		waitForSwing();
 		assertNotNull(lastCaptureRecord);
 		assertEquals(2, captureRecords.size());
 

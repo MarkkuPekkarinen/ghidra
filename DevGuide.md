@@ -32,40 +32,40 @@ authors' names directly in the source code, so it is discouraged.
 Download non-Maven Central dependencies.  This creates a `dependencies` directory in the repository
 root.
 ```
-$ gradle -I gradle/support/fetchDependencies.gradle init
+gradle -I gradle/support/fetchDependencies.gradle init
 ```
 
 Download Maven Central dependencies and setup the repository for development.  By default, these 
 will be stored at `$HOME/.gradle/`.
 ```
-$ gradle prepdev
+gradle prepdev
 ```
 
 Generate nested Eclipse project files which can then be imported into Eclipse as "existing 
 projects".
 ```
-$ gradle cleanEclipse eclipse
+gradle cleanEclipse eclipse
 ```
 
 Build native components for your current platform.  Requires native tool chains to be present.
 ```
-$ gradle buildNatives
+gradle buildNatives
 ```
 
 Manually compile sleigh files. Ghidra will also do this at runtime when necessary.
 ```
-$ gradle sleighCompile
+gradle sleighCompile
 ```
 
 Build Javadoc:
 ```
-$ gradle createJavadocs
+gradle createJavadocs
 ```
 
 Build Ghidra to `build/dist`.  This will be a distribution intended only to run on the platform on
 which it was built.
 ```
-$ gradle buildGhidra
+gradle buildGhidra
 ```
 
 **Tip:**  You may want to skip certain Gradle tasks to speed up your build, or to deal with
@@ -73,8 +73,13 @@ a problem later.  For example, perhaps you added some new source files and the b
 because of unresolved IP header issues.  You can use the Gradle `-x <task>` command line argument to
 prevent specific tasks from running:
 ```
-$ gradle buildGhidra -x ip
+gradle buildGhidra -x ip
 ```
+
+## Known Issues
+* There is a known issue in Gradle that can prevent it from discovering native toolchains on Linux 
+  if a non-English system locale is being used. As a workaround, set the following environment 
+  variable prior to running your Gradle task: `LC_MESSAGES=en_US.UTF-8`
 
 ## Offline Development Environment
 Sometimes you may want to move the Ghidra repository to an offline network and do development there.
@@ -98,7 +103,7 @@ It is also included in the _Eclipse IDE for RCP and RAP Developers_. To generate
 Eclipse projects, execute:
 
 ```
-$ gradle eclipse -PeclipsePDE
+gradle eclipse -PeclipsePDE
 ```
 
 Import the newly generated GhidraDev projects into an Eclipse that supports this type of project. 
@@ -112,25 +117,25 @@ for instructions on how to build the GhidraDev plugin.
 ## Running tests
 To run unit tests, do:
 ```
-$ gradle unitTestReport
+gradle unitTestReport
 ```
 
 For more complex integration tests, do:
 ```
-$ gradle integrationTest
+gradle integrationTest
 ```
 
 For running both unit and integration tests and to generate a report do:
 ```
-$ gradle combinedTestReport
+gradle combinedTestReport
 ```
 
 ## Setup build in CI
 
 For running tests in headless mode on Linux, in a CI environment, or in Docker, first do:
 ```
-$ Xvfb :99 -nolisten tcp &
-$ export DISPLAY=:99
+Xvfb :99 -nolisten tcp &
+export DISPLAY=:99
 ```
 This is required to make AWT happy.
 
@@ -247,7 +252,7 @@ see if we are already developing one. Of course, in time you might also search t
 if others are developing one. There are quite a few caveats and gotchas, the most notable being that
 this interface is still in quite a bit of flux. When things go wrong, it could be because of, 
 without limitation: 1) a bug on your part, 2) a bug on our part, 3) a design flaw in the interfaces,
-or 4) a bug in the debugger/API your adapting. We are still in the process of writing up this
+or 4) a bug in the debugger/API you're adapting. We are still in the process of writing up this
 documentation. In the meantime, we recommend using the GDB and dbgeng.dll agents as examples.
 
 You'll also need to provide launcher(s) so that Ghidra knows how to configure and start your 
@@ -274,8 +279,8 @@ the existing ones for examples.
 In general, to write a new opinion, you need to know: 1) What the platform is called (including 
 variant names) by the debugger, 2) What the processor language is called by Ghidra, 3) If 
 applicable, the mapping of target address spaces into Ghidra's address spaces, 4) If applicable, the
-mapping of target register names to those in Ghidra's processor language.In most cases (3) and (4) 
-are already implemented by default mappers, so you can use those same mappers in your opinion.Once 
+mapping of target register names to those in Ghidra's processor language. In most cases (3) and (4) 
+are already implemented by default mappers, so you can use those same mappers in your opinion. Once 
 you have the opinion written, you can try debugging and recording a target. If Ghidra finds your 
 opinion applicable to that target, it will attempt to record, and then you can work out the kinds 
 from there. Again, we have a bit of documentation to do regarding common pitfalls.
@@ -283,7 +288,7 @@ from there. Again, we have a bit of documentation to do regarding common pitfall
 ### Emulation
 
 The most obvious integration path for 3rd-party emulators is to write a "connector." However, p-code
-emulation is now an integral feature of the Ghidra UI, and it has a fairly accessible API. Namely 
+emulation is now an integral feature of the Ghidra UI, and it has a fairly accessible API. Namely, 
 for interpolation between machines states recorded in a trace, and extrapolation into future machine
 states. Integration of such emulators may still be useful to you, but we recommend trying the p-code
 emulator to see if it suits your needs for emulation in Ghidra before pursuing integration of 
@@ -298,7 +303,7 @@ To set up your environment, in addition to the usual Gradle tasks, process the P
 specification for GADP:
 
 ```bash
-$ gradle generateProto
+gradle generateProto
 ```
 
 If you already have an environment set up in Eclipse, please re-run `gradle prepDev eclipse` and 

@@ -26,7 +26,6 @@ import ghidra.app.util.bin.format.dwarf4.next.sectionprovider.DWARFSectionProvid
 import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.data.BuiltInDataTypeManager;
 import ghidra.program.model.lang.Language;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
@@ -82,6 +81,10 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 	private static final String OPTION_OUTPUT_FUNC_SIGS_DESC =
 		"Create function signature data types for each function encountered in the DWARF debug " +
 			"data.";
+
+	private static final String OPTION_TRY_PACK_STRUCTS = "Try To Pack Structs";
+	private static final String OPTION_TRY_PACK_STRUCTS_DESC =
+		"Try to pack structure/union data types.";
 
 	private static final String DWARF_ANALYZER_NAME = "DWARF";
 	private static final String DWARF_ANALYZER_DESCRIPTION =
@@ -164,7 +167,7 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 	public boolean added(Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
 			throws CancelledException {
 
-		long txId = program.getCurrentTransaction().getID();
+		long txId = program.getCurrentTransactionInfo().getID();
 		if (txId == lastTxId) {
 			// Only run once per analysis session - as denoted by being in the same transaction
 			return true;
@@ -192,8 +195,7 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 							"], function information may be incorrect / incomplete.");
 				}
 
-				DWARFParser dp =
-					new DWARFParser(prog, BuiltInDataTypeManager.getDataTypeManager(), monitor);
+				DWARFParser dp = new DWARFParser(prog, monitor);
 				DWARFImportSummary parseResults = dp.parse();
 				parseResults.logSummaryResults();
 			}
@@ -212,8 +214,8 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 				"Manually re-run the DWARF analyzer after adjusting the options or start it via Dwarf_ExtractorScript");
 		}
 		catch (DWARFException | IOException e) {
-			log.appendMsg("Error during DWARFAnalyzer import: " + e.getMessage());
-			Msg.error(this, "Error during DWARFAnalyzer import: " + e.getMessage(), e);
+			log.appendMsg("Error during DWARFAnalyzer import: " + e);
+			Msg.error(this, "Error during DWARFAnalyzer import: ", e);
 		}
 		return false;
 	}
@@ -265,6 +267,9 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 
 		options.registerOption(OPTION_OUTPUT_FUNC_SIGS, importOptions.isCreateFuncSignatures(),
 			null, OPTION_OUTPUT_FUNC_SIGS_DESC);
+
+		options.registerOption(OPTION_TRY_PACK_STRUCTS, importOptions.isTryPackStructs(),
+			null, OPTION_TRY_PACK_STRUCTS_DESC);
 	}
 
 	@Override
@@ -294,6 +299,8 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 			options.getInt(OPTION_NAME_LENGTH_CUTOFF, importOptions.getNameLengthCutoff()));
 		importOptions.setCreateFuncSignatures(
 			options.getBoolean(OPTION_OUTPUT_FUNC_SIGS, importOptions.isCreateFuncSignatures()));
+		importOptions.setTryPackDataTypes(
+			options.getBoolean(OPTION_TRY_PACK_STRUCTS, importOptions.isTryPackStructs()));
 	}
 
 }

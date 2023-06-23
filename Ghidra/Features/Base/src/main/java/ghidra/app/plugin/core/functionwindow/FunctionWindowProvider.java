@@ -25,6 +25,8 @@ import javax.swing.*;
 import javax.swing.table.*;
 
 import docking.ActionContext;
+import docking.DefaultActionContext;
+import generic.theme.GIcon;
 import ghidra.app.services.GoToService;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.program.model.address.Address;
@@ -32,14 +34,13 @@ import ghidra.program.model.listing.*;
 import ghidra.program.util.ProgramSelection;
 import ghidra.util.HelpLocation;
 import ghidra.util.table.*;
-import resources.ResourceManager;
 
 /**
  * Provider that displays all functions in the selected program
  */
 public class FunctionWindowProvider extends ComponentProviderAdapter {
 
-	public static final ImageIcon icon = ResourceManager.loadImage("images/functions.gif");
+	public static final Icon ICON = new GIcon("icon.plugin.functionwindow.provider");
 
 	private FunctionWindowPlugin plugin;
 	private GhidraTable functionTable;
@@ -58,7 +59,7 @@ public class FunctionWindowProvider extends ComponentProviderAdapter {
 		super(plugin.getTool(), "Functions Window", plugin.getName());
 		setTitle("Functions");
 		this.plugin = plugin;
-		setIcon(icon);
+		setIcon(ICON);
 		setHelpLocation(new HelpLocation(plugin.getName(), plugin.getName()));
 		tool = plugin.getTool();
 		mainPanel = createWorkPanel();
@@ -77,7 +78,7 @@ public class FunctionWindowProvider extends ComponentProviderAdapter {
 
 	@Override
 	public ActionContext getActionContext(MouseEvent event) {
-		return new ActionContext(this, functionTable);
+		return new DefaultActionContext(this, functionTable);
 	}
 
 	@Override
