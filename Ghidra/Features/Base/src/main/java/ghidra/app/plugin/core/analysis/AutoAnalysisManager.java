@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 package ghidra.app.plugin.core.analysis;
+
+import static ghidra.framework.model.DomainObjectEvent.*;
+import static ghidra.program.util.ProgramEvent.*;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
@@ -57,7 +60,7 @@ import ghidra.util.task.*;
  * Provides support for auto analysis tasks.
  * Manages a pipeline or priority of tasks to run given some event has occurred.
  */
-public class AutoAnalysisManager implements DomainObjectListener, DomainObjectClosedListener {
+public class AutoAnalysisManager {
 
 	/**
 	 * The name of the shared thread pool that analyzers can uses to do parallel processing.
@@ -105,7 +108,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 	//private Integer currentTaskPriority = null;
 	//private Stack<Integer> taskPriorityStack = new Stack<Integer>();
 
-	private PriorityQueue<BackgroundCommand> queue = new PriorityQueue<>();
+	private PriorityQueue<BackgroundCommand<Program>> queue = new PriorityQueue<>();
 	private Map<String, Long> timedTasks = new HashMap<>();
 	// used for testing and performance monitoring; accessed via reflection
 	private Map<String, Long> cumulativeTasks = new HashMap<>();
@@ -137,6 +140,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 	private List<AutoAnalysisManagerListener> listeners = new CopyOnWriteArrayList<>();
 
 	private EventQueueID eventQueueID;
+	private DomainObjectListener domainObjectListener = createDomainObjectListener();
 
 	/**
 	 * Creates a new instance of the plugin giving it the tool that
@@ -144,8 +148,8 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 	 */
 	private AutoAnalysisManager(Program program) {
 		this.program = program;
-		eventQueueID = program.createPrivateEventQueue(this, 500);
-		program.addCloseListener(this);
+		eventQueueID = program.createPrivateEventQueue(domainObjectListener, 500);
+		program.addCloseListener(dobj -> dispose());
 		initializeAnalyzers();
 	}
 
@@ -227,7 +231,8 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		Options options = program.getOptions(Program.ANALYSIS_PROPERTIES);
 		analyzer.optionsChanged(options.getOptions(analyzer.getName()), getProgram());
 
-		BackgroundCommand cmd = new OneShotAnalysisCommand(analyzer, set, log);
+		OneShotAnalysisCommand cmd = new OneShotAnalysisCommand(analyzer, set, log);
+		addListener(cmd);
 		schedule(cmd, analyzer.getPriority().priority());
 	}
 
@@ -346,137 +351,103 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		debugOn = b;
 	}
 
-	private boolean isFunctionModifierChange(ProgramChangeRecord functionChangeRecord) {
-		int subType = functionChangeRecord.getSubEventType();
-		return subType == ChangeManager.FUNCTION_CHANGED_THUNK ||
-			subType == ChangeManager.FUNCTION_CHANGED_INLINE ||
-			subType == ChangeManager.FUNCTION_CHANGED_NORETURN ||
-			subType == ChangeManager.FUNCTION_CHANGED_CALL_FIXUP ||
-			subType == ChangeManager.FUNCTION_CHANGED_PURGE;
+//	private void handleSymbolAddedRenamed(ProgramChangeRecord pcr) {
+//		// if a function is created using the current name, don't throw symbol added/renamed
+//		// split variable changed/added from SYMBOL added - change record is already different
+//		if (pcr.getObject() != null && pcr.getObject() instanceof VariableSymbolDB) {
+//			break;
+//		}
+//		Symbol sym = null;
+//		Object newValue = pcr.getNewValue();
+//		if (newValue != null && newValue instanceof Symbol) {
+//			sym = (Symbol) newValue;
+//		}
+//		else if (pcr.getObject() != null && pcr.getObject() instanceof Symbol) {
+//			sym = (Symbol) pcr.getObject();
+//		}
+//		if (sym == null) {
+//			break;
+//		}
+//		SymbolType symbolType = sym.getSymbolType();
+//		if ((symbolType == SymbolType.CODE || symbolType == SymbolType.FUNCTION) &&
+//			sym.getSource() != SourceType.DEFAULT) {
+//			symbolTasks.notifyAdded(sym.getAddress());
+//		}
+//
+//	}
+
+	private void handleCodeAdded(ProgramChangeRecord rec) {
+		if (rec.getNewValue() instanceof Data) {
+			AddressSet addressSet = new AddressSet(rec.getStart(), rec.getEnd());
+			dataDefined(addressSet);
+		}
 	}
 
-	private boolean isFunctionSignatureChange(ProgramChangeRecord functionChangeRecord) {
-		int subType = functionChangeRecord.getSubEventType();
-		return subType == ChangeManager.FUNCTION_CHANGED_PARAMETERS ||
-			subType == ChangeManager.FUNCTION_CHANGED_RETURN;
+	private void handleOverrides(ProgramChangeRecord rec) {
+		// TODO: not sure if this should be done this way or explicitly
+		// via the application commands (this is inconsistent with other
+		// codeDefined cases which do not rely on change events (e.g., disassembly)
+		codeDefined(new AddressSet(rec.getStart()));
 	}
 
-	@Override
-	public void domainObjectClosed() {
-		dispose();
+	private void handleFunctionAddedOrBodyChanged(ProgramChangeRecord rec) {
+		Function func = (Function) rec.getObject();
+		if (!func.isExternal()) {
+			functionDefined(func.getEntryPoint());
+		}
 	}
 
-	@Override
-	public void domainObjectChanged(DomainObjectChangedEvent ev) {
+	private void handleFunctionChanged(FunctionChangeRecord rec) {
+		Address entry = rec.getFunction().getEntryPoint();
+		if (rec.isFunctionSignatureChange()) {
+			functionSignatureChanged(entry);
+		}
+		else if (rec.isFunctionModifierChange()) {
+			functionModifierChanged(entry);
+		}
+	}
+
+	private void resetOptions() {
+		initializeOptions();
+		Preferences.store();
+	}
+
+	private DomainObjectListener createDomainObjectListener() {
+		//@formatter:off
+		return new DomainObjectListenerBuilder(this)
+			.ignoreWhen(this::shouldIgnoreEvent)
+			.any(LANGUAGE_CHANGED)
+				.call(this::initializeAnalyzers)
+			.any(RESTORED, PROPERTY_CHANGED)
+				.call(this::resetOptions)
+			.with(FunctionChangeRecord.class)
+				.each(FUNCTION_CHANGED)
+					.call(r -> handleFunctionChanged(r))
+			.with(ProgramChangeRecord.class)
+				.each(FUNCTION_ADDED, FUNCTION_BODY_CHANGED)
+					.call(r -> handleFunctionAddedOrBodyChanged(r))
+				.each(FUNCTION_REMOVED)
+					.call( r -> functionTasks.notifyRemoved(r.getStart()))
+				.each(FALLTHROUGH_CHANGED, FLOW_OVERRIDE_CHANGED, LENGTH_OVERRIDE_CHANGED)
+					.call(r -> handleOverrides(r))
+				.each(CODE_ADDED)
+					.call(r -> handleCodeAdded(r))
+//				.each(SYMBOL_ADDED, SYMBOL_RENAMED)  // TODO add symbol analyzer type
+//					.call(r -> handleSymbolAddedRenamed(r)
+			.build();
+		//@formatter:on
+	}
+
+	private boolean shouldIgnoreEvent() {
 		if (program == null) {
-			return;
+			return true;
 		}
 		else if (program.isClosed()) {
 			cancelQueuedTasks();
 			dispose();
-			return;
+			return true;
 		}
-
-		if (ignoreChanges) {
-			return;
-		}
-
-		int eventCnt = ev.numRecords();
-		boolean optionsChanged = false;
-		for (int i = 0; i < eventCnt; ++i) {
-			DomainObjectChangeRecord doRecord = ev.getChangeRecord(i);
-			if (doRecord.getEventType() == ChangeManager.DOCR_LANGUAGE_CHANGED) {
-				initializeAnalyzers();
-			}
-
-			int eventType = doRecord.getEventType();
-			ProgramChangeRecord pcr;
-
-			switch (eventType) {
-				case DomainObject.DO_OBJECT_RESTORED:
-				case DomainObject.DO_PROPERTY_CHANGED:
-					if (!optionsChanged) {
-						initializeOptions();
-						Preferences.store();
-						optionsChanged = true;
-					}
-					break;
-				// TODO: Add Symbol analyzer type
-//				case ChangeManager.DOCR_SYMBOL_ADDED:
-//				case ChangeManager.DOCR_SYMBOL_RENAMED:
-//					pcr = (ProgramChangeRecord) doRecord;
-//					// if a function is created using the current name, don't throw symbol added/renamed
-//					// split variable changed/added from SYMBOL added - change record is already different
-//					if (pcr.getObject() != null && pcr.getObject() instanceof VariableSymbolDB) {
-//						break;
-//					}
-//					Symbol sym = null;
-//					Object newValue = pcr.getNewValue();
-//					if (newValue != null && newValue instanceof Symbol) {
-//						sym = (Symbol) newValue;
-//					} else if (pcr.getObject() != null && pcr.getObject() instanceof Symbol) {
-//						sym = (Symbol) pcr.getObject();
-//					}
-//					if (sym == null) {
-//						break;
-//					}
-//					SymbolType symbolType = sym.getSymbolType();
-//					if ((symbolType == SymbolType.CODE || symbolType == SymbolType.FUNCTION) && sym.getSource() != SourceType.DEFAULT) {
-//						symbolTasks.notifyAdded(sym.getAddress());
-//					}
-//					break;
-				case ChangeManager.DOCR_FUNCTION_CHANGED:
-					pcr = (ProgramChangeRecord) doRecord;
-					Function func = (Function) pcr.getObject();
-					if (isFunctionSignatureChange(pcr)) {
-						functionSignatureChanged(func.getEntryPoint());
-					}
-					else if (isFunctionModifierChange(pcr)) {
-						functionModifierChanged(func.getEntryPoint());
-					}
-					break;
-				case ChangeManager.DOCR_FUNCTION_ADDED:
-				case ChangeManager.DOCR_FUNCTION_BODY_CHANGED:
-					pcr = (ProgramChangeRecord) doRecord;
-					func = (Function) pcr.getObject();
-					if (!func.isExternal()) {
-						functionDefined(func.getEntryPoint());
-					}
-					break;
-				case ChangeManager.DOCR_FUNCTION_REMOVED:
-					pcr = (ProgramChangeRecord) doRecord;
-					Address oldEntry = pcr.getStart();
-					functionTasks.notifyRemoved(oldEntry);
-					break;
-				case ChangeManager.DOCR_FALLTHROUGH_CHANGED:
-				case ChangeManager.DOCR_FLOWOVERRIDE_CHANGED:
-					// TODO: not sure if this should be done this way or explicitly
-					// via the application commands (this is inconsistent with other
-					// codeDefined cases which do not rely on change events (e.g., disassembly)
-					pcr = (ProgramChangeRecord) doRecord;
-					codeDefined(new AddressSet(pcr.getStart()));
-					break;
-// FIXME: must resolve cyclic issues before this can be done
-//				case ChangeManager.DOCR_MEM_REFERENCE_ADDED:
-//					// Allow high-priority reference-driven code analyzers a
-//					// shot at processing computed flows determined during
-//					// constant propagation.
-//					pcr = (ProgramChangeRecord) doRecord;
-//					Reference ref = (Reference) pcr.getNewValue();
-//					RefType refType = ref.getReferenceType();
-//					if (refType.isComputed()) {
-//						codeDefined(ref.getFromAddress());
-//					}
-//					break;
-				case ChangeManager.DOCR_CODE_ADDED:
-					pcr = (ProgramChangeRecord) doRecord;
-					if (pcr.getNewValue() instanceof Data) {
-						AddressSet addressSet = new AddressSet(pcr.getStart(), pcr.getEnd());
-						dataDefined(addressSet);
-					}
-					break;
-			}
-		}
+		return ignoreChanges;
 	}
 
 	/**
@@ -673,15 +644,18 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 
 	private class AnalysisTaskWrapper {
 
-		private final BackgroundCommand task;
+		private final BackgroundCommand<Program> task;
 		Integer taskPriority;
 
 		private long timeAccumulator;
 		private long startTime;
+		private MessageLog messageLog;
 
-		AnalysisTaskWrapper(BackgroundCommand task, int taskPriority) {
+		AnalysisTaskWrapper(BackgroundCommand<Program> task, int taskPriority,
+				MessageLog messageLog) {
 			this.task = task;
 			this.taskPriority = taskPriority;
+			this.messageLog = messageLog;
 		}
 
 		void run(Program p, TaskMonitor monitor) {
@@ -694,12 +668,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 					throw th;
 				}
 				if (!p.isClosed() && !p.hasTerminatedTransaction()) {
-					String msg = th.getMessage();
-					if (msg == null) {
-						msg = "";
-					}
-					Msg.showError(this, null, "Analyzer Error",
-						"Analysis Task: " + task.getName() + " - " + msg, th);
+					messageLog.appendException(th);
 				}
 			}
 			long timeDiff = timeAccumulator + (System.currentTimeMillis() - startTime);
@@ -835,7 +804,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 			return null;
 		}
 		int nextTaskPriority = queue.getFirstPriority();
-		return new AnalysisTaskWrapper(queue.removeFirst(), nextTaskPriority);
+		return new AnalysisTaskWrapper(queue.removeFirst(), nextTaskPriority, log);
 	}
 
 	public void addListener(AutoAnalysisManagerListener listener) {
@@ -875,7 +844,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 	 */
 	public synchronized void cancelQueuedTasks() {
 		while (!queue.isEmpty()) {
-			BackgroundCommand cmd = queue.getFirst();
+			BackgroundCommand<Program> cmd = queue.getFirst();
 			if (cmd instanceof AnalysisWorkerCommand) {
 				AnalysisWorkerCommand workerCmd = (AnalysisWorkerCommand) cmd;
 				if (!workerCmd.canCancel()) {
@@ -887,7 +856,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		}
 	}
 
-	synchronized boolean schedule(BackgroundCommand cmd, int priority) {
+	synchronized boolean schedule(BackgroundCommand<Program> cmd, int priority) {
 
 		if (cmd == null) {
 			throw new IllegalArgumentException("Can't schedule a null command");
@@ -961,10 +930,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		}
 
 		PluginTool anyTool = null;
-		Iterator<PluginTool> iterator = toolSet.iterator();
-		while (iterator.hasNext()) {
-			PluginTool tool = iterator.next();
-
+		for (PluginTool tool : toolSet) {
 			anyTool = tool;
 			JFrame toolFrame = tool.getToolFrame();
 			if (toolFrame != null && toolFrame.isActive()) {
@@ -999,8 +965,6 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		if (localProgram == null) {
 			return; // already been disposed()
 		}
-
-		localProgram.removeListener(this);
 
 		synchronized (this) { // sync against multiple dispose calls
 			if (service != null) {
@@ -1218,18 +1182,15 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 	}
 
 	/**
-	 * Get the time taken by a named task
-	 * The names of tasks that have run can be retrieved using getTimedTasks
+	 * {@return the time taken by a named task, or {@code -1} if the named task could not be found}
+	 * <p>
+	 * The names of tasks that have run can be retrieved using {@link #getTimedTasks()}.
+	 * 
 	 * @param map the times by task names
 	 * @param taskName the task name
-	 * @return the time taken by a named task
 	 */
 	public long getTaskTime(Map<String, Long> map, String taskName) {
-		Long time = map.get(taskName);
-		if (time == null) {
-			return -1;
-		}
-		return time.longValue();
+		return map.getOrDefault(taskName, -1L);
 	}
 
 	/**
@@ -1284,9 +1245,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 			long taskTime = getTaskTime(timedTasks, element);
 			double totalTime = taskTime / 1000.00;
 
-			String partTime = (((int) (totalTime * 1000.0)) % 1000) + "";
-			String secString =
-				((int) totalTime) + "." + "000".substring(partTime.length()) + partTime + " secs";
+			String secString = String.format("%.3f secs", totalTime);
 			int testLen = element.length() + secString.length();
 			if (testLen > spacer.length()) {
 				testLen = spacer.length() - 5;
@@ -1316,6 +1275,11 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 
 		Program p = program; // program may get cleared by domain object change event
 		if (p == null || p.isClosed()) {
+			return;
+		}
+
+		// Save task times for temporary program or if saveable changes have been made
+		if (!p.isTemporary() && !p.isChanged()) {
 			return;
 		}
 
@@ -1558,7 +1522,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		}
 
 		@Override
-		public void checkCanceled() throws CancelledException {
+		public void checkCancelled() throws CancelledException {
 			primaryMonitor.checkCancelled();
 			secondaryMonitor.checkCancelled();
 		}
@@ -1587,7 +1551,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 
 		@Override
 		public void removeCancelledListener(CancelledListener listener) {
-			primaryMonitor.addCancelledListener(listener);
+			primaryMonitor.removeCancelledListener(listener);
 		}
 
 		@Override
@@ -1602,7 +1566,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		}
 
 		@Override
-		public void clearCanceled() {
+		public void clearCancelled() {
 			primaryMonitor.clearCancelled();
 			secondaryMonitor.clearCancelled();
 		}
@@ -1613,7 +1577,8 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 	 * In a Headed environment a modal task dialog will be used to block user input if the
 	 * worker was scheduled with analyzeChanges==false
 	 */
-	private class AnalysisWorkerCommand extends BackgroundCommand implements CancelledListener {
+	private class AnalysisWorkerCommand extends BackgroundCommand<Program>
+			implements CancelledListener {
 
 		private AnalysisWorker worker;
 		private Object workerContext;
@@ -1681,7 +1646,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 		}
 
 		@Override
-		public boolean applyTo(DomainObject obj, TaskMonitor analysisMonitor) {
+		public boolean applyTo(Program p, TaskMonitor analysisMonitor) {
 
 			synchronized (this) {
 				workerMonitor.removeCancelledListener(this);
@@ -1690,7 +1655,7 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 					return false;
 				}
 
-				assert (obj == program);
+				assert (p == program);
 
 				if (analysisMonitor != workerMonitor) {
 					if (!workerMonitor.isCancelEnabled()) {
@@ -1832,4 +1797,5 @@ public class AutoAnalysisManager implements DomainObjectListener, DomainObjectCl
 			}
 		}
 	}
+
 }

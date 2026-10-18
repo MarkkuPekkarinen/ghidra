@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -73,6 +73,7 @@ public class DecompileResults {
 		hfunc = null;
 		hparamid = null;
 		docroot = null;
+		this.processState = processState;
 		//dumpResults(raw);
 		decodeStream(decoder);
 	}
@@ -144,13 +145,17 @@ public class DecompileResults {
 		return processState == DecompileProcess.DisposeState.DISPOSED_ON_STARTUP_FAILURE;
 	}
 
+	/** 
+	 * Returns true if the decompile completed normally
+	 * @return true if the decompile completed normally
+	 */
+	public boolean isValid() {
+		return errMsg == null || errMsg.isBlank();
+	}
+
 	/**
 	 * Return any error message associated with the
-	 * decompilation producing these results.  Generally,
-	 * there will only be an error if the decompilation was
-	 * aborted for some reason, but there could conceivably
-	 * be warnings obtainable via this method, even if the
-	 * decompilation did complete.
+	 * decompilation producing these results.
 	 * @return any error message associated with these results
 	 */
 	public String getErrorMessage() {
@@ -180,7 +185,7 @@ public class DecompileResults {
 	/**
 	 * Get the marked up C code associated with these
 	 * decompilation results. If there was an error, or
-	 * code generation was turned off, retur null
+	 * code generation was turned off, return null
 	 * @return the resulting root of C markup
 	 */
 	public ClangTokenGroup getCCodeMarkup() {

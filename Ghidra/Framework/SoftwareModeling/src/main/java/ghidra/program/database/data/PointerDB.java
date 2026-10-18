@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,11 +20,11 @@ import java.io.IOException;
 import db.DBRecord;
 import ghidra.docking.settings.Settings;
 import ghidra.docking.settings.SettingsDefinition;
-import ghidra.program.database.DBObjectCache;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.util.InvalidNameException;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.UniversalID;
 import ghidra.util.exception.DuplicateNameException;
 
@@ -37,7 +37,8 @@ class PointerDB extends DataTypeDB implements Pointer {
 		new SettingsDefinition[] { MutabilitySettingsDefinition.DEF };
 
 	private PointerDBAdapter adapter;
-	private String displayName;
+
+	private String displayName; // lazy initialization
 
 	/**
 	 * <code>isEquivalentActive</code> is used to break cyclical recursion when
@@ -48,15 +49,12 @@ class PointerDB extends DataTypeDB implements Pointer {
 
 	/**
 	 * Constructor
-	 * 
-	 * @param dataMgr
-	 * @param cache
-	 * @param adapter
-	 * @param record
+	 * @param dataMgr the DataTypeManager
+	 * @param adapter the pointer database adapter
+	 * @param record the pointer record
 	 */
-	public PointerDB(DataTypeManagerDB dataMgr, DBObjectCache<DataTypeDB> cache,
-			PointerDBAdapter adapter, DBRecord record) {
-		super(dataMgr, cache, record);
+	PointerDB(DataTypeManagerDB dataMgr, PointerDBAdapter adapter, DBRecord record) {
+		super(dataMgr, record);
 		this.adapter = adapter;
 	}
 
@@ -84,13 +82,9 @@ class PointerDB extends DataTypeDB implements Pointer {
 
 	@Override
 	public DataType getDataType() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			return dataMgr.getDataType(record.getLongValue(PointerDBAdapter.PTR_DT_ID_COL));
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -106,12 +100,15 @@ class PointerDB extends DataTypeDB implements Pointer {
 	}
 
 	@Override
-	protected boolean refresh() {
+	protected boolean refresh(DBRecord rec) {
 		try {
-			DBRecord rec = adapter.getRecord(key);
+			if (rec == null) {
+				rec = adapter.getRecord(key);
+			}
 			if (rec != null) {
 				record = rec;
-				return super.refresh();
+				completeRefresh();
+				return true;
 			}
 		}
 		catch (IOException e) {
@@ -126,7 +123,8 @@ class PointerDB extends DataTypeDB implements Pointer {
 			return this;
 		}
 		// don't clone referenced data-type to avoid potential circular reference
-		return new PointerDataType(getDataType(), hasLanguageDependantLength() ? -1 : getLength(), dtm);
+		return new PointerDataType(getDataType(), hasLanguageDependantLength() ? -1 : getLength(),
+			dtm);
 	}
 
 	@Override
@@ -137,13 +135,12 @@ class PointerDB extends DataTypeDB implements Pointer {
 	@Override
 	public String getDisplayName() {
 		String localDisplayName = displayName;
-		if (localDisplayName != null && !isInvalid()) {
+		if (localDisplayName != null && !needsRefreshing()) {
 			return localDisplayName;
 		}
-		lock.acquire();
-		try {
-			checkIsValid();
-			if ( displayName == null ) {
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
+			if (displayName == null) {
 				// NOTE: Pointer display name only specifies length if null base type
 				DataType dt = getDataType();
 				if (dt == null) {
@@ -158,52 +155,37 @@ class PointerDB extends DataTypeDB implements Pointer {
 			}
 			return displayName;
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public String getMnemonic(Settings settings) {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			DataType dataType = getDataType();
 			if (dataType == null || dataType == DataType.DEFAULT) {
 				return "addr";
 			}
 			return dataType.getMnemonic(settings) + " *";
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public boolean hasLanguageDependantLength() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			return record.getByteValue(PointerDBAdapter.PTR_LENGTH_COL) <= 0;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
 	@Override
 	public int getLength() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			int len = record.getByteValue(PointerDBAdapter.PTR_LENGTH_COL);
 			if (len <= 0) {
 				len = dataMgr.getDataOrganization().getPointerSize();
 			}
 			return len;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -215,9 +197,8 @@ class PointerDB extends DataTypeDB implements Pointer {
 
 	@Override
 	public String getDescription() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			StringBuffer sbuf = new StringBuffer();
 			if (!hasLanguageDependantLength()) {
 				sbuf.append(Integer.toString(getLength() * 8));
@@ -236,23 +217,16 @@ class PointerDB extends DataTypeDB implements Pointer {
 			}
 			return sbuf.toString();
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public Object getValue(MemBuffer buf, Settings settings, int length) {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			return PointerDataType.getAddressValue(buf, getLength(), settings);
 		}
 		catch (IllegalArgumentException exc) {
 			return null;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -268,9 +242,8 @@ class PointerDB extends DataTypeDB implements Pointer {
 
 	@Override
 	public String getRepresentation(MemBuffer buf, Settings settings, int length) {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 
 			Address addr = (Address) getValue(buf, settings, length);
 			if (addr == null) { // could not create address, so return "Not a pointer (NaP)"
@@ -278,13 +251,10 @@ class PointerDB extends DataTypeDB implements Pointer {
 			}
 			return addr.toString();
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
-	public boolean isEquivalent(DataType dt) {
+	protected boolean isEquivalent(DataType dt, DataTypeConflictHandler handler) {
 		if (dt == null) {
 			return false;
 		}
@@ -322,7 +292,7 @@ class PointerDB extends DataTypeDB implements Pointer {
 			return false;
 		}
 
-		// TODO: The pointer deep-dive equivalence checking on the referenced datatype can 
+		// NOTE: The pointer deep-dive equivalence checking on the referenced datatype can 
 		// cause types containing pointers (composites, functions) to conflict when in
 		// reality the referenced type simply has multiple implementations which differ.
 		// Although without doing this Ghidra may fail to resolve dependencies which differ
@@ -337,7 +307,10 @@ class PointerDB extends DataTypeDB implements Pointer {
 
 		isEquivalentActive.set(true);
 		try {
-			return getDataType().isEquivalent(otherDataType);
+			if (handler != null) {
+				handler = handler.getSubsequentHandler();
+			}
+			return DataTypeDB.isEquivalent(referencedDataType, otherDataType, handler);
 		}
 		finally {
 			isEquivalentActive.set(false);
@@ -345,18 +318,51 @@ class PointerDB extends DataTypeDB implements Pointer {
 	}
 
 	@Override
+	public boolean isEquivalent(DataType dt) {
+		return isEquivalent(dt, null);
+	}
+
+	@Override
 	public void dataTypeReplaced(DataType oldDt, DataType newDt) {
-		if (newDt == this) {
-			newDt = DataType.DEFAULT;
+		if (deleting) {
+			return;
 		}
-		lock.acquire();
-		try {
-			String myOldName = getOldName();
-			if (checkIsValid() && getDataType() == oldDt) {
+		DataTypeUtilities.checkValidReplacement(oldDt, newDt);
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (getDataType() == oldDt) {
+				if (newDt == this) {
+					newDt = DataType.DEFAULT;
+				}
+				// check for existing pointer to newDt
+				PointerDataType newPtr = new PointerDataType(newDt,
+					hasLanguageDependantLength() ? -1 : getLength(), dataMgr);
+				DataType existingPtr =
+					dataMgr.getDataType(newDt.getCategoryPath(), newPtr.getName());
+				if (existingPtr != null && existingPtr != this) {
+					// avoid duplicate pointer - replace this pointer with existing one
+					dataMgr.addDataTypeToReplace(this, existingPtr);
+					return;
+				}
+
+				// If newDt pointer not found above revise this pointer which may include category change
+				if (!newDt.getCategoryPath().equals(oldDt.getCategoryPath())) {
+					// move this pointer to same category as newDt
+					try {
+						super.setCategoryPath(newDt.getCategoryPath());
+					}
+					catch (DuplicateNameException e) {
+						throw new RuntimeException(e); // already checked
+					}
+				}
+
+				String myOldName = getOldName();
 				oldDt.removeParent(this);
 				newDt.addParent(this);
+
 				record.setLongValue(PointerDBAdapter.PTR_DT_ID_COL, dataMgr.getResolvedID(newDt));
 				refreshName();
+
 				if (!oldDt.getName().equals(newDt.getName())) {
 					notifyNameChanged(myOldName);
 				}
@@ -368,15 +374,19 @@ class PointerDB extends DataTypeDB implements Pointer {
 				}
 			}
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public void dataTypeDeleted(DataType dt) {
-		if (getDataType() == dt) {
-			dataMgr.addDataTypeToDelete(key);
+		if (deleting) {
+			return;
+		}
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (dt == getDataType()) {
+				dataMgr.addDataTypeToDelete(this, key);
+				deleting = true;
+			}
 		}
 	}
 
@@ -404,18 +414,18 @@ class PointerDB extends DataTypeDB implements Pointer {
 
 	@Override
 	public void dataTypeNameChanged(DataType dt, String oldName) {
-		lock.acquire();
-		try {
-			String myOldName = getOldName();
-			if (checkIsValid() && dt == getDataType()) {
+		if (deleting) {
+			return;
+		}
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (dt == getDataType()) {
+				String myOldName = getOldName();
 				refreshName();
 				if (!getName().equals(myOldName)) {
 					notifyNameChanged(myOldName);
 				}
 			}
-		}
-		finally {
-			lock.release();
 		}
 	}
 

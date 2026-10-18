@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,7 +29,7 @@ public class MdmpFileHeader implements StructConverter {
 	private int signature;
 	private int version;
 	private int numberOfStreams;
-	private long streamDirectoryRVA;
+	private int streamDirectoryRVA;
 	private int checkSum;
 	private int timeDateStamp;
 	private long flags;
@@ -54,11 +54,25 @@ public class MdmpFileHeader implements StructConverter {
 		setCheckSum(reader.readNextInt());
 		setTimeDateStamp(reader.readNextInt());
 		setFlags(reader.readNextLong());
+		validateNumberOfStreams();
+	}
+
+	private void validateNumberOfStreams() throws IOException {
+		long numberOfStreamsUnsigned = Integer.toUnsignedLong(numberOfStreams);
+		long streamDirectoryRvaUnsigned = Integer.toUnsignedLong(streamDirectoryRVA);
+
+		long requiredBytes = numberOfStreamsUnsigned * Directory.STRUCTURE_SIZE;
+		long requiredOffset = streamDirectoryRvaUnsigned + requiredBytes;
+
+		if (requiredOffset < streamDirectoryRvaUnsigned || requiredOffset > reader.length()) {
+			throw new IOException("Invalid MDMP header: Number of streams exceeds file bounds.");
+		}
 	}
 
 	/**
 	 * @see ghidra.app.util.bin.StructConverter#toDataType()
 	 */
+	@Override
 	public DataType toDataType() throws DuplicateNameException {
 		StructureDataType struct = new StructureDataType(NAME, 0);
 
@@ -104,7 +118,7 @@ public class MdmpFileHeader implements StructConverter {
 		return numberOfStreams;
 	}
 
-	public void setStreamDirectoryRVA(long streamDirectoryRVA) {
+	public void setStreamDirectoryRVA(int streamDirectoryRVA) {
 		this.streamDirectoryRVA = streamDirectoryRVA;
 	}
 

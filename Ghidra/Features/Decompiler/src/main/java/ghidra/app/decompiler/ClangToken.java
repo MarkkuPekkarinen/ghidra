@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,12 +18,13 @@ package ghidra.app.decompiler;
 import static ghidra.program.model.pcode.AttributeId.*;
 import static ghidra.program.model.pcode.ElementId.*;
 
-import java.awt.Color;
+import java.util.Iterator;
 import java.util.List;
 
 //import ghidra.app.plugin.core.decompile.*;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.pcode.*;
+import ghidra.program.model.scalar.Scalar;
 
 /**
  * Class representing a source code language token.
@@ -47,13 +48,11 @@ public class ClangToken implements ClangNode {
 	private ClangLine lineparent;
 	private String text;
 	private int syntax_type;
-	private Color highlight; // Color to highlight with or null if no highlight
 	private boolean matchingToken;
 
 	public ClangToken(ClangNode par) {
 		parent = par;
 		text = null;
-		highlight = null;
 		syntax_type = DEFAULT_COLOR;
 		lineparent = null;
 	}
@@ -61,14 +60,12 @@ public class ClangToken implements ClangNode {
 	public ClangToken(ClangNode par, String txt) {
 		parent = par;
 		text = txt;
-		highlight = null;
 		syntax_type = DEFAULT_COLOR;
 	}
 
 	public ClangToken(ClangNode par, String txt, int color) {
 		parent = par;
 		text = txt;
-		highlight = null;
 		syntax_type = color;
 	}
 
@@ -119,19 +116,6 @@ public class ClangToken implements ClangNode {
 			return parent.getClangFunction();
 		}
 		return null;
-	}
-
-	@Override
-	public void setHighlight(Color val) {
-		highlight = val;
-	}
-
-	/**
-	 * Get the background highlight color used to render this token, or null if not highlighted
-	 * @return the Color or null
-	 */
-	public Color getHighlight() {
-		return highlight;
 	}
 
 	/**
@@ -257,6 +241,12 @@ public class ClangToken implements ClangNode {
 		else if (node == ELEM_FIELD.id()) {
 			token = new ClangFieldToken(par);
 		}
+		else if (node == ELEM_BITFIELD.id()) {
+			token = new ClangBitFieldToken(par);
+		}
+		else if (node == ELEM_VALUE.id()) {
+			token = new ClangCaseToken(par);
+		}
 		else {
 			throw new DecoderException("Expecting token element");
 		}
@@ -318,5 +308,24 @@ public class ClangToken implements ClangNode {
 	 */
 	public PcodeOp getPcodeOp() {
 		return null;
+	}
+
+	/**
+	 * If the token represents an underlying integer constant, return the constant as a Scalar.
+	 * Otherwise return null.
+	 * @return the Scalar that the token represents or null
+	 */
+	public Scalar getScalar() {
+		return null;
+	}
+
+	/**
+	 * Get an iterator over tokens starting with this ClangToken.  Tokens are returned in normal
+	 * display order (forward=true) or in the reverse of normal display order (forward=false)
+	 * @param forward is true for forward iterator, false for a backward iterator
+	 * @return the Iterator object
+	 */
+	public Iterator<ClangToken> iterator(boolean forward) {
+		return new TokenIterator(this, forward);
 	}
 }

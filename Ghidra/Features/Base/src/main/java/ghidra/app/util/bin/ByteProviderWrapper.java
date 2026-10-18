@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,7 +33,6 @@ public class ByteProviderWrapper implements ByteProvider {
 	/**
 	 * Creates a wrapper around a {@link ByteProvider} that contains the same bytes as the specified
 	 * provider, but with a new {@link FSRL} identity.
-	 * <p>
 	 * 
 	 * @param provider {@link ByteProvider} to wrap
 	 * @param fsrl {@link FSRL} identity for the instance
@@ -104,13 +103,19 @@ public class ByteProviderWrapper implements ByteProvider {
 	}
 
 	@Override
-	public long length() throws IOException {
+	public long length() {
 		return subLength;
 	}
 
 	@Override
 	public boolean isValidIndex(long index) {
-		return (0 <= index && index < subLength) && provider.isValidIndex(subOffset + index);
+		return ByteProvider.super.isValidIndex(index) && provider.isValidIndex(subOffset + index);
+	}
+
+	@Override
+	public boolean isValidRange(long startIndex, int count) {
+		return ByteProvider.super.isValidRange(startIndex, count) &&
+			provider.isValidRange(subOffset + startIndex, count);
 	}
 
 	@Override

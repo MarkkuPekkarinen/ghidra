@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -35,6 +35,7 @@ import ghidra.app.util.AddressInput;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
@@ -161,6 +162,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 
 		DockingActionIf action = getAction(plugin, "Split Block");
 		performAction(action, false);
+		waitForBusyTool(tool);
 
 		// find the dialog for the add
 		SplitBlockDialog d = waitForDialogComponent(SplitBlockDialog.class);
@@ -192,7 +194,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		assertEquals(0x5600, blockTwoLength.getValue().longValue());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 
 		program.flushEvents();
 		waitForSwing();
@@ -229,14 +231,14 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 			(RegisterField) findComponentByName(d.getComponent(), "BlockTwoLength");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> blockOneEnd.setValue("01003000"));
+		runSwing(() -> blockOneEnd.setText("01003000"));
 		assertEquals(0x2001, blockOneLength.getValue().longValue());
 		assertEquals(getAddr(0x01003001), blockTwoStart.getAddress());
 		assertEquals("010075ff", blockTwoEnd.getText());
 		assertEquals(0x45ff, blockTwoLength.getValue().longValue());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 
 		program.flushEvents();
 		waitForSwing();
@@ -275,14 +277,14 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 			(RegisterField) findComponentByName(d.getComponent(), "BlockTwoLength");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> blockTwoStart.setValue("01003000"));
+		runSwing(() -> blockTwoStart.setText("01003000"));
 		assertEquals(0x2000, blockOneLength.getValue().longValue());
 		assertEquals(getAddr(0x01002fff), blockOneEnd.getAddress());
 		assertEquals("010075ff", blockTwoEnd.getText());
 		assertEquals(0x4600, blockTwoLength.getValue().longValue());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 
 		program.flushEvents();
 		waitForSwing();
@@ -324,7 +326,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		assertEquals(0x2000, blockTwoLength.getValue().longValue());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 
 		program.flushEvents();
 		waitForSwing();
@@ -355,7 +357,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 			(AddressInput) findComponentByName(d.getComponent(), "BlockOneEnd");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> blockOneEnd.setValue("01000"));
+		runSwing(() -> blockOneEnd.setText("01000"));
 		assertFalse(okButton.isEnabled());
 		assertEquals("End address must be greater than start",
 			findLabelStr(d.getComponent(), "statusLabel"));
@@ -376,7 +378,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 			(AddressInput) findComponentByName(d.getComponent(), "BlockTwoStart");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> blockTwoStart.setValue("01000"));
+		runSwing(() -> blockTwoStart.setText("01000"));
 		assertFalse(okButton.isEnabled());
 		assertEquals("Start address must be greater than original block start (01001000)",
 			findLabelStr(d.getComponent(), "statusLabel"));
@@ -426,7 +428,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 			blockTwoName.setText("split\t");
 		});
 		assertTrue(okButton.isEnabled());
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 
 		assertTrue(findLabelStr(d.getComponent(), "statusLabel").startsWith("Invalid Block Name"));
 		close(d);
@@ -436,8 +438,8 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 	public void testSplitNotAllowed() throws Exception {
 		// create an overlay block
 		tx(program, () -> {
-			memory.createInitializedBlock(".overlay", getAddr(0), 0x100, (byte) 0xa,
-				TaskMonitor.DUMMY, true);
+			memory.createInitializedBlock(".overlay", AddressSpace.OTHER_SPACE.getAddress(0), 0x100,
+				(byte) 0xa, TaskMonitor.DUMMY, true);
 		});
 
 		int row = table.getModel().getRowCount() - 1;
@@ -446,35 +448,35 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		performAction(action, false);
 		OptionDialog d = waitForDialogComponent(OptionDialog.class);
 		assertNotNull(d);
-		assertEquals("Split Overlay Block Not Allowed", d.getTitle());
+		assertEquals("Split OTHER Overlay Block Not Allowed", d.getTitle());
 		close(d);
 	}
 
-	@Test
-	public void testExpandBlockNotAllowed() throws Exception {
-		// create an overlay block
-		tx(program, () -> {
-			memory.createInitializedBlock(".overlay", getAddr(0), 0x100, (byte) 0xa,
-				TaskMonitor.DUMMY, true);
-		});
-
-		int row = table.getModel().getRowCount() - 1;
-		table.setRowSelectionInterval(row, row);
-		DockingActionIf action = getAction(plugin, "Expand Block Up");
-		performAction(action, false);
-		OptionDialog d = waitForDialogComponent(OptionDialog.class);
-		assertNotNull(d);
-		assertEquals("Expand Overlay Block Not Allowed", d.getTitle());
-		close(d);
-
-		action = getAction(plugin, "Expand Block Down");
-		performAction(action, false);
-
-		OptionDialog d2 = waitForDialogComponent(OptionDialog.class);
-		assertNotNull(d2);
-		assertEquals("Expand Overlay Block Not Allowed", d2.getTitle());
-		runSwing(() -> d2.close());
-	}
+//	@Test
+//	public void testExpandBlockNotAllowed() throws Exception {
+//		// create an overlay block
+//		tx(program, () -> {
+//			memory.createInitializedBlock(".overlay", getAddr(0), 0x100, (byte) 0xa,
+//				TaskMonitor.DUMMY, true);
+//		});
+//
+//		int row = table.getModel().getRowCount() - 1;
+//		table.setRowSelectionInterval(row, row);
+//		DockingActionIf action = getAction(plugin, "Expand Block Up");
+//		performAction(action, false);
+//		OptionDialog d = waitForDialogComponent(OptionDialog.class);
+//		assertNotNull(d);
+//		assertEquals("Expand Overlay Block Not Allowed", d.getTitle());
+//		close(d);
+//
+//		action = getAction(plugin, "Expand Block Down");
+//		performAction(action, false);
+//
+//		OptionDialog d2 = waitForDialogComponent(OptionDialog.class);
+//		assertNotNull(d2);
+//		assertEquals("Expand Overlay Block Not Allowed", d2.getTitle());
+//		runSwing(() -> d2.close());
+//	}
 
 	@Test
 	public void testExpandBlockUpSetup() {
@@ -529,26 +531,30 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		RegisterField length = (RegisterField) findComponentByName(d.getComponent(), "BlockLength");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> start.setValue("00002000"));
+		runSwing(() -> start.setText("00002000"));
 		assertEquals("0x1005600", length.getText());
 
 		assertTrue(okButton.isEnabled());
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
-		waitForSwing();
+		pressButton(okButton);
+		waitForBusyTool(tool);
 
-		assertEquals(".text.exp", model.getValueAt(0, MemoryMapModel.NAME));
+		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("00002000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010075ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x1005600", model.getValueAt(0, MemoryMapModel.LENGTH));
 
 		undo(program);
+		waitForBusyTool(tool);
+
 		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("01001000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010075ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x6600", model.getValueAt(0, MemoryMapModel.LENGTH));
 
 		redo(program);
-		assertEquals(".text.exp", model.getValueAt(0, MemoryMapModel.NAME));
+		waitForBusyTool(tool);
+
+		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("00002000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010075ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x1005600", model.getValueAt(0, MemoryMapModel.LENGTH));
@@ -573,7 +579,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		assertNotNull(length);
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> start.setValue("01201000"));
+		runSwing(() -> start.setText("01201000"));
 		assertFalse(okButton.isEnabled());
 		assertEquals("Start must be less than 01001000",
 			findLabelStr(d.getComponent(), "statusLabel"));
@@ -603,22 +609,27 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		assertEquals("010075ff", end.getText());
 
 		assertTrue(okButton.isEnabled());
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
-		waitForSwing();
+		pressButton(okButton);
 
-		assertEquals(".text.exp", model.getValueAt(0, MemoryMapModel.NAME));
+		waitForBusyTool(tool);
+
+		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("01000000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010075ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x7600", model.getValueAt(0, MemoryMapModel.LENGTH));
 
 		undo(program);
+		waitForBusyTool(tool);
+
 		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("01001000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010075ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x6600", model.getValueAt(0, MemoryMapModel.LENGTH));
 
 		redo(program);
-		assertEquals(".text.exp", model.getValueAt(0, MemoryMapModel.NAME));
+		waitForBusyTool(tool);
+
+		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("01000000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010075ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x7600", model.getValueAt(0, MemoryMapModel.LENGTH));
@@ -670,11 +681,11 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		JTextField end = (JTextField) findComponentByName(d.getComponent(), "EndAddress");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> start.setValue("01008000"));
+		runSwing(() -> start.setText("01008000"));
 		assertEquals("0100f3ff", end.getText());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 		waitForSwing();
 		assertFalse(okButton.isEnabled());
 		assertEquals("Part of range (01008000, 01009fff) already exists in memory.",
@@ -729,14 +740,15 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		RegisterField length = (RegisterField) findComponentByName(d.getComponent(), "BlockLength");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> end.setValue("01007700"));
+		runSwing(() -> end.setText("01007700"));
 		assertEquals("0x6701", length.getText());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
-		waitForSwing();
+		pressButton(okButton);
 
-		assertEquals(".text.exp", model.getValueAt(0, MemoryMapModel.NAME));
+		waitForBusyTool(tool);
+
+		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("01001000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("01007700", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x6701", model.getValueAt(0, MemoryMapModel.LENGTH));
@@ -748,6 +760,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 
 		DockingActionIf action = getAction(plugin, "Expand Block Down");
 		performAction(action, false);
+		waitForBusyTool(tool);
 
 		// find the dialog for the add
 		ExpandBlockDialog d = waitForDialogComponent(ExpandBlockDialog.class);
@@ -760,10 +773,11 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		assertEquals(getAddr(0x10076ff), end.getAddress());
 		assertTrue(okButton.isEnabled());
 
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
-		waitForSwing();
+		pressButton(okButton);
 
-		assertEquals(".text.exp", model.getValueAt(0, MemoryMapModel.NAME));
+		waitForBusyTool(tool);
+
+		assertEquals(".text", model.getValueAt(0, MemoryMapModel.NAME));
 		assertEquals("01001000", model.getValueAt(0, MemoryMapModel.START));
 		assertEquals("010076ff", model.getValueAt(0, MemoryMapModel.END));
 		assertEquals("0x6700", model.getValueAt(0, MemoryMapModel.LENGTH));
@@ -784,7 +798,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 		AddressInput end = (AddressInput) findComponentByName(d.getComponent(), "EndAddress");
 		JButton okButton = findButton(d.getComponent(), "OK");
 
-		runSwing(() -> end.setValue("01007000"));
+		runSwing(() -> end.setText("01007000"));
 		assertFalse(okButton.isEnabled());
 		assertEquals("End must be greater than 010075ff",
 			findLabelStr(d.getComponent(), "statusLabel"));
@@ -828,7 +842,7 @@ public class MemoryMapProvider3Test extends AbstractGhidraHeadedIntegrationTest 
 
 		runSwing(() -> length.setText("0x7600"));
 		assertTrue(okButton.isEnabled());
-		runSwing(() -> okButton.getActionListeners()[0].actionPerformed(null));
+		pressButton(okButton);
 		waitForSwing();
 
 		assertFalse(okButton.isEnabled());

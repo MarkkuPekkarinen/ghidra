@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,18 +16,22 @@
 package ghidra.program.database.data;
 
 import java.io.IOException;
+import java.util.ConcurrentModificationException;
+import java.util.Objects;
+import java.util.function.Consumer;
 
 import db.DBRecord;
 import ghidra.docking.settings.Settings;
 import ghidra.docking.settings.SettingsImpl;
-import ghidra.program.database.DBObjectCache;
 import ghidra.program.model.data.*;
 import ghidra.program.model.mem.MemBuffer;
+import ghidra.util.Lock.Closeable;
+import ghidra.util.Msg;
 import ghidra.util.UniversalID;
 import ghidra.util.exception.AssertException;
 
 /**
- * Database implementation for a structure or union.
+ * {@link CompositeDB} provides an abstract database implementation for a structure or union.
  */
 abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
@@ -38,16 +42,14 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 	 * Constructor for a composite data type (structure or union).
 	 * 
 	 * @param dataMgr          the data type manager containing this data type.
-	 * @param cache            DataTypeDB object cache
 	 * @param compositeAdapter the database adapter for this data type.
 	 * @param componentAdapter the database adapter for the components of this data
 	 *                         type.
 	 * @param record           the database record for this data type.
 	 */
-	CompositeDB(DataTypeManagerDB dataMgr, DBObjectCache<DataTypeDB> cache,
-			CompositeDBAdapter compositeAdapter, ComponentDBAdapter componentAdapter,
-			DBRecord record) {
-		super(dataMgr, cache, record);
+	protected CompositeDB(DataTypeManagerDB dataMgr, CompositeDBAdapter compositeAdapter,
+			ComponentDBAdapter componentAdapter, DBRecord record) {
+		super(dataMgr, record);
 		this.compositeAdapter = compositeAdapter;
 		this.componentAdapter = componentAdapter;
 		initialize();
@@ -59,33 +61,177 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 	 */
 	protected abstract void initialize();
 
+	protected DataTypeComponentDB createComponent(long dtID, int length, int ordinal, int offset,
+			String componentName, String comment) {
+
+		DBRecord rec;
+		try {
+			rec = componentAdapter.createRecord(dtID, key, length, ordinal, offset, componentName,
+				comment);
+			return new DataTypeComponentDB(dataMgr, componentAdapter, this, rec);
+		}
+		catch (IOException e) {
+			dataMgr.dbError(e); // throws RuntimeException
+		}
+		// Will never reach here
+		throw new AssertionError();
+	}
+
+	@Override
+	public abstract DataTypeComponentDB getComponent(int ordinal) throws IndexOutOfBoundsException;
+
+	private DataTypeComponentDB getValidatedComponent(DataTypeComponentDB component)
+			throws IOException {
+		// Verify that component is still valid for this composite
+		DBRecord rec = componentAdapter.getRecord(component.getKey());
+		if (rec == null || rec.getLongValue(ComponentDBAdapter.COMPONENT_PARENT_ID_COL) != key) {
+			throw new ConcurrentModificationException("Component has been deleted.");
+		}
+
+		// Verify specified component instance is 
+		DataTypeComponentDB myDtc = getComponent(component.getOrdinal());
+		if (myDtc != component) {
+			// supplied instance is stale - it should exist in our defined component list
+			myDtc = getComponent(rec.getIntValue(ComponentDBAdapter.COMPONENT_ORDINAL_COL));
+		}
+		return myDtc;
+	}
+
+	/**
+	 * Set the name on a possibly stale component in support of the 
+	 * {@link DataTypeComponent#setFieldName(String)} method.
+	 * <p>
+	 * If the field name is empty it will be set to null,
+	 * which is the default field name. The field name may be sanitized to convert all whitespace
+	 * characters to an underscore.  If a name conflict occurs with another component, a one-up
+	 * number suffix will be added to avoid duplication.
+	 * 
+	 * @param component data type component which has this composite as its parent.
+	 * @param name new field name or null
+	 * @return updated component instance
+	 */
+	protected DataTypeComponentDB setFieldName(DataTypeComponentDB component, String name) {
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (component.getRecord() == null) {
+				return component; // unable to change undefined component
+			}
+
+			// Verify specified component instance is 
+			DataTypeComponentDB myDtc = getValidatedComponent(component);
+			if (myDtc.doSetFieldName(name)) {
+				dataMgr.dataTypeChanged(this, false);
+			}
+			return myDtc; // return modified component instance
+		}
+		catch (IOException e) {
+			dataMgr.dbError(e);
+		}
+		return component; // unchanged
+	}
+
+	/**
+	 * Set the comment on a possibly stale component in support of the 
+	 * {@link DataTypeComponent#setComment(String)} method.
+	 * 
+	 * @param component data type component which has this composite as its parent.
+	 * @param comment comment string
+	 * @return updated component instance
+	 */
+	protected DataTypeComponentDB setComment(DataTypeComponentDB component, String comment) {
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (component.getRecord() == null) {
+				return component; // unable to change undefined component
+			}
+
+			// Verify specified component instance is 
+			DataTypeComponentDB myDtc = getValidatedComponent(component);
+			if (myDtc.doSetComment(comment)) {
+				dataMgr.dataTypeChanged(this, false);
+			}
+			return myDtc; // return modified component instance
+		}
+		catch (IOException e) {
+			dataMgr.dbError(e);
+		}
+		return component; // unchanged
+	}
+
 	@Override
 	public final int getAlignedLength() {
 		return getLength();
 	}
 
 	/**
-	 * Get the preferred length for a new component. For Unions and packed
-	 * structures the preferred component length for a fixed-length dataType
-	 * will be the length of that dataType. Otherwise the length returned will be no
-	 * larger than the specified length.
+	 * Get the preferred length for a new component. If type is dynamic length must be specified
+	 * (assuming {@link Dynamic#canSpecifyLength()} is true).  Otherwise, when packing is enabled
+	 * the {@link DataType#getAlignedLength()} is returned; when packing disabled for Union
+	 * use of fixed-length type size is forced. Otherwise the decision
+	 * is deferred to {@link DataTypeComponentImpl#getPreferredComponentLength(DataType, int)}.
+	 * During packing the actual component length may be changed.
 	 * 
 	 * @param dataType new component datatype
-	 * @param length   constrained length or -1 to force use of dataType size.
-	 *                 Dynamic types such as string must have a positive length
+	 * @param length   constrained length or -1 to force use of dataType size for non-packing.
+	 *                 Dynamic types such as string must have a positive length specified.
+	 *                 This value is ignored for fixed-length types if maxLength has been 
 	 *                 specified.
+	 * @param maxLength applies to non-packed structures only to indicate available space for
+	 *                 fixed-length types using {@link DataType#getLength()}. Specify -1
+	 *                 to ignore this value.
 	 * @return preferred component length
+	 * @throws IllegalArgumentException if length not specified for a {@link Dynamic} dataType.
 	 */
-	protected int getPreferredComponentLength(DataType dataType, int length) {
+	protected int getPreferredComponentLength(DataType dataType, int length, int maxLength) {
+
 		if (DataTypeComponent.usesZeroLengthComponent(dataType)) {
 			return 0;
 		}
-		if ((isPackingEnabled() || (this instanceof Union)) && !(dataType instanceof Dynamic)) {
-			length = -1; // force use of datatype size
+
+		if (!(dataType instanceof Dynamic)) {
+			if (isPackingEnabled()) {
+				length = dataType.getAlignedLength();
+				if (length > 0) {
+					return length;
+				}
+			}
+			else if (this instanceof Union) {
+				// enforce Union component size for fixed-length types
+				length = dataType.getLength();
+				if (length > 0) {
+					return length;
+				}
+			}
+			else if (maxLength >= 0) {
+				// length determined by datatype but must not exceed maxLength
+				length = Math.min(dataType.getLength(), maxLength);
+				if (length > 0) {
+					return length;
+				}
+			}
 		}
+
 		return DataTypeComponentImpl.getPreferredComponentLength(dataType, length);
 	}
-	
+
+	/**
+	 * Get the preferred length for a new component. If type is dynamic length must be specified
+	 * (assuming {@link Dynamic#canSpecifyLength()} is true).  Otherwise, when packing is enabled
+	 * the {@link DataType#getAlignedLength()} is returned; when packing disabled for Union
+	 * use of fixed-length type size is forced. Otherwise the decision
+	 * is deferred to {@link DataTypeComponentImpl#getPreferredComponentLength(DataType, int)}.
+	 * During packing the actual component length may be changed.
+	 * 
+	 * @param dataType new component datatype
+	 * @param length   constrained length or -1 to force use of dataType size for non-packing.
+	 *                 Dynamic types such as string must have a positive length specified.
+	 * @return preferred component length
+	 * @throws IllegalArgumentException if length not specified for a {@link Dynamic} dataType.
+	 */
+	protected int getPreferredComponentLength(DataType dataType, int length) {
+		return getPreferredComponentLength(dataType, length, -1);
+	}
+
 	@Override
 	protected String doGetName() {
 		return record.getString(CompositeDBAdapter.COMPOSITE_NAME_COL);
@@ -108,25 +254,23 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 	 * @param oldDt             affected datatype which has been removed or replaced
 	 * @param newDt             replacement datatype
 	 * @return                  true if bitfield component was modified
-	 * @throws InvalidDataTypeException if bitfield was based upon oldDt but new
-	 *                                  datatype is invalid for a bitfield
 	 */
 	protected boolean updateBitFieldDataType(DataTypeComponentDB bitfieldComponent, DataType oldDt,
-			DataType newDt) throws InvalidDataTypeException {
+			DataType newDt) {
 		if (!bitfieldComponent.isBitFieldComponent()) {
 			throw new AssertException("expected bitfield component");
 		}
 
 		BitFieldDBDataType bitfieldDt = (BitFieldDBDataType) bitfieldComponent.getDataType();
-		if (bitfieldDt.getBaseDataType() != oldDt) {
+		if (bitfieldDt.getBaseDataType() != oldDt || !BitFieldDataType.isValidBaseDataType(newDt)) {
 			return false;
 		}
 
 		if (newDt != null) {
-			BitFieldDataType.checkBaseDataType(newDt);
 			int maxBitSize = 8 * newDt.getLength();
 			if (bitfieldDt.getBitSize() > maxBitSize) {
-				throw new InvalidDataTypeException("Replacement datatype too small for bitfield");
+				// Replacement datatype too small for bitfield
+				return false;
 			}
 		}
 
@@ -138,20 +282,23 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 			newDt.addParent(this);
 		}
 		catch (InvalidDataTypeException e) {
-			throw new AssertException("unexpected");
+			throw new AssertException(e); // unexpected
 		}
 
 		return true;
 	}
 
 	@Override
-	protected boolean refresh() {
+	protected boolean refresh(DBRecord rec) {
 		try {
-			DBRecord rec = compositeAdapter.getRecord(key);
+			if (rec == null) {
+				rec = compositeAdapter.getRecord(key);
+			}
 			if (rec != null) {
 				record = rec;
 				initialize();
-				return super.refresh();
+				completeRefresh();
+				return true;
 			}
 		}
 		catch (IOException e) {
@@ -162,38 +309,32 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	public void setDescription(String desc) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
+			if (Objects.equals(desc, record.getString(CompositeDBAdapter.COMPOSITE_COMMENT_COL))) {
+				return;
+			}
 			record.setString(CompositeDBAdapter.COMPOSITE_COMMENT_COL, desc);
-			try {
-				compositeAdapter.updateRecord(record, true);
-			}
-			catch (IOException e) {
-				dataMgr.dbError(e);
-			}
+			compositeAdapter.updateRecord(record, true);
+			dataMgr.dataTypeChanged(this, false);
 		}
-		finally {
-			lock.release();
+		catch (IOException e) {
+			dataMgr.dbError(e);
 		}
 	}
 
 	@Override
 	public String getDescription() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			String s = record.getString(CompositeDBAdapter.COMPOSITE_COMMENT_COL);
 			return s == null ? "" : s;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
 	@Override
 	public abstract boolean hasLanguageDependantLength();
-	
+
 	/**
 	 * Determine if this composite should be treated as undefined.
 	 * <p>
@@ -253,44 +394,19 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	public boolean isPartOf(DataType dataTypeOfInterest) {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			return DataTypeUtilities.isSecondPartOfFirst(this, dataTypeOfInterest);
 		}
-		finally {
-			lock.release();
-		}
 	}
 
-	/**
-	 * This method throws an exception if the indicated data type is an ancestor of
-	 * this data type. In other words, the specified data type has a component or
-	 * sub-component containing this data type.
-	 * 
-	 * @param dataType the data type
-	 * @throws DataTypeDependencyException if the data type is an ancestor of this
-	 *                                     data type.
-	 */
-	protected void checkAncestry(DataType dataType) throws DataTypeDependencyException {
-		if (this.equals(dataType)) {
-			throw new DataTypeDependencyException(
-				"Data type " + getDisplayName() + " can't contain itself.");
-		}
-		else if (DataTypeUtilities.isSecondPartOfFirst(dataType, this)) {
-			throw new DataTypeDependencyException("Data type " + dataType.getDisplayName() +
-				" has " + getDisplayName() + " within it.");
-		}
-	}
-
-	protected DataType doCheckedResolve(DataType dt)
-			throws DataTypeDependencyException {
+	protected DataType doCheckedResolve(DataType dt) throws DataTypeDependencyException {
 		if (dt instanceof Pointer) {
 			pointerPostResolveRequired = true;
 			return resolve(((Pointer) dt).newPointer(DataType.DEFAULT));
 		}
 		dt = resolve(dt);
-		checkAncestry(dt);
+		DataTypeUtilities.checkAncestry(this, dt);
 		return dt;
 	}
 
@@ -298,6 +414,22 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 	protected void doSetNameRecord(String name) throws IOException {
 		record.setString(CompositeDBAdapter.COMPOSITE_NAME_COL, name);
 		compositeAdapter.updateRecord(record, true);
+	}
+
+	/**
+	 * Removes a defined component without any alteration to other components or the components 
+	 * list, removes parent association for component datatype and remove name-map entry.
+	 * @param dtc datatype component
+	 * @throws IOException if an IO error occurs
+	 */
+	protected void doDelete(DataTypeComponentDB dtc) throws IOException {
+
+		dtc.getDataType().removeParent(this);
+
+		// Remove component record
+		long dtcKey = dtc.getKey();
+		componentAdapter.removeRecord(dtcKey);
+		dataMgr.getSettingsAdapter().removeAllSettingsRecords(dtcKey);
 	}
 
 	/**
@@ -341,27 +473,26 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		return record.getLongValue(CompositeDBAdapter.COMPOSITE_LAST_CHANGE_TIME_COL);
 	}
 
+	void doSetLastChangeTime(long lastChangeTime) throws IOException {
+		record.setLongValue(CompositeDBAdapter.COMPOSITE_LAST_CHANGE_TIME_COL, lastChangeTime);
+		compositeAdapter.updateRecord(record, false);
+	}
+
 	@Override
 	public void setLastChangeTime(long lastChangeTime) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
-			record.setLongValue(CompositeDBAdapter.COMPOSITE_LAST_CHANGE_TIME_COL, lastChangeTime);
-			compositeAdapter.updateRecord(record, false);
+			doSetLastChangeTime(lastChangeTime);
 			dataMgr.dataTypeChanged(this, false);
 		}
 		catch (IOException e) {
 			dataMgr.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public void setLastChangeTimeInSourceArchive(long lastChangeTime) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
 			record.setLongValue(CompositeDBAdapter.COMPOSITE_SOURCE_SYNC_TIME_COL, lastChangeTime);
 			compositeAdapter.updateRecord(record, false);
@@ -369,9 +500,6 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		}
 		catch (IOException e) {
 			dataMgr.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -382,8 +510,7 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	void setUniversalID(UniversalID id) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
 			record.setLongValue(CompositeDBAdapter.COMPOSITE_UNIVERSAL_DT_ID, id.getValue());
 			compositeAdapter.updateRecord(record, false);
@@ -391,9 +518,6 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		}
 		catch (IOException e) {
 			dataMgr.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 
 	}
@@ -406,8 +530,7 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	protected void setSourceArchiveID(UniversalID id) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
 			record.setLongValue(CompositeDBAdapter.COMPOSITE_SOURCE_ARCHIVE_ID_COL, id.getValue());
 			compositeAdapter.updateRecord(record, false);
@@ -416,10 +539,6 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		catch (IOException e) {
 			dataMgr.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
-
 	}
 
 	protected final int getNonPackedAlignment() {
@@ -447,24 +566,16 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	public final int getAlignment() {
-		lock.acquire();
-		try {
-			return getComputedAlignment(checkIsValid() && dataMgr.isTransactionActive());
-		}
-		finally {
-			lock.release();
+		try (Closeable c = lock.read()) {
+			return getComputedAlignment(refreshIfNeeded() && dataMgr.isTransactionActive());
 		}
 	}
 
 	@Override
 	public final void repack() {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
 			repack(false, true);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -489,13 +600,9 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	public int getStoredPackingValue() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			return record.getIntValue(CompositeDBAdapter.COMPOSITE_PACKING_COL);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -534,8 +641,7 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		if (packingValue < NO_PACKING) {
 			throw new IllegalArgumentException("invalid packing value: " + packingValue);
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
 			int oldPackingValue = getStoredPackingValue();
 			if (packingValue == oldPackingValue) {
@@ -553,9 +659,6 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		}
 		catch (IOException e) {
 			dataMgr.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -588,13 +691,9 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 
 	@Override
 	public int getStoredMinimumAlignment() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			return record.getIntValue(CompositeDBAdapter.COMPOSITE_MIN_ALIGN_COL);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -612,8 +711,7 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 			throw new IllegalArgumentException(
 				"invalid minimum alignment value: " + minimumAlignment);
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			checkDeleted();
 			if (minimumAlignment == getStoredMinimumAlignment()) {
 				return;
@@ -627,13 +725,12 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		catch (IOException e) {
 			dataMgr.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public abstract DataTypeComponentDB[] getDefinedComponents();
+
+	abstract void forEachDefinedComponent(Consumer<DataTypeComponentDB> dtcConsumer);
 
 	@Override
 	protected void postPointerResolve(DataType definitionDt, DataTypeConflictHandler handler) {
@@ -641,7 +738,13 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 		DataTypeComponent[] definedComponents = composite.getDefinedComponents();
 		DataTypeComponentDB[] myDefinedComponents = getDefinedComponents();
 		if (definedComponents.length != myDefinedComponents.length) {
-			throw new IllegalArgumentException("mismatched definition datatype");
+			Msg.error(this,
+				"Resolve failure: unexpected component count detected\nDefinition Type:\n" +
+					definitionDt.toString() + "\nResolving Type:\n" + this.toString());
+			throw new ConcurrentModificationException(
+				"Resolve failure: unexpected component count detected for '" +
+					definitionDt.getPathName() + "' (" + definedComponents.length + " vs " +
+					myDefinedComponents.length + ")");
 		}
 		for (int i = 0; i < definedComponents.length; i++) {
 			DataTypeComponent dtc = definedComponents[i];
@@ -681,7 +784,7 @@ abstract class CompositeDB extends DataTypeDB implements CompositeInternal {
 	public String toString() {
 		return CompositeInternal.toString(this);
 	}
-	
+
 	/**
 	 * Perform any neccessary component adjustments based on sizes of components differing from 
 	 * their specification which may be influenced by the data organization.  This method

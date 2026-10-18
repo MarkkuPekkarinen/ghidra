@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,7 +32,6 @@ import generic.Unique;
 import ghidra.app.decompiler.component.DecompilerPanel;
 import ghidra.app.plugin.assembler.*;
 import ghidra.app.plugin.core.codebrowser.CodeViewerProvider;
-import ghidra.app.plugin.core.debug.DebuggerCoordinates;
 import ghidra.app.plugin.core.debug.gui.listing.DebuggerListingPlugin;
 import ghidra.app.plugin.core.debug.gui.listing.DebuggerListingProvider;
 import ghidra.app.plugin.core.debug.service.control.DebuggerControlServicePlugin;
@@ -49,6 +48,8 @@ import ghidra.app.services.DebuggerControlService.StateEditor;
 import ghidra.app.services.DebuggerEmulationService.EmulationResult;
 import ghidra.app.util.viewer.listingpanel.ListingPanel;
 import ghidra.async.AsyncTestUtils;
+import ghidra.debug.api.control.ControlMode;
+import ghidra.debug.api.tracemgr.DebuggerCoordinates;
 import ghidra.framework.model.DomainFolder;
 import ghidra.framework.model.DomainObject;
 import ghidra.pcode.exec.DebuggerPcodeUtils.WatchValue;
@@ -66,13 +67,14 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.program.util.GhidraProgramUtilities;
 import ghidra.trace.database.ToyDBTraceBuilder;
 import ghidra.trace.model.Lifespan;
-import ghidra.trace.model.breakpoint.TraceBreakpointKind;
+import ghidra.trace.model.breakpoint.TraceBreakpointKind.CommonSet;
 import ghidra.trace.model.thread.TraceThread;
 import ghidra.trace.model.time.schedule.Scheduler;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.ConsoleTaskMonitor;
+import ghidra.util.task.TaskMonitor;
 import help.screenshot.GhidraScreenShotGenerator;
 
 public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerator
@@ -95,8 +97,8 @@ public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerat
 	protected void intoProject(DomainObject obj) {
 		waitForDomainObject(obj);
 		DomainFolder rootFolder = tool.getProject()
-			.getProjectData()
-			.getRootFolder();
+				.getProjectData()
+				.getRootFolder();
 		waitForCondition(() -> {
 			try {
 				rootFolder.createFile(obj.getName(), obj, monitor);
@@ -141,7 +143,7 @@ public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerat
 		try (Transaction tx = program.openTransaction("Assemble")) {
 			Address entry = addr(program, 0x00400000);
 			program.getMemory()
-				.createInitializedBlock(".text", entry, 0x1000, (byte) 0, monitor, false);
+					.createInitializedBlock(".text", entry, 0x1000, (byte) 0, monitor, false);
 			Assembler asm =
 				Assemblers.getAssembler(program.getLanguage(), StackUnwinderTest.NO_16BIT_CALLS);
 			AssemblyBuffer buf = new AssemblyBuffer(asm, entry);
@@ -193,9 +195,9 @@ public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerat
 			dis.disassemble(entry, null);
 
 			Function function = program.getFunctionManager()
-				.createFunction("fib", entry,
-					new AddressSet(entry, entry.add(bytes.length - 1)),
-					SourceType.USER_DEFINED);
+					.createFunction("fib", entry,
+						new AddressSet(entry, entry.add(bytes.length - 1)),
+						SourceType.USER_DEFINED);
 
 			function.updateFunction("__cdecl",
 				new ReturnParameterImpl(UnsignedIntegerDataType.dataType, program),
@@ -229,6 +231,8 @@ public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerat
 
 		DebuggerControlService controlService = addPlugin(tool, DebuggerControlServicePlugin.class);
 		DebuggerEmulationService emuService = addPlugin(tool, DebuggerEmulationServicePlugin.class);
+		VariableValueHoverPlugin valuesPlugin = addPlugin(tool, VariableValueHoverPlugin.class);
+		VariableValueHoverService valuesService = valuesPlugin.getHoverService();
 
 		Function function = createFibonacciProgramX86_32();
 		GhidraProgramUtilities.markProgramAnalyzed(program);
@@ -239,6 +243,8 @@ public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerat
 		tb = new ToyDBTraceBuilder(
 			ProgramEmulationUtils.launchEmulationTrace(program, entry, this));
 		tb.trace.release(this);
+		DomainFolder root = tool.getProject().getProjectData().getRootFolder();
+		root.createFile("Emulate fibonacci", tb.trace, TaskMonitor.DUMMY);
 		TraceThread thread = Unique.assertOne(tb.trace.getThreadManager().getAllThreads());
 		traceManager.openTrace(tb.trace);
 		traceManager.activateThread(thread);
@@ -271,9 +277,8 @@ public class VariableValueHoverPluginScreenShots extends GhidraScreenShotGenerat
 
 		try (Transaction tx = tb.startTransaction()) {
 			tb.trace.getBreakpointManager()
-				.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), retInstr,
-					Set.of(),
-					Set.of(TraceBreakpointKind.SW_EXECUTE), true, "unwind stack");
+					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), retInstr,
+						Set.of(), CommonSet.SWX.kinds(), true, "unwind stack");
 		}
 
 		EmulationResult result = emuService.run(atSetup.getPlatform(), atSetup.getTime(), monitor,

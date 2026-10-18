@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,8 +23,8 @@ import java.util.stream.Stream;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.listing.Function;
-import ghidra.program.model.pcode.PcodeOp;
-import ghidra.program.model.pcode.PcodeOpAST;
+import ghidra.program.model.pcode.*;
+import ghidra.util.Msg;
 
 /**
  * A warning issued while unwinding a stack
@@ -67,7 +67,15 @@ public interface StackUnwindWarning {
 	}
 
 	/**
+	 * For diagnostics, report any error details indicated by this warning, usually via {@link Msg}.
+	 */
+	default void reportDetails() {
+	}
+
+	/**
 	 * The unwind analyzer could not find an exit path from the frame's program counter.
+	 * 
+	 * @param pc the program counter
 	 */
 	public record NoReturnPathStackUnwindWarning(Address pc) implements StackUnwindWarning {
 		@Override
@@ -82,23 +90,34 @@ public interface StackUnwindWarning {
 	}
 
 	/**
-	 * The unwind analyzer discovered at last one exit path, but none could be analyzed.
+	 * The unwind analyzer discovered at least one exit path, but none could be analyzed.
+	 * 
+	 * @param pc the program counter
+	 * @param last the error from the last attempt
 	 */
-	public record OpaqueReturnPathStackUnwindWarning(Address pc) implements StackUnwindWarning {
+	public record OpaqueReturnPathStackUnwindWarning(Address pc, Exception last)
+			implements StackUnwindWarning {
 		@Override
 		public String getMessage() {
-			return "Could not analyze any path from " + pc + " to a return";
+			return "Could not analyze any path from " + pc + " to a return.\nLast error: " +
+				last.getMessage();
+		}
+
+		@Override
+		public void reportDetails() {
+			Msg.showError(this, null, "Details", getMessage(), last);
 		}
 	}
 
 	/**
 	 * While analyzing instructions, the unwind analyzer encountered a call to a function whose
 	 * effect on the stack is unknown.
-	 * 
 	 * <p>
 	 * The analyzer does not descend into calls or otherwise implement inter-procedural analysis.
 	 * Instead, it relies on analysis already performed by Ghidra's other analyzers and/or the human
 	 * user. The analyzer will assume a reasonable default.
+	 * 
+	 * @param function the target function of the encountered call
 	 */
 	public record UnknownPurgeStackUnwindWarning(Function function)
 			implements StackUnwindWarning, Combinable<UnknownPurgeStackUnwindWarning> {
@@ -124,9 +143,10 @@ public interface StackUnwindWarning {
 	/**
 	 * While analyzing instructions, the unwind analyzer encountered a call to a function whose
 	 * convention is not known.
-	 * 
 	 * <p>
 	 * The analyzer will assume the default convention for the program's compiler.
+	 * 
+	 * @param function the target function of the encountered call
 	 */
 	public record UnspecifiedConventionStackUnwindWarning(Function function)
 			implements StackUnwindWarning, Combinable<UnspecifiedConventionStackUnwindWarning> {
@@ -152,10 +172,11 @@ public interface StackUnwindWarning {
 	/**
 	 * While analyzing an indirect call, using the decompiler, the unwind analyzer obtained multiple
 	 * high {@link PcodeOp#CALL} or {@link PcodeOp#CALLIND} p-code ops.
-	 * 
 	 * <p>
 	 * Perhaps this should be replaced by an assertion, but failing fast may not be a good approach
 	 * for this case.
+	 * 
+	 * @param found the list of candidate call[ind] ops
 	 */
 	public record MultipleHighCallsStackUnwindWarning(List<PcodeOpAST> found)
 			implements StackUnwindWarning {
@@ -167,6 +188,8 @@ public interface StackUnwindWarning {
 
 	/**
 	 * Similar to {@link MultipleHighCallsStackUnwindWarning}, except no high call p-code ops.
+	 * 
+	 * @param op the op which had no corresponding high call[ind] after decompilation
 	 */
 	public record NoHighCallsStackUnwindWarning(PcodeOp op) implements StackUnwindWarning {
 		@Override
@@ -177,6 +200,8 @@ public interface StackUnwindWarning {
 
 	/**
 	 * While analyzing an indirect call, the target's type was not a function pointer.
+	 * 
+	 * @param type the actual type found
 	 */
 	public record UnexpectedTargetTypeStackUnwindWarning(DataType type)
 			implements StackUnwindWarning {
@@ -187,13 +212,56 @@ public interface StackUnwindWarning {
 	}
 
 	/**
+	 * While analyzing an indirect call, couldn't get the function signature because its input
+	 * doesn't have a high variable.
+	 * 
+	 * @param vn the varnode expected to identify the callee, but that had no high variable
+	 */
+	public record NoHighVariableFromTargetPointerTypeUnwindWarning(VarnodeAST vn)
+			implements StackUnwindWarning {
+		@Override
+		public String getMessage() {
+			return "Input of indirect call target has no high variable: " + vn;
+		}
+	}
+
+	/**
 	 * While analyzing an indirect call, the signature could not be derived from call-site context.
+	 * 
+	 * @param op the indirect call op
 	 */
 	public record CouldNotRecoverSignatureStackUnwindWarning(PcodeOpAST op)
 			implements StackUnwindWarning {
 		@Override
 		public String getMessage() {
 			return "Could not recover signature of indirect call: " + op;
+		}
+	}
+
+	/**
+	 * While interpreting p-code, we encountered an internal branch but ignored it.
+	 * 
+	 * @param seq the sequence number of the op
+	 */
+	public record IgnoredInternalFlowStackUnwindWarning(SequenceNumber seq)
+			implements StackUnwindWarning {
+		@Override
+		public String getMessage() {
+			return "Ignored control flow internal to instruction at %s:%d"
+					.formatted(seq.getTarget(), seq.getTime());
+		}
+	}
+
+	/**
+	 * A custom warning, either because a specific type is too onerous, or because the message was
+	 * deserialized and the specific type and info cannot be recovered.
+	 * 
+	 * @param message the message
+	 */
+	public record CustomStackUnwindWarning(String message) implements StackUnwindWarning {
+		@Override
+		public String getMessage() {
+			return message;
 		}
 	}
 }

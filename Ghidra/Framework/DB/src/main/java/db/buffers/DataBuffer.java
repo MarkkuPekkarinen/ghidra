@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,18 +33,24 @@ public class DataBuffer implements Buffer, Externalizable {
 		"db.buffers.DataBuffer.compressedOutput";
 
 	private static boolean enableCompressedSerializationOutput =
-		Boolean.parseBoolean(System.getProperty(COMPRESSED_SERIAL_OUTPUT_PROPERTY, "false"));
+		Boolean.parseBoolean(System.getProperty(COMPRESSED_SERIAL_OUTPUT_PROPERTY, "true"));
 
 	public static void enableCompressedSerializationOutput(boolean enable) {
 		System.setProperty(COMPRESSED_SERIAL_OUTPUT_PROPERTY, Boolean.toString(enable));
 		enableCompressedSerializationOutput = enable;
 	}
 
-	public static boolean usingCompressedSerializationOutput() {
+	public static boolean isCompressedSerializationOutputEnabled() {
 		return enableCompressedSerializationOutput;
 	}
 
 	private static int FORMAT_VERSION = 0xEA; // 0xEA is first version (avoided simple value like 0 or 1)
+
+	// Maximum support buffer size supported
+	public static final int MAX_BUFFER_SIZE = 65536;
+
+	// Establish safe limit for compressed buffer size
+	private static final int MAX_COMPRESSED_BUFFER_SIZE = MAX_BUFFER_SIZE + 1024;
 
 	/**
 	 * NOTE: See custom serialization methods at bottom which implement compression.
@@ -145,7 +151,7 @@ public class DataBuffer implements Buffer, Externalizable {
 
 	@Override
 	public int length() {
-		return data.length;
+		return data != null ? data.length : 0;
 	}
 
 	@Override
@@ -330,23 +336,26 @@ public class DataBuffer implements Buffer, Externalizable {
 	 */
 	private static int deflateData(byte[] data, byte[] compressedData) {
 
-		Deflater deflate = new Deflater(Deflater.BEST_COMPRESSION, true);
-		deflate.setStrategy(Deflater.HUFFMAN_ONLY);
-		deflate.setInput(data, 0, data.length);
-		deflate.finish();
+		// Deflater must be consistent with inflateData nowrap option and should
+		// not be changed since client/server must match.
+		// NOTE: compression mode may be adjusted to optimize performance
+		try (Deflater deflate = new Deflater(Deflater.BEST_SPEED, true)) {
+			deflate.setInput(data, 0, data.length);
+			deflate.finish();
 
-		int compressedDataOffset = 0;
-
-		while (!deflate.finished() && compressedDataOffset < compressedData.length) {
-			compressedDataOffset += deflate.deflate(compressedData, compressedDataOffset,
-				compressedData.length - compressedDataOffset, Deflater.SYNC_FLUSH);
+			int compressedDataOffset = 0;
+	
+			while (!deflate.finished() && compressedDataOffset < compressedData.length) {
+				compressedDataOffset += deflate.deflate(compressedData, compressedDataOffset,
+					compressedData.length - compressedDataOffset);
+			}
+	
+			if (!deflate.finished()) {
+				return -1;
+			}
+			
+			return compressedDataOffset;
 		}
-
-		if (!deflate.finished()) {
-			return -1;
-		}
-
-		return compressedDataOffset;
 	}
 
 	@Override
@@ -363,13 +372,18 @@ public class DataBuffer implements Buffer, Externalizable {
 		dirty = in.readBoolean();
 		empty = in.readBoolean();
 		int len = in.readInt();
-
 		data = null;
 
 		if (len >= 0) {
+			if (len > MAX_BUFFER_SIZE) {
+				throw new IOException("Unsupported buffer size: " + len);
+			}
 			data = new byte[len];
 			if (compressed) {
 				int compressedLen = in.readInt();
+				if (compressedLen > MAX_COMPRESSED_BUFFER_SIZE) {
+					throw new IOException("Unsupported compressed buffer size: " + compressedLen);
+				}
 				byte[] compressedData = new byte[compressedLen];
 				in.readFully(compressedData);
 				inflateData(compressedData, data);
@@ -408,14 +422,14 @@ public class DataBuffer implements Buffer, Externalizable {
 	 * Inflate compressedData into a properly sized data array.  
 	 * @param compressedData array containing compressed data
 	 * @param data target data array size to receive fully inflated data.
-	 * @throws IOException
+	 * @throws IOException if an IO error occurs
 	 */
 	private static void inflateData(byte[] compressedData, byte[] data) throws IOException {
 
-		Inflater inflater = new Inflater(true);
-		inflater.setInput(compressedData, 0, compressedData.length);
-
-		try {
+		// Inflater must be consistent with deflateData nowrap option and should
+		// not be changed since client/server must match.
+		try (Inflater inflater = new Inflater(true)) {
+			inflater.setInput(compressedData);
 			int off = 0;
 			while (!inflater.finished() && off < data.length) {
 				off += inflater.inflate(data, off, data.length - off);

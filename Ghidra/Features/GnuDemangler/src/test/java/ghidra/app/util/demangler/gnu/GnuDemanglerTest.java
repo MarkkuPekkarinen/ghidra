@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,12 +23,12 @@ import org.junit.Before;
 import org.junit.Test;
 
 import generic.test.AbstractGenericTest;
-import ghidra.app.util.demangler.DemangledException;
-import ghidra.app.util.demangler.DemangledObject;
+import ghidra.app.util.demangler.*;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.TerminatedStringDataType;
-import ghidra.program.model.listing.CodeUnit;
+import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.symbol.*;
 import ghidra.test.ToyProgramBuilder;
@@ -78,12 +78,143 @@ public class GnuDemanglerTest extends AbstractGenericTest {
 		GnuDemanglerOptions options = new GnuDemanglerOptions();
 		options.setDemangleOnlyKnownPatterns(false);
 		try {
-			demangler.demangle(mangled, options);
+			MangledContext mangledContext =
+				demangler.createMangledContext(mangled, options, program, null);
+			demangler.demangle(mangledContext);
 			fail("Demangle should have failed attempting to demangle a non-mangled string");
 		}
 		catch (DemangledException e) {
 			// expected
 		}
+	}
+
+	@Test
+	public void testFoo() throws Exception {
+
+		//
+		// Mangled: ._ZNK8tinyxml211XMLDocument6AcceptEPNS_10XMLVisitorE
+		//
+		// Demangled: .tinyxml2::XMLDocument::Accept(tinyxml2::XMLVisitor *)
+		//
+		// Fix: remove the leading '.'
+		//
+		String mangled = "._ZNK8tinyxml211XMLDocument6AcceptEPNS_10XMLVisitorE";
+
+		GnuDemangler demangler = new GnuDemangler();
+		demangler.canDemangle(program);// this perform initialization
+
+		GnuDemanglerOptions options = new GnuDemanglerOptions();
+		MangledContext mangledContext =
+			demangler.createMangledContext(mangled, options, program, null);
+		DemangledObject dobj = demangler.demangle(mangledContext);
+		assertNotNull(dobj);
+
+		String signature = dobj.getSignature();
+		assertEquals("undefined tinyxml2::XMLDocument::Accept(tinyxml2::XMLVisitor *)", signature);
+	}
+
+	@Test
+	public void testUseStandardReplacements() throws Exception {
+
+		//
+		// Mangled: _ZTv0_n24_NSt19basic_ostringstreamIcSt11char_traitsIcE14pool_allocatorIcEED0Ev
+		//
+		// Demangled: virtual thunk to std::basic_ostringstream<char, std::char_traits<char>, pool_allocator<char> >::~basic_ostringstream()
+		//
+		// Replaced: virtual thunk to undefined __thiscall std::ostringstream::~ostringstream(void)
+		//
+		String mangled =
+			"_ZTv0_n24_NSt19basic_ostringstreamIcSt11char_traitsIcE14pool_allocatorIcEED0Ev";
+
+		GnuDemangler demangler = new GnuDemangler();
+		demangler.canDemangle(program);// this perform initialization
+
+		GnuDemanglerOptions options = new GnuDemanglerOptions();
+		options.setUseStandardReplacements(true);
+		MangledContext mangledContext =
+			demangler.createMangledContext(mangled, options, program, null);
+		DemangledObject dobj = demangler.demangle(mangledContext);
+		assertNotNull(dobj);
+
+		String signature = dobj.getSignature();
+		assertEquals(
+			"virtual thunk to undefined __thiscall std::ostringstream::~ostringstream(void)",
+			signature);
+
+		assertEquals(
+			"virtual thunk to std::basic_ostringstream<char, std::char_traits<char>, pool_allocator<char> >::~basic_ostringstream()",
+			dobj.getRawDemangled());
+
+		//
+		// Now disable demangled string replacement
+		//
+		options.setUseStandardReplacements(false); // options are still in context
+		dobj = demangler.demangle(mangledContext);
+		assertNotNull(dobj);
+
+		String fullSignature = dobj.getSignature();
+		assertEquals(
+			"virtual thunk to undefined __thiscall std::basic_ostringstream<char,std::char_traits<char>,pool_allocator<char>>::~basic_ostringstream(void)",
+			fullSignature);
+	}
+
+	@Test
+	public void testUseStandardReplacements2() throws Exception {
+
+		// 
+		// Mangled: _ZN7Greeter5greetENSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
+		//
+		// Demangled: undefined Greeter::greet(std::__cxx11::basic_string<char,std::char_traits<char>,std::allocator<char>>)
+		//
+		// Replaced: undefined Greeter::greet(std::string)
+		//
+		String mangled = "_ZN7Greeter5greetENSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE";
+
+		GnuDemangler demangler = new GnuDemangler();
+		demangler.canDemangle(program);// this perform initialization
+
+		GnuDemanglerOptions options = new GnuDemanglerOptions();
+		options.setUseStandardReplacements(true);
+		MangledContext context = new MangledContext(program, options, mangled, null);
+
+		DemangledFunction dobj = (DemangledFunction) demangler.demangle(context);
+		assertNotNull(dobj);
+
+		String signature = dobj.getSignature();
+		assertEquals("undefined Greeter::greet(std::__cxx11::string)", signature);
+
+		DemangledParameter demangledParameter = dobj.getParameters().get(0);
+		DemangledDataType type = demangledParameter.getType();
+		DataType dt = type.getDataType(program.getDataTypeManager());
+		assertTrue(dt.isNotYetDefined());
+		//@formatter:off
+		assertEquals("/Demangler/std/__cxx11/string\n" + 
+			"pack(disabled)\n" + 
+			"Structure string {\n" + 
+			"}\n" + 
+			"Length: 0 Alignment: 1\n", dt.toString());
+		//@formatter:on
+
+		//
+		// Now disable demangled string replacement
+		// 
+		options.setUseStandardReplacements(false);
+		context = new MangledContext(program, options, mangled, null);
+		dobj = (DemangledFunction) demangler.demangle(context);
+		assertNotNull(dobj);
+
+		String fullSignature = dobj.getSignature();
+		assertEquals(
+			"undefined Greeter::greet(std::__cxx11::basic_string<char,std::char_traits<char>,std::allocator<char>>)",
+			fullSignature);
+
+		demangledParameter = dobj.getParameters().get(0);
+		type = demangledParameter.getType();
+		dt = type.getDataType(program.getDataTypeManager());
+		assertEquals(
+			"typedef basic_string<char,std::char_traits<char>,std::allocator<char>> undefined",
+			dt.toString());
+
 	}
 
 	@Test
@@ -125,11 +256,34 @@ public class GnuDemanglerTest extends AbstractGenericTest {
 		assertEquals("AP_HAL::HAL::Callbacks", s.getParentNamespace().getName(true));
 
 		assertEquals("typeinfo for AP_HAL::HAL::Callbacks",
-			program.getListing().getComment(CodeUnit.PLATE_COMMENT, addr("01001000")));
+			program.getListing().getComment(CommentType.PLATE, addr("01001000")));
 
 		Data d = program.getListing().getDefinedDataAt(addr("01001000"));
 		assertNotNull(d);
 		assertTrue(d.isPointer());
+	}
+
+	@Test
+	public void testGlobalInitializationFunction() throws Exception {
+
+		/*
+		 	Mangled: _GLOBAL__sub_I__ZN6ghidra8ATTRIB_AE
+		 	
+		 	We parse this as a  DemangledVariable.    We then us the '_GLOBAL__sub_I_' prefix as 
+		 	a signal that the symbol represents a global initialization constructor.  We then 
+		 	convert the variable to a DemangledFunction.
+		 	
+		 	Signature: ghidra::global_init_constructor_ATTRIB_A(void)
+		 	
+		 */
+
+		String mangled = "_GLOBAL__sub_I__ZN6ghidra8ATTRIB_AE";
+
+		GnuDemangler demangler = new GnuDemangler();
+		DemangledFunction obj = (DemangledFunction) demangler.demangle(mangled);
+
+		String signature = obj.getSignature();
+		assertEquals("ghidra::global_init_constructor_ATTRIB_A(void)", signature);
 	}
 
 	@Test
@@ -158,7 +312,7 @@ public class GnuDemanglerTest extends AbstractGenericTest {
 		assertEquals("AP_HAL::HAL::Callbacks", s.getParentNamespace().getName(true));
 
 		assertEquals("typeinfo name for AP_HAL::HAL::Callbacks",
-			program.getListing().getComment(CodeUnit.PLATE_COMMENT, addr("01001000")));
+			program.getListing().getComment(CommentType.PLATE, addr("01001000")));
 
 		Data d = program.getListing().getDefinedDataAt(addr("01001000"));
 		assertNotNull(d);
@@ -185,7 +339,9 @@ public class GnuDemanglerTest extends AbstractGenericTest {
 		demangler.canDemangle(program);// this perform initialization
 
 		GnuDemanglerOptions options = new GnuDemanglerOptions(GnuDemanglerFormat.EDG);
-		DemangledObject result = demangler.demangle(mangled, options);
+		MangledContext mangledContext =
+			demangler.createMangledContext(mangled, options, program, null);
+		DemangledObject result = demangler.demangle(mangledContext);
 		assertNull(result);
 	}
 
@@ -200,7 +356,9 @@ public class GnuDemanglerTest extends AbstractGenericTest {
 
 		GnuDemanglerOptions options = new GnuDemanglerOptions(GnuDemanglerFormat.AUTO, true);
 		options.setDemangleOnlyKnownPatterns(false);
-		DemangledObject result = demangler.demangle(mangled, options);
+		MangledContext mangledContext =
+			demangler.createMangledContext(mangled, options, program, null);
+		DemangledObject result = demangler.demangle(mangledContext);
 		assertNotNull(result);
 		assertEquals("undefined MyFunction::~MyFunction(void)", result.getSignature(false));
 	}
@@ -218,7 +376,9 @@ public class GnuDemanglerTest extends AbstractGenericTest {
 
 		GnuDemanglerOptions options = new GnuDemanglerOptions(GnuDemanglerFormat.AUTO, true);
 		options.setDemangleOnlyKnownPatterns(false);
-		DemangledObject result = demangler.demangle(mangled, options);
+		MangledContext mangledContext =
+			demangler.createMangledContext(mangled, options, program, null);
+		DemangledObject result = demangler.demangle(mangledContext);
 		assertNotNull(result);
 		assertEquals("undefined TTextPanel::scroll(unsigned char,short,int)",
 			result.getSignature(false));

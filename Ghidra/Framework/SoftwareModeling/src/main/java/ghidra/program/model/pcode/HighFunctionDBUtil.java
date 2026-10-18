@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -72,54 +72,109 @@ public class HighFunctionDBUtil {
 		return modelName;
 	}
 
-	/**
-	 * Commit the decompiler's version of the function return data-type to the database.
-	 * The decompiler's version of the prototype model is committed as well
-	 * @param highFunction is the decompiler's model of the function
-	 * @param source is the desired SourceType for the commit
-	 */
-	public static void commitReturnToDatabase(HighFunction highFunction, SourceType source) {
-		try {
+	public enum ReturnCommitOption {
+		/**
+		 * {@link #NO_COMMIT} - keep functions existing return parameter
+		 */
+		NO_COMMIT,
 
-			// Change calling convention if needed
-			Function function = highFunction.getFunction();
-			String convention = function.getCallingConventionName();
-			String modelName = getPrototypeModelForCommit(highFunction);
-			if (modelName != null && !modelName.equals(convention)) {
-				function.setCallingConvention(modelName);
-			}
+		/**
+		 * {@link #COMMIT} - commit return parameter as defined by {@link HighFunction}
+		 */
+		COMMIT,
 
-			VariableStorage storage = highFunction.getFunctionPrototype().getReturnStorage();
-			DataType dataType = highFunction.getFunctionPrototype().getReturnType();
-			if (dataType == null) {
-				dataType = DefaultDataType.dataType;
-				source = SourceType.DEFAULT;
-			}
-			function.setReturn(dataType, storage, source);
-		}
-		catch (InvalidInputException e) {
-			Msg.error(HighFunctionDBUtil.class, e.getMessage());
-		}
+		/**
+		 * {@link #COMMIT_NO_VOID} - commit return parameter as defined by {@link HighFunction}
+		 * unless it is {@link VoidDataType} in which case keep existing function return parameter.
+		 */
+		COMMIT_NO_VOID;
 	}
 
 	/**
-	 * Commit all parameters associated with HighFunction to the underlying database.
+	 * Commit all parameters, including optional return, associated with HighFunction to the 
+	 * underlying database.
 	 * @param highFunction is the associated HighFunction
 	 * @param useDataTypes is true if the HighFunction's parameter data-types should be committed
+	 * @param returnCommit controls optional commit of return parameter
 	 * @param source is the signature source type to set
 	 * @throws DuplicateNameException if commit of parameters caused conflict with other
 	 * local variable/label.
 	 * @throws InvalidInputException if specified storage is invalid
 	 */
 	public static void commitParamsToDatabase(HighFunction highFunction, boolean useDataTypes,
-			SourceType source) throws DuplicateNameException, InvalidInputException {
+			ReturnCommitOption returnCommit, SourceType source)
+			throws DuplicateNameException, InvalidInputException {
 		Function function = highFunction.getFunction();
 
+		Parameter returnParam;
+		if (returnCommit == ReturnCommitOption.NO_COMMIT) {
+			returnParam = function.getReturn();
+		}
+		else {
+			returnParam = getReturnParameter(highFunction, useDataTypes, returnCommit);
+		}
+
 		List<Parameter> params = getParameters(highFunction, useDataTypes);
+		boolean hasVarArgs = highFunction.getFunctionPrototype().isVarArg();
 
 		String modelName = getPrototypeModelForCommit(highFunction);
-		commitParamsToDatabase(function, modelName, params,
-			highFunction.getFunctionPrototype().isVarArg(), true, source);
+
+		try {
+			function.updateFunction(modelName, returnParam, params,
+				FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, source);
+		}
+		catch (DuplicateNameException e) {
+			for (Variable param : params) {
+				changeConflictingSymbolNames(param.getName(), returnParam, function);
+			}
+			function.updateFunction(modelName, null, params,
+				FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, source);
+		}
+
+		boolean customStorageReqd =
+			!VariableUtilities.storageMatches(params, function.getParameters());
+		if (returnCommit != ReturnCommitOption.NO_COMMIT) {
+			customStorageReqd |=
+				!returnParam.getVariableStorage().equals(function.getReturn().getVariableStorage());
+		}
+		if (customStorageReqd) {
+			// try again if dynamic storage assignment does not match decompiler's
+			// force into custom storage mode
+			function.updateFunction(modelName, returnParam, params,
+				FunctionUpdateType.CUSTOM_STORAGE, true, source);
+		}
+
+		if (function.hasVarArgs() != hasVarArgs) {
+			function.setVarArgs(hasVarArgs);
+		}
+	}
+
+	private static Parameter getReturnParameter(HighFunction highFunction, boolean useDataTypes,
+			ReturnCommitOption returnCommit) throws InvalidInputException {
+		Function function = highFunction.getFunction();
+		if (returnCommit == ReturnCommitOption.NO_COMMIT) {
+			return function.getReturn();
+		}
+
+		Program program = function.getProgram();
+		DataTypeManager dtm = program.getDataTypeManager();
+
+		VariableStorage returnStorage = highFunction.getFunctionPrototype().getReturnStorage();
+		DataType returnDt = highFunction.getFunctionPrototype().getReturnType();
+
+		if (useDataTypes && returnCommit == ReturnCommitOption.COMMIT_NO_VOID &&
+			(returnDt instanceof VoidDataType)) {
+			return function.getReturn(); // retain current return
+		}
+
+		if (returnDt == null) {
+			returnDt = DefaultDataType.dataType;
+			returnStorage = VariableStorage.UNASSIGNED_STORAGE;
+		}
+		else if (!useDataTypes) {
+			returnDt = Undefined.getUndefinedDataType(returnDt.getLength()).clone(dtm);
+		}
+		return new ReturnParameterImpl(returnDt, returnStorage, program);
 	}
 
 	private static List<Parameter> getParameters(HighFunction highFunction, boolean useDataTypes)
@@ -144,54 +199,6 @@ public class HighFunctionDBUtil {
 			params.add(new ParameterImpl(name, dataType, param.getStorage(), program));
 		}
 		return params;
-	}
-
-	/**
-	 * Commit a specified set of parameters for the given function to the database.
-	 * The name, data-type, and storage is committed for each parameter.  The parameters are
-	 * provided along with a formal PrototypeModel.  If the parameters fit the model, they are
-	 * committed using "dynamic" storage. Otherwise, they are committed using "custom" storage.
-	 * @param function is the Function being modified
-	 * @param modelName is the name of the underlying PrototypeModel
-	 * @param params is the formal list of parameter objects
-	 * @param hasVarArgs is true if the prototype can take variable arguments
-	 * @param renameConflicts if true any name conflicts will be resolved
-	 * by renaming the conflicting local variable/label
-	 * @param source source type
-	 * @throws DuplicateNameException if commit of parameters caused conflict with other
-	 * local variable/label.  Should not occur if renameConflicts is true.
-	 * @throws InvalidInputException for invalid variable names or for parameter data-types that aren't fixed length
-	 * @throws DuplicateNameException is there are collisions between variable names in the function's scope 
-	 */
-	public static void commitParamsToDatabase(Function function, String modelName,
-			List<Parameter> params, boolean hasVarArgs, boolean renameConflicts, SourceType source)
-			throws DuplicateNameException, InvalidInputException {
-
-		try {
-			function.updateFunction(modelName, null, params,
-				FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, source);
-		}
-		catch (DuplicateNameException e) {
-			if (!renameConflicts) {
-				throw e;
-			}
-			for (Variable param : params) {
-				changeConflictingSymbolNames(param.getName(), null, function);
-			}
-			function.updateFunction(modelName, null, params,
-				FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, source);
-		}
-
-		if (!VariableUtilities.storageMatches(params, function.getParameters())) {
-			// try again if dynamic storage assignment does not match decompiler's
-			// force into custom storage mode
-			function.updateFunction(modelName, null, params, FunctionUpdateType.CUSTOM_STORAGE,
-				true, source);
-		}
-
-		if (function.hasVarArgs() != hasVarArgs) {
-			function.setVarArgs(hasVarArgs);
-		}
 	}
 
 	private static void changeConflictingSymbolNames(String name, Variable ignoreVariable,
@@ -378,6 +385,44 @@ public class HighFunctionDBUtil {
 		return res;
 	}
 
+	private static Variable getLocalVariable(Function function, VariableStorage storage,
+			Address pcAddr) {
+
+		if (storage.isHashStorage()) {
+
+			long hashVal = storage.getFirstVarnode().getOffset();
+			for (Variable ul : function.getLocalVariables(VariableFilter.UNIQUE_VARIABLE_FILTER)) {
+				// Note: assumes there is only one hash method used for unique locals
+				if (ul.getFirstStorageVarnode().getOffset() == hashVal) {
+					return ul;
+				}
+			}
+			return null;
+		}
+
+		int firstUseOffset = 0;
+		if (pcAddr != null) {
+			firstUseOffset = (int) pcAddr.subtract(function.getEntryPoint());
+		}
+
+		for (Variable otherVar : function.getLocalVariables()) {
+			if (otherVar.getFirstUseOffset() != firstUseOffset) {
+				// other than parameters we will have a hard time identifying
+				// local variable conflicts due to differences in scope (i.e., first-use)
+				continue;
+			}
+
+			VariableStorage otherStorage = otherVar.getVariableStorage();
+			if (otherStorage.intersects(storage)) {
+				if (otherStorage.equals(storage)) {
+					return otherVar;
+				}
+			}
+		}
+
+		return null;
+	}
+
 	/**
 	 * Low-level routine for clearing any variables in the
 	 * database which conflict with this variable and return
@@ -454,7 +499,8 @@ public class HighFunctionDBUtil {
 		if (slot >= parameters.length ||
 			!parameters[slot].getVariableStorage().equals(param.getStorage())) {
 			try {
-				commitParamsToDatabase(highFunction, true, SourceType.ANALYSIS);
+				commitParamsToDatabase(highFunction, true, ReturnCommitOption.NO_COMMIT,
+					SourceType.ANALYSIS);
 			}
 			catch (DuplicateNameException e) {
 				throw new AssertException("Unexpected exception", e);
@@ -467,6 +513,37 @@ public class HighFunctionDBUtil {
 			}
 		}
 		return parameters[slot];
+	}
+
+	public static Variable getFunctionVariable(HighSymbol highSymbol) {
+
+		if (highSymbol == null) {
+			return null;
+		}
+
+		HighFunction highFunction = highSymbol.getHighFunction();
+		Function function = highFunction.getFunction();
+		HighVariable highVar = highSymbol.getHighVariable();
+		if (highSymbol.isParameter()) {
+
+			int slot = ((HighParam) highVar).getSlot();
+			Parameter parameter = function.getParameter(slot);
+			return parameter;
+		}
+
+		if (highSymbol.isGlobal()) {
+			return null;
+		}
+
+		highSymbol.resolveStorage();
+		VariableStorage storage = highSymbol.getStorage();
+		Address pcAddr = highSymbol.getPCAddress();
+		Variable localVariable = getLocalVariable(function, storage, pcAddr);
+
+		if (localVariable != null) {
+			return localVariable;
+		}
+		return null;
 	}
 
 	/**
@@ -523,24 +600,17 @@ public class HighFunctionDBUtil {
 		}
 		else if (!highSymbol.isGlobal()) {
 			Variable[] varList = null;
+			highSymbol.resolveStorage();
 			VariableStorage storage = highSymbol.getStorage();
 			Address pcAddr = highSymbol.getPCAddress();
-			HighVariable tmpHigh = highSymbol.getHighVariable();
-			if (!storage.isHashStorage() && tmpHigh != null && tmpHigh.requiresDynamicStorage()) {
-				DynamicEntry entry = DynamicEntry.build(tmpHigh.getRepresentative());
-				storage = entry.getStorage();
-				pcAddr = entry.getPCAdress();	// The address may change from original Varnode
-			}
-			else {
-				Variable var = clearConflictingLocalVariables(function, storage, pcAddr);
-				if (var != null) {
-					if (!resized) {
-						varList = gatherMergeSet(function, var);	// Cannot resize a whole multi-merge
-					}
-					else {
-						varList = new Variable[1];
-						varList[0] = var;
-					}
+			Variable conflictVar = clearConflictingLocalVariables(function, storage, pcAddr);
+			if (conflictVar != null) {
+				if (!resized) {
+					varList = gatherMergeSet(function, conflictVar);	// Cannot resize a whole multi-merge
+				}
+				else {
+					varList = new Variable[1];
+					varList[0] = conflictVar;
 				}
 			}
 			boolean usesHashStorage = storage.isHashStorage();
@@ -695,7 +765,8 @@ public class HighFunctionDBUtil {
 			throws InvalidInputException {
 
 		ParameterDefinition[] params = sig.getArguments();
-		FunctionDefinitionDataType fsig = new FunctionDefinitionDataType("tmpname"); // Empty datatype, will get renamed later
+		FunctionDefinitionDataType fsig =
+			new FunctionDefinitionDataType("tmpname", function.getProgram().getDataTypeManager()); // Empty datatype, will get renamed later
 		fsig.setCallingConvention(sig.getCallingConventionName());
 		fsig.setArguments(params);
 		fsig.setReturnType(sig.getReturnType());
@@ -729,6 +800,27 @@ public class HighFunctionDBUtil {
 			return null;
 		}
 		return datsym;
+	}
+
+	/**
+	 * If there is a call to a function at the given address, and the function takes variable arguments,
+	 * return the index of the first variable argument. Return -1 otherwise.
+	 * @param program is the Program
+	 * @param addr is the given address of the call
+	 * @return the index of the first variable argument or -1
+	 */
+	public static int getFirstVarArg(Program program, Address addr) {
+		for (Reference ref : program.getReferenceManager().getReferencesFrom(addr)) {
+			if (ref.isPrimary() && ref.getReferenceType().isCall()) {
+				Address callDestAddr = ref.getToAddress();
+				Function func = program.getFunctionManager().getFunctionAt(callDestAddr);
+				if (func != null && func.hasVarArgs()) {
+					return func.getParameterCount();
+				}
+				break;
+			}
+		}
+		return -1;
 	}
 
 	/**
@@ -773,29 +865,53 @@ public class HighFunctionDBUtil {
 	/**
 	 * Write a union facet to the database (UnionFacetSymbol).  Parameters provide the
 	 * pieces for building the dynamic LocalVariable.  This method clears out any preexisting
-	 * union facet with the same dynamic hash and firstUseOffset.
+	 * union facet with the same dynamic hash and firstUseOffset. The new facet can optionally
+	 * be "address based", meaning that all reads/writes of the union at the address are
+	 * controlled by this single facet.
 	 * @param function is the function affected by the union facet
 	 * @param dt is the parent data-type; a union, a pointer to a union, or a partial union
 	 * @param fieldNum is the ordinal of the desired union field
 	 * @param addr is the first use address of the facet
 	 * @param hash is the dynamic hash
+	 * @param isAddr is true if the new facet is address based
 	 * @param source is the SourceType for the LocalVariable
 	 * @throws InvalidInputException if the LocalVariable cannot be created
 	 * @throws DuplicateNameException if the (auto-generated) name is used elsewhere
 	 */
 	public static void writeUnionFacet(Function function, DataType dt, int fieldNum, Address addr,
-			long hash, SourceType source) throws InvalidInputException, DuplicateNameException {
-		if (dt instanceof PartialUnion) {
-			dt = ((PartialUnion) dt).getParent();
-		}
+			long hash, boolean isAddr, SourceType source)
+			throws InvalidInputException, DuplicateNameException {
 		int firstUseOffset = (int) addr.subtract(function.getEntryPoint());
-		String symbolName = UnionFacetSymbol.buildSymbolName(fieldNum, addr);
 		boolean nameCollision = false;
 		Variable[] localVariables =
 			function.getLocalVariables(VariableFilter.UNIQUE_VARIABLE_FILTER);
+		for (int i = 0; i < localVariables.length; ++i) {
+			Variable var = localVariables[i];
+			if (var.getName().startsWith(UnionFacetSymbol.BASENAME)) {
+				if (!UnionFacetSymbol.isUnionType(var.getDataType())) {	// Clean out any facet symbols with bad data-types
+					function.removeVariable(var);
+					localVariables[i] = null;
+				}
+			}
+			else {
+				localVariables[i] = null;		// Ignore symbols that aren't facets
+			}
+		}
+		String symbolName = UnionFacetSymbol.buildSymbolName(fieldNum, addr, isAddr);
 		Variable preexistingVar = null;
 		for (Variable var : localVariables) {
-			if (var.getFirstUseOffset() == firstUseOffset &&
+			if (var == null) {
+				continue;
+			}
+			if (isAddr && var.getFirstUseOffset() == firstUseOffset) {
+				if (preexistingVar == null) {
+					preexistingVar = var;
+				}
+				else {
+					function.removeVariable(var);	// Address based facets override all other facets at the same address
+				}
+			}
+			else if (!isAddr && var.getFirstUseOffset() == firstUseOffset &&
 				var.getFirstStorageVarnode().getOffset() == hash) {
 				preexistingVar = var;
 			}
@@ -803,14 +919,22 @@ public class HighFunctionDBUtil {
 				nameCollision = true;
 			}
 		}
+		if (dt instanceof PartialUnion) {
+			dt = ((PartialUnion) dt).getParent();
+		}
+		if (isAddr && dt instanceof Pointer) {
+			dt = ((Pointer) dt).getDataType();
+		}
 		if (nameCollision) {	// Uniquify the name if necessary
 			symbolName = symbolName + '_' + Integer.toHexString(DynamicHash.getComparable(hash));
 		}
 		if (preexistingVar != null) {
-			if (preexistingVar.getName().equals(symbolName)) {
-				return;			// No change to make
+			if (!preexistingVar.getName().equals(symbolName)) {
+				preexistingVar.setName(symbolName, source);		// Change the name
 			}
-			preexistingVar.setName(symbolName, source);		// Change the name
+			if (!preexistingVar.getDataType().equals(dt)) {
+				preexistingVar.setDataType(dt, source);
+			}
 			return;
 		}
 		Program program = function.getProgram();

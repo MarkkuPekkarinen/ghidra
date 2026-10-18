@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,7 @@
 package ghidra.util.database;
 
 import java.io.IOException;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.*;
 import java.lang.reflect.Field;
 import java.nio.*;
@@ -27,6 +28,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import db.*;
+import ghidra.program.model.address.*;
 import ghidra.util.Msg;
 import ghidra.util.database.annot.*;
 import ghidra.util.database.annot.DBAnnotatedField.DefaultCodec;
@@ -46,13 +48,13 @@ import ghidra.util.exception.VersionException;
  * 
  * 	Person getPerson(long id);
  * 
- * 	Collection<? extends Person> getPeopleNamed(String name);
+ * 	Collection&lt;? extends Person&gt; getPeopleNamed(String name);
  * }
  * 
  * public class DBMyDomainObject extends DBCachedDomainObjectAdapter implements MyDomainObject {
  * 	private final DBCachedObjectStoreFactory factory;
- * 	private final DBCachedObjectStore<DBPerson> people;
- * 	private final DBCachedObjectIndex<String, DBPerson> peopleByName;
+ * 	private final DBCachedObjectStore&lt;DBPerson&gt; people;
+ * 	private final DBCachedObjectIndex&lt;String, DBPerson&gt; peopleByName;
  * 
  * 	public DBMyDomainObject() { // Constructor parameters elided
  * 		// super() invocation elided
@@ -85,7 +87,7 @@ import ghidra.util.exception.VersionException;
  * 	}
  * 
  * 	&#64;Override
- * 	public Collection<Person> getPeopleNamed(String name) {
+ * 	public Collection&lt;Person&gt; getPeopleNamed(String name) {
  * 		// Locking details elided
  * 		return peopleByName.get(name);
  * 	}
@@ -109,6 +111,32 @@ import ghidra.util.exception.VersionException;
  *           store for that class.
  */
 public class DBCachedObjectStoreFactory {
+
+	public record RecAddress(int spaceId, long offset) {
+		public static RecAddress fromAddress(Address address) {
+			return new RecAddress(address.getAddressSpace().getSpaceID(), address.getOffset());
+		}
+
+		public long offset() {
+			return offset;
+		}
+
+		public Address toAddress(AddressFactory factory) {
+			return factory.getAddressSpace(spaceId).getAddress(offset);
+		}
+	}
+
+	public record RecRange(int spaceId, long min, long max) {
+		public static RecRange fromRange(AddressRange range) {
+			return new RecRange(range.getAddressSpace().getSpaceID(),
+				range.getMinAddress().getOffset(), range.getMaxAddress().getOffset());
+		}
+
+		public AddressRange toRange(AddressFactory factory) {
+			AddressSpace space = factory.getAddressSpace(spaceId);
+			return new AddressRangeImpl(space.getAddress(min), space.getAddress(max));
+		}
+	}
 
 	/**
 	 * A codec for encoding alternative data types
@@ -141,10 +169,10 @@ public class DBCachedObjectStoreFactory {
 	 * 	MyContext getContext();
 	 * }
 	 * 
-	 * public static class MyDBFieldCodec<OT extends DBAnnotatedObject & ContextProvider> extends
-	 * 		AbstractDBFieldCodec<MyType, OT, BinaryField> {
+	 * public static class MyDBFieldCodec&lt;OT extends DBAnnotatedObject &amp; ContextProvider&gt; extends
+	 * 		AbstractDBFieldCodec&lt;MyType, OT, BinaryField&gt; {
 	 * 
-	 * 	public MyDBFieldCodec(Class<OT> objectType, Field field, int column) {
+	 * 	public MyDBFieldCodec(Class&lt;OT&gt; objectType, Field field, int column) {
 	 * 		super(MyType.class, objectType, BinaryField.class, field, column);
 	 * 	}
 	 * 
@@ -280,9 +308,11 @@ public class DBCachedObjectStoreFactory {
 	 * This reduces the implementation burden to {@link #doLoad(DBAnnotatedObject, DBRecord)},
 	 * {@link #doStore(DBAnnotatedObject, DBRecord)}, and {@link #store(Object, db.Field)}.
 	 */
-	public static abstract class AbstractDBFieldCodec<VT, OT extends DBAnnotatedObject, FT extends db.Field>
+	public static abstract class AbstractDBFieldCodec<VT, OT extends DBAnnotatedObject,
+		FT extends db.Field>
 			implements DBFieldCodec<VT, OT, FT> {
 		protected final Class<VT> valueType;
+		protected final Class<VT> boxedType;
 		protected final Class<OT> objectType;
 		protected final Class<FT> fieldType;
 		protected final Field field;
@@ -308,6 +338,9 @@ public class DBCachedObjectStoreFactory {
 					"Given field does not have the given type: " + valueType + " != " + field);
 			}
 			this.valueType = valueType;
+			@SuppressWarnings("unchecked")
+			Class<VT> boxedType = (Class<VT>) MethodType.methodType(valueType).wrap().returnType();
+			this.boxedType = boxedType;
 			this.objectType = objectType;
 			this.fieldType = fieldType;
 			this.field = field;
@@ -352,7 +385,7 @@ public class DBCachedObjectStoreFactory {
 		@Override
 		public VT getValue(OT obj) {
 			try {
-				return valueType.cast(field.get(obj));
+				return boxedType.cast(field.get(obj));
 			}
 			catch (IllegalArgumentException | IllegalAccessException e) {
 				throw new AssertionError(e);
@@ -379,7 +412,7 @@ public class DBCachedObjectStoreFactory {
 				throws IllegalArgumentException, IllegalAccessException;
 
 		/**
-		 * Same as {@link #load(DBAnnotatedObject, DBRecord), but permits exceptions
+		 * Same as {@link #load(DBAnnotatedObject, DBRecord)}, but permits exceptions
 		 */
 		protected abstract void doLoad(OT obj, DBRecord record)
 				throws IllegalArgumentException, IllegalAccessException;
@@ -712,7 +745,7 @@ public class DBCachedObjectStoreFactory {
 		void encode(ByteBuffer buffer, T value);
 
 		/**
-		 * The the class describing {@link T}
+		 * The class describing {@link T}
 		 * 
 		 * @return the class
 		 */
@@ -928,10 +961,41 @@ public class DBCachedObjectStoreFactory {
 		/** Codec for {@code String[]} */
 		PrimitiveCodec<String[]> STRING_ARR =
 			new ArrayObjectCodec<>(new LengthBoundCodec<>(STRING));
+		PrimitiveCodec<RecAddress> ADDRESS = new AbstractPrimitiveCodec<>(RecAddress.class) {
+			@Override
+			public RecAddress decode(ByteBuffer buffer) {
+				int spaceId = buffer.getInt();
+				long offset = buffer.getLong();
+				return new RecAddress(spaceId, offset);
+			}
 
+			@Override
+			public void encode(ByteBuffer buffer, RecAddress value) {
+				buffer.putInt(value.spaceId);
+				buffer.putLong(value.offset);
+			}
+		};
+		PrimitiveCodec<RecRange> RANGE = new AbstractPrimitiveCodec<>(RecRange.class) {
+			@Override
+			public RecRange decode(ByteBuffer buffer) {
+				int spaceId = buffer.getInt();
+				long min = buffer.getLong();
+				long max = buffer.getLong();
+				return new RecRange(spaceId, min, max);
+			}
+
+			@Override
+			public void encode(ByteBuffer buffer, RecRange value) {
+				buffer.putInt(value.spaceId);
+				buffer.putLong(value.min);
+				buffer.putLong(value.max);
+			}
+		};
+
+		// TODO: No floats?
 		Map<Byte, PrimitiveCodec<?>> CODECS_BY_SELECTOR = Stream
 				.of(BOOL, BYTE, CHAR, SHORT, INT, LONG, STRING, BOOL_ARR, BYTE_ARR, CHAR_ARR,
-					SHORT_ARR, INT_ARR, LONG_ARR, STRING_ARR)
+					SHORT_ARR, INT_ARR, LONG_ARR, STRING_ARR, ADDRESS, RANGE)
 				.collect(Collectors.toMap(c -> c.getSelector(), c -> c));
 		Map<Class<?>, PrimitiveCodec<?>> CODECS_BY_CLASS = CODECS_BY_SELECTOR.values()
 				.stream()

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -181,8 +181,8 @@ CircleRange::CircleRange(uintb lft,uintb rgt,int4 size,int4 stp)
 {
   mask = calc_mask(size);
   step = stp;
-  left = lft;
-  right = rgt;
+  left = lft & mask;
+  right = rgt & mask;
   isempty = false;
 }
 
@@ -200,7 +200,7 @@ CircleRange::CircleRange(bool val)
 
 /// A size specifies the number of bytes (*8 to get number of bits) in the mask.
 /// The stride is assumed to be 1.
-/// \param val is is the single value
+/// \param val is the single value
 /// \param size is the size of the mask in bytes
 CircleRange::CircleRange(uintb val,int4 size)
 
@@ -220,15 +220,15 @@ void CircleRange::setRange(uintb lft,uintb rgt,int4 size,int4 stp)
 
 {
   mask = calc_mask(size);
-  left = lft;
-  right = rgt;
+  left = lft & mask;
+  right = rgt & mask;
   step = stp;
   isempty = false;
 }
 
 /// A size specifies the number of bytes (*8 to get number of bits) in the mask.
 /// The stride is assumed to be 1.
-/// \param val is is the single value
+/// \param val is the single value
 /// \param size is the size of the mask in bytes
 void CircleRange::setRange(uintb val,int4 size)
 
@@ -1239,8 +1239,8 @@ bool CircleRange::pushForwardBinary(OpCode opc,const CircleRange &in1,const Circ
       }
       int4 wholeSize = 8*sizeof(uintb) - count_leading_zeros(mask);
       if (in1.getMaxInfo() + in2.getMaxInfo() > wholeSize) {
-	left = in1.left;	// Covered everything
-	right = in1.left;
+	left = (in1.left * in2.left) % step;
+	right = left;				// Covered everything
 	normalize();
 	return true;
       }
@@ -1264,7 +1264,7 @@ bool CircleRange::pushForwardBinary(OpCode opc,const CircleRange &in1,const Circ
       uint4 tmp = sa;
       while(step < maxStep && tmp > 0) {
 	step <<= 1;
-	sa -= 1;
+	tmp -= 1;
       }
       left = (in1.left << sa)&mask;
       right = (in1.right << sa)&mask;
@@ -1283,13 +1283,14 @@ bool CircleRange::pushForwardBinary(OpCode opc,const CircleRange &in1,const Circ
       int4 sa = (int4)in2.left * 8;
       mask = calc_mask(outSize);
       step = (sa == 0) ? in1.step : 1;
+      uintb range = (in1.left < in1.right) ? in1.right-in1.left : in1.left - in1.right;
 
-      left = (in1.left >> sa)&mask;
-      right = (in1.right >> sa)&mask;
-      if ((left& ~mask) != (right & ~mask)) {	// Truncated part is different
+      if (range == 0 || ((range >> sa) > mask )) {
 	left = right = 0;	// We cover everything
       }
       else {
+	left = in1.left >> sa;
+	right = ((in1.right - in1.step) >> sa) + step;
 	left &= mask;
 	right &= mask;
 	normalize();
@@ -1331,7 +1332,7 @@ bool CircleRange::pushForwardBinary(OpCode opc,const CircleRange &in1,const Circ
 	valLeft = sign_extend(valLeft,bitPos);
       }
       left = (valLeft >> sa) & mask;
-      right = (valRight >> sa) & mask;
+      right = (((valRight - in1.step) >> sa) + 1) & mask;
       if (left == right)	// Don't truncate accidentally to everything
 	right = (left + 1)&mask;
       break;

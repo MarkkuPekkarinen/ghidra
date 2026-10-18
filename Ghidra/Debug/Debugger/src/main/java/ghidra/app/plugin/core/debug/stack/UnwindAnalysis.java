@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -42,6 +42,8 @@ import ghidra.util.task.TaskMonitor;
  * @see StackUnwinder
  */
 public class UnwindAnalysis {
+
+	private Map<Address, UnwindInfo> unwindInfo = new HashMap<>();
 
 	/**
 	 * A graph used for finding execution paths from function entry through the program counter to a
@@ -98,8 +100,7 @@ public class UnwindAnalysis {
 	/**
 	 * Wrap a {@link CodeBlock}
 	 */
-	record BlockVertex(CodeBlock block) {
-	}
+	record BlockVertex(CodeBlock block) {}
 
 	/**
 	 * Wrap a {@link CodeBlockReference}
@@ -142,7 +143,7 @@ public class UnwindAnalysis {
 		private final BlockGraph graph;
 		private final BlockVertex pcBlock;
 		private final DijkstraShortestPathsAlgorithm<BlockVertex, BlockEdge> pathFinder;
-		private final Set<StackUnwindWarning> warnings = new HashSet<>();
+		private final Set<StackUnwindWarning> warnings = new LinkedHashSet<>();
 
 		/**
 		 * Begin analysis for unwinding a frame, knowing only the program counter for that frame
@@ -353,7 +354,7 @@ public class UnwindAnalysis {
 		public SymPcodeExecutorState executeToPc(Deque<BlockEdge> to) throws CancelledException {
 			SymPcodeExecutorState state = new SymPcodeExecutorState(program);
 			SymPcodeExecutor exec =
-				SymPcodeExecutor.forProgram(program, state, Reason.EXECUTE_READ, warnings, monitor);
+				SymPcodeExecutor.forProgram(program, state, Reason.EXECUTE_READ, monitor);
 			executePathTo(exec, to);
 			executeBlockTo(exec, pcBlock.block, pc);
 			return state;
@@ -375,7 +376,7 @@ public class UnwindAnalysis {
 		public SymPcodeExecutorState executeFromPc(SymPcodeExecutorState state,
 				Deque<BlockEdge> from) throws CancelledException {
 			SymPcodeExecutor exec =
-				SymPcodeExecutor.forProgram(program, state, Reason.EXECUTE_READ, warnings, monitor);
+				SymPcodeExecutor.forProgram(program, state, Reason.EXECUTE_READ, monitor);
 			executeBlockFrom(exec, pcBlock.block, pc);
 			executePathFrom(exec, from);
 			return state;
@@ -420,16 +421,16 @@ public class UnwindAnalysis {
 		 * function return.</li>
 		 * <li>Examine the symbol in the program counter register. This gives the location (register
 		 * or stack offset) of the return address. This strategy should work whether or not a link
-		 * register is involved. See {@link SymPcodeExecutorState#computeAddressOfReturn()}.
+		 * register is involved. See {@link SymPcodeExecutorState#computeAddressOfReturn()}.</li>
 		 * <li>Examine the symbol in the stack pointer register, again. It should be a stack offset.
 		 * That offset is the "stack adjustment." See {@link UnwindInfo#adjust()},
 		 * {@link UnwindInfo#computeNextSp(Address)}, and
-		 * {@link SymPcodeExecutorState#computeStackDepth()}.
+		 * {@link SymPcodeExecutorState#computeStackDepth()}.</li>
 		 * <li>Search the registers for stack dereference symbols, creating an offset-register map.
 		 * This intersected with the same from entry to program counter is the saved registers map.
 		 * See {@link UnwindInfo#saved()},
 		 * {@link UnwindInfo#mapSavedRegisters(Address, SavedRegisterMap)}, and
-		 * {@link SymPcodeExecutorState#computeMapUsingRegisters()}.
+		 * {@link SymPcodeExecutorState#computeMapUsingRegisters()}.</li>
 		 * </ol>
 		 * 
 		 * <p>
@@ -454,37 +455,77 @@ public class UnwindAnalysis {
 					"Could not find a path from " + function + " entry to " + pc);
 			}
 			Collection<Deque<BlockEdge>> exitsPaths = getExitsPaths();
+			if (exitsPaths.isEmpty()) {
+				warnings.add(new NoReturnPathStackUnwindWarning(pc));
+			}
+			SymPcodeExecutorState lastSuccessfulEntryState = null;
+			Exception lastError = null;
 			// TODO: Proper exceptions for useless results
 			for (Deque<BlockEdge> entryPath : entryPaths) {
-				SymPcodeExecutorState entryState = executeToPc(entryPath);
-				Long depth = entryState.computeStackDepth();
-				if (depth == null) {
+				SymPcodeExecutorState entryState;
+				try {
+					entryState = executeToPc(entryPath);
+				}
+				catch (Exception e) {
+					lastError = e;
 					continue;
 				}
-				if (exitsPaths.isEmpty()) {
-					warnings.add(new NoReturnPathStackUnwindWarning(pc));
+				Long depth = entryState.computeStackDepth();
+				if (depth == null) {
+					lastError = new UnwindException("Cannot determine stack depth");
+					continue;
 				}
+				lastSuccessfulEntryState = entryState;
+
 				Map<Register, Address> mapByEntry = entryState.computeMapUsingStack();
 				for (Deque<BlockEdge> exitPath : exitsPaths) {
-					SymPcodeExecutorState exitState =
-						executeFromPc(entryState.forkRegs(), exitPath);
-					Address addressOfReturn = exitState.computeAddressOfReturn();
-					Long adjust = exitState.computeStackDepth();
-					if (addressOfReturn == null || adjust == null) {
+					SymPcodeExecutorState exitState;
+					try {
+						exitState = executeFromPc(entryState.forkRegs(), exitPath);
+					}
+					catch (Exception e) {
+						lastError = e;
 						continue;
 					}
+					Address addressOfReturn = exitState.computeAddressOfReturn();
+					if (addressOfReturn == null) {
+						lastError =
+							new UnwindException("Cannot determine address of return pointer");
+						continue;
+					}
+					long maskOfReturn = exitState.computeMaskOfReturn();
+					Long adjust = exitState.computeStackDepth();
+					if (adjust == null) {
+						lastError = new UnwindException("Cannot determine stack adjustment");
+						continue;
+					}
+					warnings.addAll(entryState.warnings);
+					warnings.addAll(exitState.warnings);
 					Map<Register, Address> mapByExit = exitState.computeMapUsingRegisters();
 					mapByExit.entrySet().retainAll(mapByEntry.entrySet());
-					return new UnwindInfo(function, depth, adjust, addressOfReturn, mapByExit,
-						new StackUnwindWarningSet(warnings));
+					return new UnwindInfo(function, depth, adjust, addressOfReturn, maskOfReturn,
+						mapByExit, new StackUnwindWarningSet(warnings), null);
 				}
-				warnings.add(new OpaqueReturnPathStackUnwindWarning(pc));
-				long adjust = SymPcodeExecutor.computeStackChange(function, warnings);
-				return new UnwindInfo(function, depth, adjust, null, mapByEntry,
-					new StackUnwindWarningSet(warnings));
 			}
-			throw new UnwindException(
-				"Could not analyze any path from " + function + " entry to " + pc);
+			if (lastSuccessfulEntryState != null) {
+				warnings.add(new OpaqueReturnPathStackUnwindWarning(pc, lastError));
+				try {
+					long adjust = SymPcodeExecutor.computeStackChange(function, warnings);
+					return new UnwindInfo(function, lastSuccessfulEntryState.computeStackDepth(),
+						adjust, null, -1, lastSuccessfulEntryState.computeMapUsingStack(),
+						new StackUnwindWarningSet(warnings), lastError);
+				}
+				catch (Exception e) {
+					return new UnwindInfo(function, lastSuccessfulEntryState.computeStackDepth(),
+						null, null, -1, lastSuccessfulEntryState.computeMapUsingStack(),
+						new StackUnwindWarningSet(warnings), e);
+				}
+			}
+			return new UnwindInfo(function, null, null, null, -1, null,
+				new StackUnwindWarningSet(warnings), new UnwindException(
+					"Could not analyze any path from %s entry to %s.\n%s".formatted(function, pc,
+						lastError.getMessage()),
+					lastError));
 		}
 	}
 
@@ -512,5 +553,21 @@ public class UnwindAnalysis {
 			throws CancelledException {
 		AnalysisForPC analysis = start(pc, monitor);
 		return analysis.computeUnwindInfo();
+	}
+
+	public UnwindInfo getUnwindInfo(Address key, TaskMonitor monitor) {
+		UnwindInfo info = unwindInfo.get(key);
+		if (info == null) {
+			try {
+				info = computeUnwindInfo(key, monitor);
+				if (info != null && info.error() != null) {
+					unwindInfo.put(key, info);
+				}
+			}
+			catch (CancelledException e) {
+				// info is null
+			}
+		}
+		return info;
 	}
 }

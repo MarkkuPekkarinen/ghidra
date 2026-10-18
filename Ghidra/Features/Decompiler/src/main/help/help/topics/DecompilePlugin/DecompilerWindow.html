@@ -1,10 +1,10 @@
 <html>
 <head>
-<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 <title>Decompiler Window</title>
 <link rel="stylesheet" type="text/css" href="help/shared/DefaultStyle.css">
 <link rel="stylesheet" type="text/css" href="../../shared/languages.css">
-<meta name="generator" content="DocBook XSL Stylesheets V1.79.1">
+<meta name="generator" content="DocBook XSL Stylesheets Vsnapshot">
 <link rel="home" href="Decompiler.html" title="Decompiler">
 <link rel="up" href="Decompiler.html" title="Decompiler">
 <link rel="prev" href="DecompilerOptions.html" title="Decompiler Options">
@@ -18,7 +18,7 @@
     function in the Code Browser, then select the
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/decompileFunction.gif" width="16" height="16"></span>
-      </span> icon from the tool bar, or the
+      </span>Â icon from the tool bar, or the
     <span class="bold"><strong>Decompile</strong></span> option from the
     <span class="bold"><strong>Window</strong></span> menu in the tool.
   </p>
@@ -91,7 +91,7 @@
     Initially pressing
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/decompileFunction.gif" width="16" height="16"></span>
-      </span> or selecting
+      </span>Â or selecting
     <span class="bold"><strong>Decompile</strong></span> from the <span class="bold"><strong>Window</strong></span> menu in the tool
     brings up the <span class="emphasis"><em>main</em></span> window.  The main window always displays the function
     at the <span class="emphasis"><em>current address</em></span> within the Code Browser and follows as the user navigates
@@ -101,7 +101,7 @@
     tokens (see <a class="xref" href="DecompilerWindow.html#MouseActions" title="Mouse Actions">Mouse Actions</a>).
   </p>
 
-  <div class="sect2">
+  	<div class="sect2">
 <div class="titlepage"><div><div><h3 class="title">
 <a name="CrossHighlighting"></a>Cross-Highlighting</h3></div></div></div>
     
@@ -147,13 +147,30 @@
 
 <div class="section">
 <div class="titlepage"><div><div><h2 class="title" style="clear: both">
+<a name="LockDisplay"></a>Disabling Auto Refresh</h2></div></div></div>
+  
+  <p>
+  	For very large functions, the decompile window can take a significant amount of time to re-decompile
+  	and update the display as changes are made to the program. This makes using some actions
+  	frustrating, such as renaming or retyping variables. 
+  </p>
+  <p>
+  	As a work around, you may use the lock toggle action 
+  	<img src="images/lock.gif" width="16" height="16">. When selected, this action will prevent
+  	the decompiler from auto refreshing for each change. This may make the display appear to be
+  	broken since any changes will not appear to take effect until the display is manually refreshed.
+	</p>
+</div>
+
+<div class="section">
+<div class="titlepage"><div><div><h2 class="title" style="clear: both">
 <a name="Snapshot"></a>Snapshot Windows</h2></div></div></div>
   
   <p>
     Pressing the
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/camera-photo.png" width="16" height="16"></span>
-    </span> icon
+    </span>Â icon
     in any Decompiler window's toolbar causes a <span class="emphasis"><em>Snapshot</em></span> window
     to be created, which shows decompilation of the same function.
     Unlike the <span class="emphasis"><em>main</em></span> window however, the <span class="emphasis"><em>Snapshot</em></span> window
@@ -187,6 +204,14 @@
     Double-clicking on specific tokens within the Snapshot window may also cause it to navigate
     to a new location (see <a class="xref" href="DecompilerWindow.html#MouseDouble" title="Double-Click">Double-Click</a>).
   </p>
+  <a name="EventsOut"></a>
+  <p>
+  	Normally, snapshot windows are completely disconnected from the location and selection 
+  	events that synchronize the main components in the tool. To allow the snapshot window
+  	to export its location and selection, select the 
+  	<img src="images/locationOut.gif" width="16" height="16"> toolbar action.
+  </p>
+  	
 </div>
 
 <div class="section">
@@ -240,7 +265,7 @@
   <p>
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/page_edit.png" width="16" height="16"></span>
-      </span> - button
+      </span>Â - button
   </p>
   <p>
     Exports the decompiled result of the current function to a file. A file chooser
@@ -265,7 +290,7 @@
   <p>
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/camera-photo.png" width="16" height="16"></span>
-      </span> - button
+      </span>Â - button
   </p>
   <p>
     Creates a new <span class="emphasis"><em>Snapshot</em></span> window.  The <span class="emphasis"><em>Snapshot</em></span> window
@@ -282,7 +307,7 @@
   <p>
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/reload3.png" width="16" height="16"></span>
-      </span> - button
+      </span>Â - button
   </p>
   <p>
     Triggers a re-decompilation of the current function displayed in the window.
@@ -305,12 +330,40 @@
 
 <div class="sect2">
 <div class="titlepage"><div><div><h3 class="title">
+<a name="ToolBarEliminateUnreachableCode"></a>Eliminate Unreachable Code</h3></div></div></div>
+  
+  <p>
+    <span class="guiicon">
+      <span class="inlinemediaobject"><img src="icon.decompiler.action.provider.unreachable" width="16" height="16"></span>
+      </span>Â - toggle button
+  </p>
+  <p>
+	Quickly turn off the <a class="xref" href="DecompilerOptions.html#AnalysisUnreachable"><span class="bold"><strong>Eliminate unreachable code</strong></span></a> decompiler setting.
+  </p>
+</div>
+
+<div class="sect2">
+<div class="titlepage"><div><div><h3 class="title">
+<a name="ToolBarRespectReadOnly"></a>Respect Read-only Flags</h3></div></div></div>
+  
+  <p>
+    <span class="guiicon">
+      <span class="inlinemediaobject"><img src="icon.decompiler.action.provider.readonly" width="16" height="16"></span>
+      </span>Â - toggle button
+  </p>
+  <p>
+	Quickly turn off the <a class="xref" href="DecompilerOptions.html#AnalysisReadOnly"><span class="bold"><strong>Respect read-only flags</strong></span></a> decompiler setting.
+  </p>
+</div>
+
+<div class="sect2">
+<div class="titlepage"><div><div><h3 class="title">
 <a name="ToolBarCopy"></a>Copy</h3></div></div></div>
   
   <p>
     <span class="guiicon">
       <span class="inlinemediaobject"><img src="images/page_white_copy.png" width="16" height="16"></span>
-      </span> - button
+      </span>Â - button
   </p>
   <p>
     Copies the currently selected text in the Decompiler window to the clipboard.
@@ -505,7 +558,8 @@
   
   <p>
     Highlights every occurrence of a variable, constant, or operator represented by the selected
-    token, within the Decompiler window.
+    token, within the Decompiler window.   There are actions available from the popup menu and from
+    the keyboard to navigate to each highlighted token.
   </p>
 </div>
 
@@ -523,7 +577,7 @@
     variable or operation affected.
   </p>
   <p>
-    Many of the actions have have a key binding, which, if it exists, will be listed in the pop-up menu.
+    Many of the actions have a key binding, which, if it exists, will be listed in the pop-up menu.
     If the key binding is used to activate the action, local context is determined by the current cursor
     position.  Key bindings can be reassigned from the
     <a class="ulink" href="help/topics/Tool/ToolOptions_Dialog.htm#KeyBindings_Option" target="_top">Key Bindings</a>
@@ -932,6 +986,19 @@
 
 <div class="sect2">
 <div class="titlepage"><div><div><h3 class="title">
+<a name="GoToMiddleMouseHighlight"></a>Go To Next/Previous Highlight</h3></div></div></div>
+  
+  <p>
+    These actions are available from the popup menu and keyboard.   Only tokens highlighted from the
+    middle-mouse will be navigated.  <span class="bold"><strong>Shift-Comma</strong></span> will go to the 
+    previous highlighted token.   <span class="bold"><strong>Shift-Period</strong></span> will go to the
+    next highlighted token.   These key bindings can be changed via the
+    <a class="ulink" href="help/topics/Tool/ToolOptions_Dialog.htm#KeyBindings_Option" target="_top">Tool Options Dialog</a>.
+  </p>
+</div>
+
+<div class="sect2">
+<div class="titlepage"><div><div><h3 class="title">
 <a name="ActionHighlight"></a>Highlight</h3></div></div></div>
   
   <p>
@@ -1080,6 +1147,21 @@
     parameter information by setting the function's prototype directly (see the
     <a class="xref" href="DecompilerWindow.html#ActionCommitParams" title="Commit Params/Return">Commit Params/Return</a> command).  In this situation, the "Override Signature"
     command is still possible, but it will bring up a confirmation dialog.
+  </p>
+</div>
+
+<div class="sect2">
+<div class="titlepage"><div><div><h3 class="title">
+<a name="ActionEditOverride"></a>Edit Signature Override</h3></div></div></div>
+  
+  <p>
+    Edit the overriding function prototype applied previously to the called function under the cursor.
+  </p>
+  <p>
+	This action can only be triggered at call sites with an existing signature override. As with the Override 
+	Signature command, users must select either the token representing the called function's name or the 
+	tokens representing the function pointer at the call site. The action brings up a dialog where the user 
+  	can edit the current overriding function prototype. 
   </p>
 </div>
 
@@ -1317,7 +1399,7 @@
   <p>
     Decompilation is triggered again to incorporate the
     new name, causing local variable declarations to be reordered and line breaks to
-    change, but otherwise the the output is unaffected.
+    change, but otherwise the output is unaffected.
   </p>
   <p>
     Local variables and parameters presented by the Decompiler may be invented on-the-fly

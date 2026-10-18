@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,12 +15,15 @@
  */
 package ghidra.program.database.function;
 
+import static ghidra.program.util.FunctionChangeRecord.FunctionChangeType.*;
+
 import java.io.IOException;
 
 import ghidra.program.model.data.*;
+import ghidra.program.model.lang.DynamicVariableStorage;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.program.util.ChangeManager;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 
@@ -45,8 +48,8 @@ public class ReturnParameterDB extends ParameterDB {
 	}
 
 	@Override
-	public void setName(String name, SourceType source) throws DuplicateNameException,
-			InvalidInputException {
+	public void setName(String name, SourceType source)
+			throws DuplicateNameException, InvalidInputException {
 		throw new UnsupportedOperationException();
 	}
 
@@ -66,25 +69,23 @@ public class ReturnParameterDB extends ParameterDB {
 	}
 
 	@Override
-	final void setOrdinal(int ordinal) {
+	final void setOrdinal(int ordinal, int autoParamCount) {
 		throw new UnsupportedOperationException();
 	}
 
 	@Override
 	public void setDataType(DataType type, VariableStorage newStorage, boolean force,
 			SourceType source) throws InvalidInputException, VariableSizeException {
-		functionMgr.lock.acquire();
-		try {
+		try (Closeable c = functionMgr.lock.write()) {
 			function.checkDeleted();
 			boolean hasCustomStorage = function.hasCustomVariableStorage();
 			if (!hasCustomStorage) {
 				newStorage = VariableStorage.UNASSIGNED_STORAGE;
 			}
 			Program program = function.getProgram();
-			type =
-				VariableUtilities.checkDataType(type,
-					newStorage.isVoidStorage() || newStorage.isUnassignedStorage(), getLength(),
-					program);
+			type = VariableUtilities.checkDataType(type,
+				newStorage.isVoidStorage() || newStorage.isUnassignedStorage(), getLength(),
+				program);
 			if (!newStorage.isUnassignedStorage()) {
 				newStorage = VariableUtilities.checkStorage(function, newStorage, type, force);
 			}
@@ -98,13 +99,10 @@ public class ReturnParameterDB extends ParameterDB {
 				function.updateParametersAndReturn();
 			}
 			function.updateSignatureSourceAfterVariableChange(source, type);
-			functionMgr.functionChanged(function, ChangeManager.FUNCTION_CHANGED_RETURN);
+			functionMgr.functionChanged(function, RETURN_TYPE_CHANGED);
 		}
 		catch (IOException e) {
 			functionMgr.dbError(e);
-		}
-		finally {
-			functionMgr.lock.release();
 		}
 	}
 
@@ -116,8 +114,7 @@ public class ReturnParameterDB extends ParameterDB {
 	@Override
 	public void setDataType(DataType type, boolean alignStack, boolean force, SourceType source)
 			throws InvalidInputException {
-		functionMgr.lock.acquire();
-		try {
+		try (Closeable c = functionMgr.lock.write()) {
 			function.checkDeleted();
 			Program program = function.getProgram();
 			type = VariableUtilities.checkDataType(type, true, 0, program);
@@ -148,19 +145,29 @@ public class ReturnParameterDB extends ParameterDB {
 				function.updateParametersAndReturn();
 			}
 			function.updateSignatureSourceAfterVariableChange(source, type);
-			functionMgr.functionChanged(function, ChangeManager.FUNCTION_CHANGED_RETURN);
+			functionMgr.functionChanged(function, RETURN_TYPE_CHANGED);
 		}
 		catch (IOException e) {
 			functionMgr.dbError(e);
-		}
-		finally {
-			functionMgr.lock.release();
 		}
 	}
 
 	@Override
 	public DataType getFormalDataType() {
 		return dataType;
+	}
+
+	@Override
+	public DataType getDataType() {
+		if (storage == DynamicVariableStorage.INDIRECT_VOID_STORAGE) {
+			return VoidDataType.dataType;
+		}
+		return super.getDataType();
+	}
+
+	@Override
+	public boolean isForcedIndirect() {
+		return storage.isForcedIndirect();
 	}
 
 	@Override

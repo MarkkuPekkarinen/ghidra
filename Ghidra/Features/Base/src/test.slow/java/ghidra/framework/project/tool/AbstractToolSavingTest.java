@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -114,7 +114,7 @@ public abstract class AbstractToolSavingTest extends AbstractGhidraHeadedIntegra
 				testEnv.getProject().save();
 				testEnv.closeAndReopenProject();
 			}
-			catch (IOException e) {
+			catch (Exception e) {
 				AssertionFailedError afe = new AssertionFailedError();
 				afe.initCause(e);
 				throw afe;
@@ -284,21 +284,21 @@ public abstract class AbstractToolSavingTest extends AbstractGhidraHeadedIntegra
 	protected void dumpToolFile(String name) throws IOException {
 		File file = ToolUtils.getToolFile(name);
 		List<String> lines = FileUtilities.getLines(file);
-		System.err.println("Tool contents '" + name + "': ");
+		Msg.debug(this, "Tool contents '" + name + "': ");
 		for (String line : lines) {
-			System.err.println(line);
+			Msg.debug(this, line);
 		}
 	}
 
 	protected void printToolXmlContainting(String name, String text) throws IOException {
 		File file = ToolUtils.getToolFile(name);
 		List<String> lines = FileUtilities.getLines(file);
-		System.err.println("Tool '" + file + "'\n\t- lines containing '" + text + "': ");
+		Msg.debug(this, "Tool '" + file + "'\n\t- lines containing '" + text + "': ");
 		Pattern p = Pattern.compile(".*" + Pattern.quote(text) + ".*");
 		for (String line : lines) {
 			Matcher m = p.matcher(line);
 			if (m.matches()) {
-				System.err.println(line);
+				Msg.debug(this, line);
 			}
 		}
 	}

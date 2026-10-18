@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,10 +36,10 @@ import ghidra.pcodeCPort.sleighbase.SleighBase;
 import ghidra.pcodeCPort.slgh_compile.*;
 import ghidra.pcodeCPort.slghsymbol.*;
 import ghidra.pcodeCPort.slghsymbol.EndSymbol;
+import ghidra.pcodeCPort.slghsymbol.Next2Symbol;
 import ghidra.pcodeCPort.slghsymbol.OperandSymbol;
 import ghidra.pcodeCPort.slghsymbol.StartSymbol;
 import ghidra.pcodeCPort.space.*;
-import ghidra.pcodeCPort.xml.DocumentStorage;
 import ghidra.program.model.address.*;
 import ghidra.sleigh.grammar.*;
 import ghidra.sleigh.grammar.SleighParser_SemanticParser.semantic_return;
@@ -61,7 +61,6 @@ public class PcodeParser extends PcodeCompile {
 	private HashSet<String> currentSymbols = new HashSet<>();
 
 	protected PcodeParser(SleighBase sleigh) {
-
 		this.sleigh = sleigh;
 		initializeSymbols();
 	}
@@ -73,7 +72,6 @@ public class PcodeParser extends PcodeCompile {
 	 * @param ubase is the starting offset for allocating temporary registers
 	 */
 	public PcodeParser(SleighLanguage language, long ubase) {
-
 		addrFactory = language.getAddressFactory();
 		sleigh = new PcodeTranslate(language, ubase);
 		initializeSymbols();
@@ -150,12 +148,17 @@ public class PcodeParser extends PcodeCompile {
 	}
 
 	@Override
-	public SleighSymbol findSymbol(String nm) {
+	public SleighSymbol findSymbol(Location loc, String nm) {
 		SleighSymbol sym = symbolMap.get(nm);
 		if (sym != null) {
 			return sym;
 		}
 		return sleigh.findSymbol(nm);
+	}
+
+	@Override
+	public RadixBigInteger parseIntegerLiteral(Location loc, String text) {
+		return sleigh.parseIntegerLiteral(loc, text);
 	}
 
 	public SleighBase getSleigh() {
@@ -165,6 +168,10 @@ public class PcodeParser extends PcodeCompile {
 	@Override
 	public AddrSpace getConstantSpace() {
 		return sleigh.getConstantSpace();
+	}
+
+	public int getDefaultConstantSize() {
+		return 0; // No particular size. Try to resolve in context.
 	}
 
 	@Override
@@ -323,11 +330,6 @@ public class PcodeParser extends PcodeCompile {
 		}
 
 		@Override
-		public void initialize(DocumentStorage store) {
-			// Unused
-		}
-
-		@Override
 		public int printAssembly(PrintStream s, int size, Address baseaddr) {
 			return 0;
 		}
@@ -391,6 +393,14 @@ public class PcodeParser extends PcodeCompile {
 			constTpl.getHandleIndex(), select);
 	}
 
+	protected SleighLexer newSleighLexer(CharStream input) {
+		return new SleighLexer(input);
+	}
+
+	protected SleighCompiler newSleighCompiler(CommonTreeNodeStream nodes) {
+		return new SleighCompiler(nodes);
+	}
+
 	/**
 	 * Compile pcode semantic statements.
 	 * 
@@ -421,7 +431,7 @@ public class PcodeParser extends PcodeCompile {
 
 			env.getLocator().registerLocation(input.getLine(), new Location(srcFile, srcLine));
 
-			SleighLexer lex = new SleighLexer(input);
+			SleighLexer lex = newSleighLexer(input);
 			lex.setEnv(env);
 			UnbufferedTokenStream tokens = new UnbufferedTokenStream(lex);
 			SleighParser parser = new SleighParser(tokens);
@@ -434,7 +444,7 @@ public class PcodeParser extends PcodeCompile {
 			CommonTreeNodeStream nodes = new CommonTreeNodeStream(semantic.getTree());
 			nodes.setTokenStream(tokens);
 			// ANTLRUtil.debugNodeStream(nodes, System.out);
-			SleighCompiler walker = new SleighCompiler(nodes);
+			SleighCompiler walker = newSleighCompiler(nodes);
 
 			SectionVector rtl = walker.semantic(env, null, this, semantic.getTree(), false, false);
 
@@ -482,6 +492,12 @@ public class PcodeParser extends PcodeCompile {
 	public VectorSTL<ghidra.pcodeCPort.semantics.OpTpl> createCrossBuild(Location where,
 			ghidra.pcodeCPort.semantics.VarnodeTpl v, SectionSymbol second) {
 		throw new SleighError("Pcode snippet parsing does not support use of sections", where);
+	}
+
+	@Override
+	public ghidra.pcodeCPort.semantics.ConstructTpl enterSection(Location where) {
+		resetLabelCount();
+		return new ghidra.pcodeCPort.semantics.ConstructTpl(where);
 	}
 
 	@Override

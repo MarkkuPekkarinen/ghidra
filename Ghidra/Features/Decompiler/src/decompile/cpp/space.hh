@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -39,8 +39,10 @@ enum spacetype {
 
 class AddrSpace;
 class AddrSpaceManager;
+class Address;
 struct VarnodeData;
 class Translate;
+class JoinRecord;
 
 extern AttributeId ATTRIB_BASE;		///< Marshaling attribute "base"
 extern AttributeId ATTRIB_DEADCODEDELAY;	///< Marshaling attribute "deadcodedelay"
@@ -81,6 +83,7 @@ extern AttributeId ATTRIB_PIECE;	///< Marshaling attribute "piece"
 ///
 class AddrSpace {
   friend class AddrSpaceManager; // Space container
+  friend class Address;
 public:
   enum {
     big_endian = 1,		///< Space is big endian if set, little endian otherwise
@@ -94,19 +97,22 @@ public:
     truncated = 0x100,		///< Space is truncated from its original size, expect pointers larger than this size
     hasphysical = 0x200,	///< Has physical memory associated with it
     is_otherspace = 0x400,	///< Quick check for the OtherSpace derived class
-    has_nearpointers = 0x800	///< Does there exist near pointers into this space
+    has_nearpointers = 0x800,	///< Does there exist near pointers into this space
+    allows_wrapped_range = 0x1000,	///< A memory range for \b this space can wrap from high addresses to low
+    addressable_all = 0x2000,	///< Pointers can address the entire space
+    addressable_none = 0x4000	///< Pointers do not exist into \b this space
   };
 private:
-  spacetype type;		///< Type of space (PROCESSOR, CONSTANT, INTERNAL, ...)
-  AddrSpaceManager *manage;     ///< Manager for processor using this space
   const Translate *trans;	///< Processor translator (for register names etc) for this space
+  spacetype type;		///< Type of space (PROCESSOR, CONSTANT, INTERNAL, ...)
   int4 refcount;		///< Number of managers using this space
   uint4 flags;			///< Attributes of the space
+  char shortcut;		///< Shortcut character for printing
   uintb highest;	        ///< Highest (byte) offset into this space
   uintb pointerLowerBound;	///< Offset below which we don't search for pointers
   uintb pointerUpperBound;	///< Offset above which we don't search for pointers
-  char shortcut;		///< Shortcut character for printing
 protected:
+  AddrSpaceManager *manage;     ///< Manager for processor using this space
   string name;			///< Name of this space
   uint4 addressSize;		///< Size of an address into this space in bytes
   uint4 wordsize;		///< Size of unit being addressed (1=byte)
@@ -117,15 +123,14 @@ protected:
   void calcScaleMask(void);	///< Calculate scale and mask
   void setFlags(uint4 fl);	///< Set a cached attribute
   void clearFlags(uint4 fl);	///< Clear a cached attribute
-  void saveBasicAttributes(ostream &s) const; ///< Write the XML attributes of this space
   void decodeBasicAttributes(Decoder &decoder);	///< Read attributes for \b this space from an open XML element
   void truncateSpace(uint4 newsize);
 public:
-  AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp,const string &nm,uint4 size,uint4 ws,int4 ind,uint4 fl,int4 dl);
+  AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp,const string &nm,bool bigEnd,
+	    uint4 size,uint4 ws,int4 ind,uint4 fl,int4 dl,int4 dead);
   AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp); ///< For use with decode
   virtual ~AddrSpace(void) {}	///< The address space destructor
   const string &getName(void) const; ///< Get the name
-  AddrSpaceManager *getManager(void) const; ///< Get the space manager
   const Translate *getTrans(void) const; ///< Get the processor translator
   spacetype getType(void) const; ///< Get the type of space
   int4 getDelay(void) const;     ///< Get number of heritage passes being delayed
@@ -149,8 +154,11 @@ public:
   bool isOverlayBase(void) const; ///< Return \b true if other spaces overlay this space
   bool isOtherSpace(void) const;	///< Return \b true if \b this is the \e other address space
   bool isTruncated(void) const; ///< Return \b true if this space is truncated from its original size
+  bool noHighPtrPossible(void) const;	///< Return \b true if there can be pointers into \b this space
   bool hasNearPointers(void) const;	///< Return \b true if \e near (truncated) pointers into \b this space are possible
+  bool allowsWrappedRange(void) const;	///< Return \b true if memory range can span high to low addresses in \b this space
   void printOffset(ostream &s,uintb offset) const;  ///< Write an address offset to a stream
+  JoinRecord *findJoin(uintb offset) const;	///< Find \e join record for offset in \b this space
 
   virtual int4 numSpacebase(void) const;	///< Number of base registers associated with this space
   virtual const VarnodeData &getSpacebase(int4 i) const;	///< Get a base register that creates this virtual space
@@ -163,8 +171,7 @@ public:
   virtual uintb decodeAttributes(Decoder &decoder,uint4 &size) const;   ///< Recover an offset and size
   virtual void printRaw(ostream &s,uintb offset) const;  ///< Write an address in this space to a stream
   virtual uintb read(const string &s,int4 &size) const;  ///< Read in an address (and possible size) from a string
-  virtual void saveXml(ostream &s) const; ///< Write the details of this space as XML
-  virtual void decode(Decoder &decoder); ///< Recover the details of this space from XML
+  virtual void decode(Decoder &decoder); ///< Recover the details of this space from a stream
 
   static uintb addressToByte(uintb val,uint4 ws); ///< Scale from addressable units to byte units
   static uintb byteToAddress(uintb val,uint4 ws); ///< Scale from byte units to addressable units
@@ -190,7 +197,6 @@ public:
   ConstantSpace(AddrSpaceManager *m,const Translate *t); ///< Only constructor
   virtual int4 overlapJoin(uintb offset,int4 size,AddrSpace *pointSpace,uintb pointOff,int4 pointSkip) const;
   virtual void printRaw(ostream &s,uintb offset) const;
-  virtual void saveXml(ostream &s) const;
   virtual void decode(Decoder &decoder);
   static const string NAME;		///< Reserved name for the address space
   static const int4 INDEX;		///< Reserved index for constant space
@@ -202,7 +208,6 @@ public:
   OtherSpace(AddrSpaceManager *m, const Translate *t, int4 ind);	///< Constructor
   OtherSpace(AddrSpaceManager *m, const Translate *t);	///< For use with decode
   virtual void printRaw(ostream &s, uintb offset) const;
-  virtual void saveXml(ostream &s) const;
   static const string NAME;		///< Reserved name for the address space
   static const int4 INDEX;		///< Reserved index for the other space
 };
@@ -220,7 +225,6 @@ class UniqueSpace : public AddrSpace {
 public:
   UniqueSpace(AddrSpaceManager *m,const Translate *t,int4 ind,uint4 fl);	///< Constructor
   UniqueSpace(AddrSpaceManager *m,const Translate *t);	///< For use with decode
-  virtual void saveXml(ostream &s) const;
   static const string NAME;		///< Reserved name for the unique space
   static const uint4 SIZE;		///< Fixed size (in bytes) for unique space offsets
 };
@@ -229,7 +233,7 @@ public:
 ///
 /// Some logical variables are split across non-contiguous regions of memory. This space
 /// creates a virtual place for these logical variables to exist.  Any memory location within this
-/// space is backed by 2 or more memory locations in other spaces that physically hold the pieces
+/// space is backed (usually by 2 or more) memory locations in other spaces that physically hold the pieces
 /// of the logical value. The database controlling symbols is responsible for keeping track of
 /// mapping the logical address in this space to its physical pieces.  Offsets into this space do not
 /// have an absolute meaning, the database may vary what offset is assigned to what set of pieces.
@@ -243,7 +247,6 @@ public:
   virtual uintb decodeAttributes(Decoder &decoder,uint4 &size) const;
   virtual void printRaw(ostream &s,uintb offset) const;
   virtual uintb read(const string &s,int4 &size) const;
-  virtual void saveXml(ostream &s) const;
   virtual void decode(Decoder &decoder);
   static const string NAME;		///< Reserved name for the join space
 };
@@ -261,7 +264,6 @@ class OverlaySpace : public AddrSpace {
 public:
   OverlaySpace(AddrSpaceManager *m,const Translate *t);	///< Constructor
   virtual AddrSpace *getContain(void) const { return baseSpace; }
-  virtual void saveXml(ostream &s) const;
   virtual void decode(Decoder &decoder);
 };
 
@@ -282,13 +284,6 @@ inline void AddrSpace::clearFlags(uint4 fl) {
 /// \return the name of this space
 inline const string &AddrSpace::getName(void) const {
   return name;
-}
-
-/// Every address space is associated with a manager of (all possible) spaces.
-/// This method recovers the address space manager object.
-/// \return a pointer to the address space manager
-inline AddrSpaceManager *AddrSpace::getManager(void) const {
-  return manage;
 }
 
 /// Every address space is associated with a processor which may have additional objects
@@ -469,8 +464,16 @@ inline bool AddrSpace::isTruncated(void) const {
   return ((flags&truncated)!=0);
 }
 
+inline bool AddrSpace::noHighPtrPossible(void) const {
+  return ((flags & addressable_none)!=0);
+}
+
 inline bool AddrSpace::hasNearPointers(void) const {
   return ((flags&has_nearpointers)!=0);
+}
+
+inline bool AddrSpace::allowsWrappedRange(void) const {
+  return ((flags & allows_wrapped_range)!=0);
 }
 
 /// Some spaces are "virtual", like the stack spaces, where addresses are really relative to a

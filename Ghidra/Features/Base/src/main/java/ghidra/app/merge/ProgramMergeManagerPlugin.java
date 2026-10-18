@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 package ghidra.app.merge;
+
+import java.net.URL;
+
+import javax.swing.JComponent;
 
 import ghidra.app.CorePluginPackage;
 import ghidra.app.events.ProgramActivatedPluginEvent;
@@ -25,11 +29,6 @@ import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
 
-import java.awt.Component;
-import java.net.URL;
-
-import javax.swing.JComponent;
-
 /**
  * Plugin that provides a merge component provider.
  * 
@@ -39,7 +38,7 @@ import javax.swing.JComponent;
 @PluginInfo(
 	status = PluginStatus.HIDDEN,
 	packageName = CorePluginPackage.NAME,
-	category = PluginCategoryNames.UNMANAGED,
+	category = PluginCategoryNames.COMMON,
 	shortDescription = "Program Merge Manager",
 	description = "Manage merge of Programs",
 	servicesProvided = { ProgramManager.class },
@@ -219,12 +218,17 @@ public class ProgramMergeManagerPlugin extends MergeManagerPlugin implements Pro
 	}
 
 	@Override
+	public Program openCachedProgram(URL ghidraURL, Object consumer) {
+		return null;
+	}
+
+	@Override
 	public Program openProgram(DomainFile domainFile) {
 		return null;
 	}
 
 	@Override
-	public Program openProgram(DomainFile domainFile, Component dialogParent) {
+	public Program openCachedProgram(DomainFile domainFile, Object consumer) {
 		return null;
 	}
 
@@ -240,54 +244,41 @@ public class ProgramMergeManagerPlugin extends MergeManagerPlugin implements Pro
 
 	@Override
 	public void openProgram(Program program) {
-	}
-
-	@Override
-	public void openProgram(Program program, boolean current) {
+		// not supported
 	}
 
 	@Override
 	public void openProgram(Program program, int state) {
-	}
-
-	@Override
-	public void releaseProgram(Program program, Object persistentOwner) {
+		// not supported
 	}
 
 	@Override
 	public void saveProgram() {
+		// not supported
 	}
 
 	@Override
 	public void saveProgram(Program program) {
+		// not supported
 	}
 
 	@Override
 	public void saveProgramAs() {
+		// not supported
 	}
 
 	@Override
 	public void saveProgramAs(Program program) {
+		// not supported
 	}
 
 	@Override
 	public void setCurrentProgram(Program p) {
-	}
-
-	@Override
-	public boolean setPersistentOwner(Program program, Object owner) {
-		return false;
+		// not supported
 	}
 
 	public void setSearchPriority(Program p, int priority) {
+		// not supported
 	}
 
-	@Override
-	public boolean isLocked() {
-		return false;
-	}
-
-	@Override
-	public void lockDown(boolean state) {
-	}
 }

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -92,17 +92,24 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 	}
 
 	private void validate(DataType dt) {
+		if (dataType instanceof VoidDataType) {
+			throw new IllegalArgumentException("TypeDef data type may not be 'void' data type");
+		}
+		if (dataType instanceof DefaultDataType) {
+			throw new IllegalArgumentException(
+				"TypeDef data type may not be 'default' undefined data type");
+		}
 		if (dt instanceof BitFieldDataType) {
 			throw new IllegalArgumentException(
-				"TypeDef data-type may not be a bitfield: " + dt.getName());
+				"TypeDef data type may not be a bitfield: " + dt.getName());
 		}
 		if (dt instanceof FactoryDataType) {
 			throw new IllegalArgumentException(
-				"TypeDef data-type may not be a Factory data-type: " + dt.getName());
+				"TypeDef data type may not be a Factory data type: " + dt.getName());
 		}
 		if (dt instanceof Dynamic) {
 			throw new IllegalArgumentException(
-				"TypeDef data-type may not be a Dynamic data-type: " + dt.getName());
+				"TypeDef data type may not be a Dynamic data type: " + dt.getName());
 		}
 	}
 
@@ -168,20 +175,28 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 		if (obj == this) {
 			return true;
 		}
-		if (obj instanceof TypeDef) {
-			TypeDef td = (TypeDef) obj;
-			if (isAutoNamed != td.isAutoNamed()) {
-				return false;
-			}
-			if (!isAutoNamed && !DataTypeUtilities.equalsIgnoreConflict(getName(), td.getName())) {
-				return false;
-			}
-			if (!hasSameTypeDefSettings(td)) {
-				return false;
-			}
-			return DataTypeUtilities.isSameOrEquivalentDataType(getDataType(), td.getDataType());
+		if (!(obj instanceof TypeDef td)) {
+			return false;
 		}
-		return false;
+
+		if (isAutoNamed != td.isAutoNamed()) {
+			return false;
+		}
+
+		if (!isAutoNamed && !DataTypeUtilities.equalsIgnoreConflict(getName(), td.getName())) {
+			return false;
+		}
+
+		if (!hasSameTypeDefSettings(td)) {
+			return false;
+		}
+
+		DataType otherDataType = td.getDataType();
+		if (DataTypeUtilities.isSameDataType(dataType, otherDataType)) {
+			return true;
+		}
+
+		return dataType.isEquivalent(otherDataType);
 	}
 
 	@Override
@@ -235,8 +250,7 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 		}
 		TypedefDataType newTypedef =
 			new TypedefDataType(typedef.getCategoryPath(), typedef.getName(), typedef.getDataType(),
-				typedef.getUniversalID(),
-				typedef.getSourceArchive(), typedef.getLastChangeTime(),
+				typedef.getUniversalID(), typedef.getSourceArchive(), typedef.getLastChangeTime(),
 				typedef.getLastChangeTimeInSourceArchive(), dtm);
 		copyTypeDefSettings(typedef, newTypedef, false);
 		newTypedef.isAutoNamed = typedef.isAutoNamed();
@@ -382,8 +396,8 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 
 	@Override
 	public void dataTypeReplaced(DataType oldDt, DataType newDt) {
-		validate(newDt);
 		if (oldDt == dataType) {
+			DataTypeUtilities.checkValidReplacement(oldDt, newDt);
 			settingsDef = null;
 			if (dataMgr != null) {
 				defaultSettings = null;

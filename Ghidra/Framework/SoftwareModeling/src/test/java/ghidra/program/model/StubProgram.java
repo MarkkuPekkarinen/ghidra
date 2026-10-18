@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,13 +20,16 @@ import java.io.IOException;
 import java.util.*;
 
 import db.Transaction;
+import ghidra.framework.data.DomainObjectFileListener;
 import ghidra.framework.model.*;
 import ghidra.framework.options.Options;
 import ghidra.framework.store.LockException;
 import ghidra.program.database.IntRangeMap;
+import ghidra.program.database.ProgramOverlayAddressSpace;
 import ghidra.program.database.data.ProgramDataTypeManager;
 import ghidra.program.database.map.AddressMap;
 import ghidra.program.model.address.*;
+import ghidra.program.model.data.ArchiveType;
 import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
@@ -39,6 +42,8 @@ import ghidra.program.model.util.PropertyMapManager;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.task.TaskMonitor;
+import utility.function.ExceptionalCallback;
+import utility.function.ExceptionalSupplier;
 
 public class StubProgram implements Program {
 
@@ -58,7 +63,7 @@ public class StubProgram implements Program {
 	}
 
 	@Override
-	public void endTransaction(int transactionID, boolean commit) {
+	public boolean endTransaction(int transactionID, boolean commit) {
 		throw new UnsupportedOperationException();
 	}
 
@@ -145,6 +150,16 @@ public class StubProgram implements Program {
 
 	@Override
 	public void removeCloseListener(DomainObjectClosedListener listener) {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public void addDomainFileListener(DomainObjectFileListener listener) {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public void removeDomainFileListener(DomainObjectFileListener listener) {
 		throw new UnsupportedOperationException();
 	}
 
@@ -385,7 +400,7 @@ public class StubProgram implements Program {
 
 	@Override
 	public String getCompiler() {
-		throw new UnsupportedOperationException();
+		return "unknown";
 	}
 
 	@Override
@@ -499,17 +514,28 @@ public class StubProgram implements Program {
 	}
 
 	@Override
+	public ProgramOverlayAddressSpace createOverlaySpace(String overlaySpaceName,
+			AddressSpace baseSpace) {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public void renameOverlaySpace(String oldOverlaySpaceName, String newName) {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public boolean removeOverlaySpace(String overlaySpaceName) {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
 	public Address[] parseAddress(String addrStr) {
 		throw new UnsupportedOperationException();
 	}
 
 	@Override
 	public Address[] parseAddress(String addrStr, boolean caseSensitive) {
-		throw new UnsupportedOperationException();
-	}
-
-	@Override
-	public void invalidate() {
 		throw new UnsupportedOperationException();
 	}
 
@@ -600,6 +626,38 @@ public class StubProgram implements Program {
 	@Override
 	public long getUniqueProgramID() {
 		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public String getPath() {
+		return null;
+	}
+
+	@Override
+	public <E extends Exception> void withTransaction(String description,
+			ExceptionalCallback<E> callback) throws E {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public <E extends Exception, T> T withTransaction(String description,
+			ExceptionalSupplier<T, E> supplier) throws E {
+		throw new UnsupportedOperationException();
+	}
+
+	@Override
+	public ArchiveType getArchiveType() {
+		return ArchiveType.PROGRAM;
+	}
+
+	@Override
+	public ProgramArchitecture getProgramArchitecture() {
+		return this;
+	}
+
+	@Override
+	public String getProgramArchitectureSummary() {
+		return null;
 	}
 
 }

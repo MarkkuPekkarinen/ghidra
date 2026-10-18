@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,11 +18,11 @@ package ghidra.program.database.references;
 import java.io.IOException;
 import java.util.*;
 
-import org.apache.commons.collections4.map.LazyMap;
-import org.apache.commons.collections4.map.LazySortedMap;
+import org.apache.commons.collections4.map.*;
 
 import db.*;
 import db.util.ErrorHandler;
+import ghidra.framework.data.OpenMode;
 import ghidra.program.database.*;
 import ghidra.program.database.external.ExternalManagerDB;
 import ghidra.program.database.map.AddressMap;
@@ -33,8 +33,9 @@ import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.symbol.*;
-import ghidra.program.util.ChangeManager;
+import ghidra.program.util.ProgramEvent;
 import ghidra.util.Lock;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.Msg;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
@@ -42,10 +43,10 @@ import ghidra.util.task.TaskMonitor;
 /**
  * Reference manager implementation for the database.
  */
-public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHandler {
+public class ReferenceDBManager implements ReferenceManager, ProgramDBModule, ErrorHandler {
 	private static final Reference[] NO_REFS = new Reference[0];
 
-	private FunctionVariableReferenceCacher functionCacher = new FunctionVariableReferenceCacher();
+	private LRUMap<Function, VariableReferences> variablesCache = new LRUMap<>(10);
 
 	private OldStackRefDBAdpater oldStackRefAdapter;
 	private AddressMap addrMap;
@@ -56,8 +57,8 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	private SymbolManager symbolMgr;
 	private Lock lock;
 
-	private DBObjectCache<RefList> fromCache;
-	private DBObjectCache<RefList> toCache;
+	private DbCache<RefList> fromCache;
+	private DbCache<RefList> toCache;
 
 	/**
 	 *
@@ -71,12 +72,12 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	 * @throws IOException if a database io error occurs.
 	 * @throws VersionException if the database version is different from the expected version
 	 */
-	public ReferenceDBManager(DBHandle dbHandle, AddressMap addrMap, int openMode, Lock lock,
+	public ReferenceDBManager(DBHandle dbHandle, AddressMap addrMap, OpenMode openMode, Lock lock,
 			TaskMonitor monitor) throws CancelledException, IOException, VersionException {
 		this.addrMap = addrMap;
 		this.lock = lock;
-		fromCache = new DBObjectCache<>(100);
-		toCache = new DBObjectCache<>(100);
+		fromCache = new DbCache<>(new FromReferenceFactory(), lock, 100);
+		toCache = new DbCache<>(new ToReferenceFactory(), lock, 100);
 
 		VersionException versionExc = null;
 		try {
@@ -87,7 +88,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 		try {
 			oldStackRefAdapter = OldStackRefDBAdpater.getAdapter(dbHandle, openMode, monitor);
-			if (openMode != DBConstants.UPGRADE) {
+			if (openMode != OpenMode.UPGRADE) {
 				// Upgrade required
 				versionExc = (new VersionException(true)).combine(versionExc);
 			}
@@ -100,7 +101,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 	}
 
-	private void initializeAdapters(DBHandle handle, int openMode, TaskMonitor monitor)
+	private void initializeAdapters(DBHandle handle, OpenMode openMode, TaskMonitor monitor)
 			throws VersionException, CancelledException, IOException {
 		VersionException versionExc = null;
 		try {
@@ -118,22 +119,22 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (versionExc != null) {
 			throw versionExc;
 		}
-		if (openMode == DBConstants.UPGRADE) {
+		if (openMode == OpenMode.UPGRADE) {
 			// Delete old table which is no longer used
 			handle.deleteTable("Memory References");
 		}
 	}
 
 	@Override
-	public void setProgram(ProgramDB program) {
+	public void setDomainObject(ProgramDB program) {
 		this.program = program;
-		symbolMgr = (SymbolManager) program.getSymbolTable();
+		symbolMgr = program.getSymbolTable();
 	}
 
 	@Override
-	public void programReady(int openMode, int currentRevision, TaskMonitor monitor)
+	public void domainObjectReady(OpenMode openMode, int currentRevision, TaskMonitor monitor)
 			throws IOException, CancelledException {
-		if (openMode == DBConstants.UPGRADE) {
+		if (openMode == OpenMode.UPGRADE) {
 
 			// Eliminate old stack references table
 			processOldAdapterStackRefs(monitor);
@@ -303,6 +304,17 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	 * @return combined reference type, or the newType if unable to combine
 	 */
 	private RefType combineReferenceType(RefType newType, RefType oldType) {
+		// check if types are the same, if same no use doing work replacing reference
+		if (newType == oldType) {
+			return oldType;
+		}
+		// any flow reference should be used over the existing ref to the same location
+		if (newType.isFlow()) {
+			return newType;  // allow any new flow ref to replace old type
+		}
+		if (oldType.isFlow()) {
+			return oldType; // always keep flow over new data ref
+		}
 		if (newType == RefType.DATA) {
 			if (oldType.isData()) {
 				return oldType;
@@ -352,8 +364,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			toAddr = ((OverlayAddressSpace) toAddr.getAddressSpace()).translateAddress(toAddr);
 		}
 
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			boolean isPrimary = false;
 
 			ReferenceDB oldRef = (ReferenceDB) getReference(fromAddr, toAddr, opIndex);
@@ -381,14 +392,16 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 				fromRefs == null || (fromAddr.isMemoryAddress() && !fromRefs.hasReference(opIndex));
 
 			if (fromRefs == null) {
-				fromRefs = fromAdapter.createRefList(program, fromCache, fromAddr);
+				fromRefs = fromAdapter.createRefList(program, fromAddr);
+				fromCache.add(fromRefs);
 			}
 			fromRefs = fromRefs.checkRefListSize(fromCache, 1);
 			fromRefs.addRef(fromAddr, toAddr, type, opIndex, -1, isPrimary, sourceType, isOffset,
 				isShifted, offsetOrShift);
 
 			if (toRefs == null && !isStackRegisterRef) {
-				toRefs = toAdapter.createRefList(program, toCache, toAddr);
+				toRefs = toAdapter.createRefList(program, toAddr);
+				toCache.add(toRefs);
 			}
 			if (toRefs != null) {
 				toRefs = toRefs.checkRefListSize(toCache, 1);
@@ -402,9 +415,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 			referenceAdded(r);
 			return r;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -437,6 +447,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			SourceType sourceType) {
 		if (!fromAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("From address must be memory address");
+		}
+		if (!type.isData()) {
+			throw new IllegalArgumentException("Invalid stack reference type: " + type);
 		}
 		Function function = program.getFunctionManager().getFunctionContaining(fromAddr);
 		if (function == null) {
@@ -476,6 +489,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			RefType type, SourceType sourceType) {
 		if (!fromAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("From address must be memory address");
+		}
+		if (!type.isData()) {
+			throw new IllegalArgumentException("Invalid register reference type: " + type);
 		}
 		removeAllFrom(fromAddr, opIndex);
 		try {
@@ -526,8 +542,8 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 
 		if (badOffsetReference) {
-			Msg.warn(this, "Offset Reference from " + fromAddr +
-				" produces bad Xref into EXTERNAL block");
+			Msg.warn(this,
+				"Offset Reference from " + fromAddr + " produces bad Xref into EXTERNAL block");
 		}
 
 		try {
@@ -562,9 +578,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (!fromAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("From address must be memory addresses");
 		}
-		removeAllFrom(fromAddr, opIndex);
 		try {
 			if (symbolMgr.getPrimarySymbol(location.getExternalSpaceAddress()) != null) {
+				removeAllFrom(fromAddr, opIndex);
 				return addRef(fromAddr, location.getExternalSpaceAddress(), type, sourceType,
 					opIndex, false, false, 0);
 			}
@@ -587,24 +603,17 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	public Reference addExternalReference(Address fromAddr, String libraryName, String extLabel,
 			Address extAddr, SourceType sourceType, int opIndex, RefType type)
 			throws InvalidInputException, DuplicateNameException {
-		if (libraryName == null || libraryName.length() == 0) {
-			throw new InvalidInputException("A valid library name must be specified.");
+
+		if (!fromAddr.isMemoryAddress()) {
+			throw new IllegalArgumentException("From addresses must be memory addresses");
 		}
-		if (extLabel != null && extLabel.length() == 0) {
-			extLabel = null;
-		}
-		if (extLabel == null && extAddr == null) {
-			throw new InvalidInputException("Either an external label or address is required");
-		}
-		if (!fromAddr.isMemoryAddress() || (extAddr != null && !extAddr.isMemoryAddress())) {
-			throw new IllegalArgumentException(
-				"From and extAddr addresses must be memory addresses");
-		}
-		removeAllFrom(fromAddr, opIndex);
 		try {
-			ExternalManagerDB extMgr = (ExternalManagerDB) program.getExternalManager();
+			ExternalManagerDB extMgr = program.getExternalManager();
 			ExternalLocation extLoc =
 				extMgr.addExtLocation(libraryName, extLabel, extAddr, sourceType);
+
+			removeAllFrom(fromAddr, opIndex);
+
 			Address toAddr = extLoc.getExternalSpaceAddress();
 
 			return addRef(fromAddr, toAddr, type, sourceType, opIndex, false, false, 0);
@@ -619,24 +628,16 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	public Reference addExternalReference(Address fromAddr, Namespace extNamespace, String extLabel,
 			Address extAddr, SourceType sourceType, int opIndex, RefType type)
 			throws InvalidInputException, DuplicateNameException {
-		if (extNamespace == null || !extNamespace.isExternal()) {
-			throw new InvalidInputException("The namespace must be an external namespace.");
+		if (!fromAddr.isMemoryAddress()) {
+			throw new IllegalArgumentException("From addresses must be memory addresses");
 		}
-		if (extLabel != null && extLabel.length() == 0) {
-			extLabel = null;
-		}
-		if (extLabel == null && extAddr == null) {
-			throw new InvalidInputException("Either an external label or address is required");
-		}
-		if (!fromAddr.isMemoryAddress() || (extAddr != null && !extAddr.isMemoryAddress())) {
-			throw new IllegalArgumentException(
-				"From and extAddr addresses must be memory addresses");
-		}
-		removeAllFrom(fromAddr, opIndex);
 		try {
-			ExternalManagerDB extMgr = (ExternalManagerDB) program.getExternalManager();
+			ExternalManagerDB extMgr = program.getExternalManager();
 			ExternalLocation extLoc =
 				extMgr.addExtLocation(extNamespace, extLabel, extAddr, sourceType);
+
+			removeAllFrom(fromAddr, opIndex);
+
 			Address toAddr = extLoc.getExternalSpaceAddress();
 			return addRef(fromAddr, toAddr, type, sourceType, opIndex, false, false, 0);
 		}
@@ -657,8 +658,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	public Variable getReferencedVariable(Reference reference) {
 		RefType refType = reference.getReferenceType();
 		return program.getFunctionManager()
-				.getReferencedVariable(reference.getFromAddress(),
-					reference.getToAddress(), 0,
+				.getReferencedVariable(reference.getFromAddress(), reference.getToAddress(), 0,
 					!refType.isWrite() && (refType.isRead() || refType.isIndirect()));
 	}
 
@@ -672,8 +672,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	@Override
 	public Reference[] getReferencesTo(Variable var) {
 
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			Function function = var.getFunction();
 			if (function.getProgram() != program || function.isDeleted()) {
 				return NO_REFS;
@@ -683,13 +682,12 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			if (varSymbol != null && varSymbol.isDeleted()) {
 				return NO_REFS;
 			}
-
-			functionCacher.setFunction(function);
+			VariableReferences varRefs = getVariablesReferences(function);
 
 			VariableStorage storage = var.getVariableStorage();
-			Scope scope = findVariableScope(function, varSymbol, var);
+			Scope scope = findVariableScope(varRefs, varSymbol, var);
 			List<Reference> matchingReferences =
-				getScopedVariableReferences(storage, function, scope);
+				getScopedVariableReferences(varRefs, storage, function, scope);
 			if (matchingReferences.isEmpty()) {
 				return NO_REFS;
 			}
@@ -698,12 +696,18 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			matchingReferences.toArray(refs);
 			return refs;
 		}
-		finally {
-			lock.release();
-		}
 	}
 
-	private Scope findVariableScope(Function function, Symbol varSymbol, Variable var) {
+	private synchronized VariableReferences getVariablesReferences(Function function) {
+		VariableReferences refs = variablesCache.get(function);
+		if (refs == null) {
+			refs = new VariableReferences(function);
+			variablesCache.put(function, refs);
+		}
+		return refs;
+	}
+
+	private Scope findVariableScope(VariableReferences refs, Symbol varSymbol, Variable var) {
 
 		VariableStorage storage = var.getVariableStorage();
 		Address variableAddr = null;
@@ -727,7 +731,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 		// There could be more than one variable with the same address
 		// Determine scope of variable within function
-		for (Variable v : functionCacher.getVariables(variableAddr)) {
+		for (Variable v : refs.getVariables(variableAddr)) {
 			int nextVarOffset = v.getFirstUseOffset();
 			if (nextVarOffset < 0) {
 				nextVarOffset = Integer.MAX_VALUE - nextVarOffset;
@@ -740,11 +744,10 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		return new Scope(var.getFirstUseOffset(), outOfScopeOffset);
 	}
 
-	private List<Reference> getScopedVariableReferences(VariableStorage storage,
-			Function function, Scope scope) {
+	private List<Reference> getScopedVariableReferences(VariableReferences varRefs,
+			VariableStorage storage, Function function, Scope scope) {
 
-		SortedMap<Address, List<Reference>> dataReferences =
-			functionCacher.getFunctionDataReferences();
+		SortedMap<Address, List<Reference>> dataReferences = varRefs.getFunctionDataReferences();
 
 		Address entry = function.getEntryPoint();
 		List<Reference> references = new ArrayList<>();
@@ -772,10 +775,8 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		int outOfScopeOffset = scope.getOutOfScopeOffset();
 
 		SortedMap<Address, List<Reference>> subMap = dataReferences.tailMap(minStorageAddr);
-		Iterator<List<Reference>> refListIter = subMap.values().iterator();
-		while (refListIter.hasNext()) {
+		for (List<Reference> refList : subMap.values()) {
 
-			List<Reference> refList = refListIter.next();
 			for (Reference ref : refList) {
 
 				if (ref.getToAddress().compareTo(maxStorageAddr) > 0) {
@@ -795,8 +796,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 	@Override
 	public void setPrimary(Reference ref, boolean isPrimary) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			Address fromAddr = ref.getFromAddress();
 			Address toAddr = ref.getToAddress();
 			int opIndex = ref.getOperandIndex();
@@ -824,15 +824,11 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
 	public Reference[] getReferencesFrom(Address addr) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			RefList fromRefs = getFromRefs(addr);
 			if (fromRefs == null) {
 				return NO_REFS;
@@ -842,16 +838,13 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return null;
 	}
 
 	@Override
 	public Reference[] getFlowReferencesFrom(Address addr) {
 		Reference[] refs = getReferencesFrom(addr);
-		ArrayList<Reference> list = new ArrayList<>(refs.length);
+		List<Reference> list = new ArrayList<>(refs.length);
 		for (Reference ref : refs) {
 			if (ref.getReferenceType().isFlow()) {
 				list.add(ref);
@@ -863,8 +856,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 	@Override
 	public Reference getReference(Address fromAddr, Address toAddr, int opIndex) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			if (fromAddr.equals(Address.EXT_FROM_ADDRESS)) {
 				RefList toRefs = getToRefs(toAddr);
 				if (toRefs != null) {
@@ -880,9 +872,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 		catch (IOException e) {
 			program.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return null;
 	}
@@ -926,13 +915,12 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	 * @return the references
 	 */
 	Reference[] getReferences(Address fromAddr, int opIndex) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			RefList fromRefs = getFromRefs(fromAddr);
 			if (fromRefs == null) {
 				return NO_REFS;
 			}
-			ArrayList<Reference> list = new ArrayList<>(10);
+			List<Reference> list = new ArrayList<>(10);
 			ReferenceIterator it = fromRefs.getRefs();
 			while (it.hasNext()) {
 				Reference ref = it.next();
@@ -946,16 +934,12 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return null;
 	}
 
 	@Override
 	public Reference getPrimaryReferenceFrom(Address addr, int opIndex) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			RefList fromRefs = getFromRefs(addr);
 			if (fromRefs != null) {
 				return fromRefs.getPrimaryRef(opIndex);
@@ -963,9 +947,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 		catch (IOException e) {
 			program.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return null;
 	}
@@ -1028,8 +1009,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 	@Override
 	public boolean hasFlowReferencesFrom(Address addr) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			RefList fromRefs = getFromRefs(addr);
 			if (fromRefs == null) {
 				return false;
@@ -1045,43 +1025,35 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return false;
 	}
 
 	@Override
 	public boolean hasReferencesFrom(Address fromAddr) {
-		lock.acquire();
+		long addr = addrMap.getKey(fromAddr, false);
+		if (addr == AddressMap.INVALID_ADDRESS_KEY) {
+			return false;
+		}
+		RefList refList = fromCache.getIfValid(addr);
+		if (refList != null && !refList.isEmpty()) {
+			return true;
+		}
 		try {
-			long addr = addrMap.getKey(fromAddr, false);
-			if (addr == AddressMap.INVALID_ADDRESS_KEY) {
-				return false;
-			}
-			RefList refList = fromCache.get(addr);
-			if (refList != null && !refList.isEmpty()) {
-				return true;
-			}
 			return fromAdapter.hasRefFrom(addr);
 		}
 		catch (IOException e) {
-			program.dbError(e);
-		}
-		finally {
-			lock.release();
+			dbError(e);
 		}
 		return false;
 	}
 
 	@Override
 	public boolean hasReferencesFrom(Address fromAddr, int opIndex) {
-		lock.acquire();
+		RefList fromRefs = getFromRefs(fromAddr);
+		if (fromRefs == null) {
+			return false;
+		}
 		try {
-			RefList fromRefs = getFromRefs(fromAddr);
-			if (fromRefs == null) {
-				return false;
-			}
 			ReferenceIterator it = fromRefs.getRefs();
 			while (it.hasNext()) {
 				Reference ref = it.next();
@@ -1091,10 +1063,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			}
 		}
 		catch (IOException e) {
-			program.dbError(e);
-		}
-		finally {
-			lock.release();
+			dbError(e);
 		}
 		return false;
 	}
@@ -1105,23 +1074,19 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			throw new UnsupportedOperationException(
 				"hasReferencesTo not supported for stack/register addresses");
 		}
-		lock.acquire();
+		long addr = addrMap.getKey(toAddr, false);
+		if (addr == AddressMap.INVALID_ADDRESS_KEY) {
+			return false;
+		}
+		RefList refList = toCache.getIfValid(addr);
+		if (refList != null && !refList.isEmpty()) {
+			return true;
+		}
 		try {
-			long addr = addrMap.getKey(toAddr, false);
-			if (addr == AddressMap.INVALID_ADDRESS_KEY) {
-				return false;
-			}
-			RefList refList = toCache.get(addr);
-			if (refList != null && !refList.isEmpty()) {
-				return true;
-			}
 			return toAdapter.hasRefTo(addr);
 		}
 		catch (IOException e) {
-			program.dbError(e);
-		}
-		finally {
-			lock.release();
+			dbError(e);
 		}
 		return false;
 	}
@@ -1165,8 +1130,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	}
 
 	void removeReference(Address fromAddr, Address toAddr, int opIndex) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			Reference ref = null;
 			RefList fromRefs = getFromRefs(fromAddr);
 			if (fromRefs != null) {
@@ -1195,9 +1159,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	/**
@@ -1216,7 +1177,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		Address refAddr = symbol.getAddress();
 
 		ReferenceIterator iter = getReferencesTo(refAddr);
-		ArrayList<Reference> list = new ArrayList<>();
+		List<Reference> list = new ArrayList<>();
 		while (iter.hasNext()) {
 			Reference ref = iter.next();
 			if (symID == ref.getSymbolID()) {
@@ -1237,10 +1198,22 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	}
 
 	private void checkFunctionChange(Symbol sym) {
-		SymbolType symbolType = sym.getSymbolType();
-		if (symbolType == SymbolType.FUNCTION || symbolType == SymbolType.PARAMETER ||
-			symbolType == SymbolType.LOCAL_VAR) {
-			functionCacher.clearCache();
+		try (Closeable c = lock.write()) {
+			SymbolType symbolType = sym.getSymbolType();
+			if (symbolType == SymbolType.FUNCTION || symbolType == SymbolType.PARAMETER ||
+				symbolType == SymbolType.LOCAL_VAR) {
+				clearVariablesCache();
+			}
+		}
+	}
+
+	private void clearVariablesCache() {
+		// Clear all variables cache. Perhaps it would be better to be more surgical and only
+		// remove the affected function.
+		try (Closeable c = lock.write()) {
+			synchronized (this) {
+				variablesCache.clear();
+			}
 		}
 	}
 
@@ -1250,8 +1223,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (s.getSymbolType() != SymbolType.LABEL || s.isDynamic() || s.isExternal()) {
 			return;
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			Address symAddr = s.getAddress();
 			if (!symAddr.equals(ref.getToAddress())) {
 				throw new IllegalArgumentException("Symbol address(" + symAddr +
@@ -1263,34 +1235,26 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			catch (IOException e) {
 				program.dbError(e);
 			}
-			program.setObjChanged(ChangeManager.DOCR_SYMBOL_ASSOCIATION_ADDED, ref.getFromAddress(),
-				ref, null, s);
-		}
-		finally {
-			lock.release();
+			program.setObjChanged(ProgramEvent.SYMBOL_ASSOCIATION_ADDED, ref.getFromAddress(), ref,
+				null, s);
 		}
 	}
 
 	@Override
 	public void removeAssociation(Reference ref) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			setSymbolID(ref, -1);
-			program.setObjChanged(ChangeManager.DOCR_SYMBOL_ASSOCIATION_REMOVED,
-				ref.getFromAddress(), ref, null, null);
+			program.setObjChanged(ProgramEvent.SYMBOL_ASSOCIATION_REMOVED, ref.getFromAddress(),
+				ref, null, null);
 		}
 		catch (IOException e) {
 			program.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
 	@Override
 	public Reference updateRefType(Reference ref, RefType refType) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			if (ref.getReferenceType() == refType) {
 				return ref;
 			}
@@ -1315,16 +1279,12 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return null;
 	}
 
 	@Override
 	public ReferenceIterator getReferencesTo(Address addr) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			if (addr.isStackAddress() || addr.isRegisterAddress()) {
 				throw new UnsupportedOperationException(
 					"getReferencesTo not supported for stack/register addresses");
@@ -1337,22 +1297,15 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return new EmptyMemReferenceIterator();
 	}
 
 	@Override
 	public void invalidateCache(boolean all) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			fromCache.invalidate();
 			toCache.invalidate();
-			functionCacher.clearCache();
-		}
-		finally {
-			lock.release();
+			clearVariablesCache();
 		}
 	}
 
@@ -1384,7 +1337,8 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (!newToAddr.isStackAddress() && !newToAddr.isRegisterAddress()) {
 			newToRefs = getToRefs(newToAddr);
 			if (newToRefs == null) {
-				newToRefs = toAdapter.createRefList(program, toCache, newToAddr);
+				newToRefs = toAdapter.createRefList(program, newToAddr);
+				toCache.add(newToRefs);
 			}
 			newToRefs = newToRefs.checkRefListSize(toCache, refs.length);
 		}
@@ -1423,8 +1377,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	@Override
 	public void moveAddressRange(Address fromAddr, Address toAddr, long length, TaskMonitor monitor)
 			throws CancelledException {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 
 			// Move all non-default references from the moved range.
 			// All default references from the range will be removed.
@@ -1502,9 +1455,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	/**
@@ -1530,8 +1480,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	 * Get address iterator over references that are external entry memory references
 	 */
 	public AddressIterator getExternalEntryIterator() {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			RefList refList = getFromRefs(Address.EXT_FROM_ADDRESS);
 			if (refList != null) {
 				return new ExtEntryAddressIterator(refList.getRefs());
@@ -1540,20 +1489,19 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		catch (IOException e) {
 			program.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return new EmptyAddressIterator();
 	}
 
 	/**
 	 * Return whether the address is an external entry point
-	 * @param toAddr the address to test for external entry point
+	 * @param toAddr the memory address to test for external entry point
 	 * @return true if the address is an external entry point
 	 */
 	public boolean isExternalEntryPoint(Address toAddr) {
-		lock.acquire();
-		try {
+		if (!toAddr.isMemoryAddress()) {
+			return false;
+		}
+		try (Closeable c = lock.read()) {
 			RefList refList = getToRefs(toAddr);
 			if (refList != null) {
 				return refList.getRef(Address.EXT_FROM_ADDRESS, CodeUnit.MNEMONIC) != null;
@@ -1561,9 +1509,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 		catch (IOException e) {
 			program.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return false;
 	}
@@ -1602,62 +1547,28 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	}
 
 	private void externalEntryPointAdded(Address addr) {
-		program.setChanged(ChangeManager.DOCR_EXTERNAL_ENTRY_POINT_ADDED, addr, addr, null, null);
+		program.setChanged(ProgramEvent.EXTERNAL_ENTRY_ADDED, addr, addr, null, null);
 	}
 
 	private void externalEntryPointRemoved(Address addr) {
-		program.setChanged(ChangeManager.DOCR_EXTERNAL_ENTRY_POINT_REMOVED, addr, addr, null, null);
+		program.setChanged(ProgramEvent.EXTERNAL_ENTRY_REMOVED, addr, addr, null, null);
 	}
 
 	private RefList getFromRefs(Address from) {
-		lock.acquire();
-		try {
-			long fromAddr = addrMap.getKey(from, false);
-			RefList refList = fromCache.get(fromAddr);
-			if (refList == null) {
-				try {
-					refList = fromAdapter.getRefList(program, fromCache, from, fromAddr);
-				}
-				catch (IOException e) {
-					dbError(e);
-				}
-			}
-			return refList;
-		}
-		finally {
-			lock.release();
-		}
+		long key = addrMap.getKey(from, false);
+		return fromCache.getCachedInstance(key);
 	}
 
 	private RefList getToRefs(Address to) {
-		lock.acquire();
-		try {
-			long toAddr = addrMap.getKey(to, false);
-			RefList refList = toCache.get(toAddr);
-			if (refList == null) {
-				try {
-					refList = toAdapter.getRefList(program, toCache, to, toAddr);
-				}
-				catch (ClosedException e) {
-					// TODO this seems wrong here; no other method handles closed exceptions
-				}
-				catch (IOException e) {
-					dbError(e);
-				}
-			}
-			return refList;
-		}
-		finally {
-			lock.release();
-		}
+		long key = addrMap.getKey(to, false);
+		return toCache.getCachedInstance(key);
 	}
 
 	/*
 	 * Remove all references that have the "From" address as the given address.
 	 */
 	void removeAllFrom(Address fromAddr) throws IOException {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			RefList fromRefs = getFromRefs(fromAddr);
 			if (fromRefs == null) {
 				return;
@@ -1676,9 +1587,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			fromRefs.removeAll();
 			fromCache.delete(fromRefs.getKey());
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	private void removeAllFrom(Address fromAddr, int opIndex) {
@@ -1689,8 +1597,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	}
 
 	void setSymbolID(Reference ref, long symbolID) throws IOException {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			RefList fromRefs = getFromRefs(ref.getFromAddress());
 			if (fromRefs == null) {
 				return;
@@ -1706,9 +1613,6 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 				toRefs.setSymbolID(curRef, symbolID);
 			}
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	private void referenceAdded(Reference ref) {
@@ -1716,25 +1620,24 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (addr == Address.EXT_FROM_ADDRESS) {
 			addr = null;
 		}
-		functionCacher.clearCache();
-		program.setObjChanged(ChangeManager.DOCR_MEM_REFERENCE_ADDED, addr, ref, null, ref);
+		clearVariablesCache();
+		program.setObjChanged(ProgramEvent.REFERENCE_ADDED, addr, ref, null, ref);
 		if (ref.getReferenceType() == RefType.FALL_THROUGH) {
 			program.getCodeManager().fallThroughChanged(ref.getFromAddress(), ref);
 		}
 	}
 
 	private void referenceRemoved(Reference ref) {
-		functionCacher.clearCache();
-		program.setObjChanged(ChangeManager.DOCR_MEM_REFERENCE_REMOVED, ref.getFromAddress(), ref,
-			ref, null);
+		clearVariablesCache();
+		program.setObjChanged(ProgramEvent.REFERENCE_REMOVED, ref.getFromAddress(), ref, ref, null);
 		if (ref.getReferenceType() == RefType.FALL_THROUGH) {
 			program.getCodeManager().fallThroughChanged(ref.getFromAddress(), null);
 		}
 	}
 
 	private void referenceTypeChanged(Reference ref, RefType oldType, RefType newType) {
-		functionCacher.clearCache();
-		program.setObjChanged(ChangeManager.DOCR_MEM_REF_TYPE_CHANGED, ref.getFromAddress(), ref,
+		clearVariablesCache();
+		program.setObjChanged(ProgramEvent.REFERENCE_TYPE_CHANGED, ref.getFromAddress(), ref,
 			oldType, newType);
 		if (oldType == RefType.FALL_THROUGH) {
 			program.getCodeManager().fallThroughChanged(ref.getFromAddress(), null);
@@ -1743,12 +1646,12 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 	private void referencePrimaryChanged(Reference ref) {
 		if (ref.isPrimary()) {
-			program.setObjChanged(ChangeManager.DOCR_MEM_REF_PRIMARY_SET, ref.getFromAddress(), ref,
+			program.setObjChanged(ProgramEvent.REFERNCE_PRIMARY_SET, ref.getFromAddress(), ref,
 				null, ref);
 		}
 		else {
-			program.setObjChanged(ChangeManager.DOCR_MEM_REF_PRIMARY_REMOVED, ref.getFromAddress(),
-				ref, ref, null);
+			program.setObjChanged(ProgramEvent.REFERENCE_PRIMARY_REMOVED, ref.getFromAddress(), ref,
+				ref, null);
 		}
 	}
 
@@ -1914,9 +1817,8 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		Reference memRef;
 		if (ref.isOffsetReference()) {
 			OffsetReference offRef = (OffsetReference) ref;
-			memRef =
-				addOffsetMemReference(from, offRef.getBaseAddress(), true, offRef.getOffset(), type,
-				sourceType, opIndex);
+			memRef = addOffsetMemReference(from, offRef.getBaseAddress(), true, offRef.getOffset(),
+				type, sourceType, opIndex);
 		}
 		else if (ref.isShiftedReference()) {
 			ShiftedReference shiftRef = (ShiftedReference) ref;
@@ -2009,66 +1911,49 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		return program;
 	}
 
-	private class FunctionVariableReferenceCacher {
+	private class VariableReferences {
 
-		private Function cachedFunction;
-		private SortedMap<Address, List<Reference>> references;
-		private Map<Address, List<Variable>> variablesByAddress;
+		private final Function function;
+		private final SortedMap<Address, List<Reference>> references;
+		private final Map<Address, List<Variable>> variablesByAddress;
 
-		synchronized void setFunction(Function function) {
-			if (cachedFunction == function) {
-				return;
-			}
-
-			clearCache();
-			cachedFunction = function;
+		VariableReferences(Function function) {
+			this.function = function;
+			variablesByAddress = createVariablesMap();
+			references = createSortedReferenceMap();
 		}
 
-		synchronized void clearCache() {
-			cachedFunction = null;
-			references = null;
-		}
-
-		synchronized SortedMap<Address, List<Reference>> getFunctionDataReferences() {
-
-			if (references != null) {
-				return references;
-			}
-
-			references = getSortedVariableReferences(cachedFunction);
+		SortedMap<Address, List<Reference>> getFunctionDataReferences() {
 			return references;
 		}
 
-		synchronized List<Variable> getVariables(Address address) {
+		List<Variable> getVariables(Address address) {
+			return variablesByAddress.get(address);
+		}
 
-			if (variablesByAddress != null) {
-				return variablesByAddress.get(address);
-			}
+		private Map<Address, List<Variable>> createVariablesMap() {
 
 			Map<Address, List<Variable>> map =
 				LazyMap.lazyMap(new HashMap<>(), () -> new ArrayList<>());
 
-			for (Symbol s : symbolMgr.getSymbols(cachedFunction.getID())) {
-				if (!s.getAddress().equals(address)) {
-					continue;
+			for (Symbol s : symbolMgr.getSymbols(function.getID())) {
+				if (s instanceof Variable v) {
+					Address a = s.getAddress();
+					map.get(a).add(v);
 				}
-				Variable v = (Variable) s.getObject();
-				map.get(address).add(v);
 			}
-
-			variablesByAddress = map;
-			return variablesByAddress.get(address);
+			return map;
 		}
 
-		private SortedMap<Address, List<Reference>> getSortedVariableReferences(Function function) {
+		private SortedMap<Address, List<Reference>> createSortedReferenceMap() {
 			SortedMap<Address, List<Reference>> newReferencesList =
 				LazySortedMap.lazySortedMap(new TreeMap<>(), () -> new ArrayList<>());
 
 			ReferenceIterator refIter = new FromRefIterator(function.getBody());
 			while (refIter.hasNext()) {
 				Reference ref = refIter.next();
-				RefType referenceType = ref.getReferenceType();
-				if (referenceType.isFlow() && !referenceType.isIndirect()) {
+				RefType type = ref.getReferenceType();
+				if (type.isFlow() && !type.isIndirect()) {
 					continue;
 				}
 
@@ -2097,4 +1982,51 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			return outOfScopeOffset;
 		}
 	}
+
+	private class FromReferenceFactory implements DbFactory<RefList> {
+
+		@Override
+		public RefList instantiate(long key) {
+			Address fromAddress = addrMap.decodeAddress(key);
+			try {
+				return fromAdapter.getRefList(program, fromAddress, key);
+			}
+			catch (IOException e) {
+				dbError(e);
+				return null;
+			}
+		}
+
+		@Override
+		public RefList instantiate(DBRecord record) {
+			// Currently the reference manager doesn't deal in records, so this should never
+			// be called
+			throw new UnsupportedOperationException();
+		}
+
+	}
+
+	private class ToReferenceFactory implements DbFactory<RefList> {
+
+		@Override
+		public RefList instantiate(long key) {
+			Address toAddress = addrMap.decodeAddress(key);
+			try {
+				return toAdapter.getRefList(program, toAddress, key);
+			}
+			catch (IOException e) {
+				dbError(e);
+				return null;
+			}
+		}
+
+		@Override
+		public RefList instantiate(DBRecord record) {
+			// Currently the reference manager doesn't deal in records, so this should never
+			// be called
+			throw new UnsupportedOperationException();
+		}
+
+	}
+
 }

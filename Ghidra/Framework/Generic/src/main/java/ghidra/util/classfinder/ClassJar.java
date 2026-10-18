@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,13 +36,13 @@ import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 import utility.application.ApplicationLayout;
 
-class ClassJar extends ClassLocation {
+class ClassJar implements ClassLocation {
 
 	/** 
 	 * Pattern for matching jar files in a module lib dir
 	 * <p>
-	 * The pattern roughly states to accept any path that contains <tt>lib</tt> or 
-	 * <tt>build/libs</tt>, ending in <tt>.jar</tt> (non-capturing) and then 
+	 * The pattern roughly states to accept any path that contains {@code lib} or 
+	 * {@code build/libs}, ending in {@code .jar} (non-capturing) and then 
 	 * grab that dir's parent and the name of the jar file.
 	 */
 	private static final Pattern ANY_MODULE_LIB_JAR_FILE_PATTERN =
@@ -51,24 +51,25 @@ class ClassJar extends ClassLocation {
 	private static final String PATCH_DIR_PATH_FORWARD_SLASHED = getPatchDirPath();
 	private static final Set<String> USER_PLUGIN_PATHS = loadUserPluginPaths();
 
-	private String path;
+	private Set<ClassFileInfo> classes = new HashSet<>();
+	private File file;
+	private String modulePath = "";
 
-	ClassJar(String path, TaskMonitor monitor) throws CancelledException {
-		this.path = path;
-		loadUserPluginPaths();
-
+	ClassJar(File file, TaskMonitor monitor) throws CancelledException {
+		this.file = file;
+		ResourceFile module = Application.getModuleContainingResourceFile(new ResourceFile(file));
+		if (module != null) {
+			modulePath = module.getAbsolutePath();
+		}
 		scanJar(monitor);
 	}
 
 	@Override
-	void getClasses(Set<Class<?>> set, TaskMonitor monitor) {
-		checkForDuplicates(set);
-		set.addAll(classes);
+	public void getClasses(List<ClassFileInfo> list, TaskMonitor monitor) {
+		list.addAll(classes);
 	}
 
 	private void scanJar(TaskMonitor monitor) throws CancelledException {
-
-		File file = new File(path);
 
 		try (JarFile jarFile = new JarFile(file)) {
 
@@ -84,7 +85,7 @@ class ClassJar extends ClassLocation {
 			}
 		}
 		catch (IOException e) {
-			Msg.error(this, "Error reading jarFile: " + path, e);
+			Msg.error(this, "Error reading jarFile: " + file, e);
 		}
 	}
 
@@ -174,15 +175,16 @@ class ClassJar extends ClassLocation {
 		name = name.substring(0, name.indexOf(CLASS_EXT));
 		name = name.replace('/', '.');
 
-		Class<?> c = ClassFinder.loadExtensionPoint(path, name);
-		if (c != null) {
-			classes.add(c);
+		String epName = ClassSearcher.getExtensionPointSuffix(name);
+		if (epName != null) {
+			String path = file.getAbsolutePath();
+			classes.add(new ClassFileInfo(path, name, epName, modulePath));
 		}
 	}
 
 	@Override
 	public String toString() {
-		return path;
+		return file.toString();
 	}
 
 	private static String getPatchDirPath() {

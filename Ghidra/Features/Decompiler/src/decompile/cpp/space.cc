@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -34,10 +34,13 @@ AttributeId ATTRIB_PIECE = AttributeId("piece",94);	// Open slots 94-102
 void AddrSpace::calcScaleMask(void)
 
 {
-  pointerLowerBound = (addressSize < 3) ? 0x100: 0x1000;
   highest = calc_mask(addressSize); // Maximum address
   highest = highest * wordsize + (wordsize-1); // Maximum byte address
+  pointerLowerBound = 0;
   pointerUpperBound = highest;
+  uintb bufferSize = (addressSize < 3) ? 0x100 : 0x1000;
+  pointerLowerBound += bufferSize;
+  pointerUpperBound -= bufferSize;
 }
 
 /// Initialize an address space with its basic attributes
@@ -45,13 +48,15 @@ void AddrSpace::calcScaleMask(void)
 /// \param t is the processor translator associated with the new space
 /// \param tp is the type of the new space (PROCESSOR, CONSTANT, INTERNAL,...)
 /// \param nm is the name of the new space
+/// \param bigEnd is \b true for big endian encoding
 /// \param size is the (offset encoding) size of the new space
 /// \param ws is the number of bytes in an addressable unit
 /// \param ind is the integer identifier for the new space
 /// \param fl can be 0 or AddrSpace::hasphysical
 /// \param dl is the number of rounds to delay heritage for the new space
-AddrSpace::AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp,const string &nm,
-		     uint4 size,uint4 ws, int4 ind,uint4 fl,int4 dl)
+/// \param dead is the number of rounds to delay before dead code removal
+AddrSpace::AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp,const string &nm,bool bigEnd,
+		     uint4 size,uint4 ws, int4 ind,uint4 fl,int4 dl,int4 dead)
 {
   refcount = 0;			// No references to this space yet
   manage = m;
@@ -62,17 +67,18 @@ AddrSpace::AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp,const s
   wordsize = ws;
   index = ind;
   delay = dl;
-  deadcodedelay = dl;		// Deadcode delay initially starts the same as heritage delay
+  deadcodedelay = dead;
   minimumPointerSize = 0;	// (initially) assume pointers must match the space size exactly
   shortcut = ' ';		// Placeholder meaning shortcut is unassigned
 
   // These are the flags we allow to be set from constructor
   flags = (fl & hasphysical);
-  if (t->isBigEndian())
+  if (bigEnd)
     flags |= big_endian;
   flags |= (heritaged | does_deadcode);		// Always on unless explicitly turned off in derived constructor
   
   calcScaleMask();
+  flags |= (delay == 0) ? addressable_none : addressable_all;
 }
 
 /// This is a partial constructor, for initializing a space
@@ -92,24 +98,6 @@ AddrSpace::AddrSpace(AddrSpaceManager *m,const Translate *t,spacetype tp)
   minimumPointerSize = 0;
   shortcut = ' ';
   // We let big_endian get set by attribute
-}
-
-/// Save the \e name, \e index, \e bigendian, \e delay,
-/// \e size, \e wordsize, and \e physical attributes which
-/// are common with all address spaces derived from AddrSpace
-/// \param s the stream where the attributes are written
-void AddrSpace::saveBasicAttributes(ostream &s) const
-
-{
-  a_v(s,"name",name);
-  a_v_i(s,"index",index);
-  a_v_b(s,"bigendian",isBigEndian());
-  a_v_i(s,"delay",delay);
-  if (delay != deadcodedelay)
-    a_v_i(s,"deadcodedelay",deadcodedelay);
-  a_v_i(s,"size",addressSize);
-  if (wordsize > 1) a_v_i(s,"wordsize",wordsize);
-  a_v_b(s,"physical",hasPhysical());
 }
 
 /// The logical form of the space is truncated from its actual size
@@ -208,6 +196,18 @@ void AddrSpace::printOffset(ostream &s,uintb offset) const
 
 {
   s << "0x" << hex << offset;
+}
+
+/// If \b this is not the \e join space, null is returned, otherwise look up any record
+/// associated with the given offset.
+/// \param offset is the given offset
+/// \return the record or null
+JoinRecord *AddrSpace::findJoin(uintb offset) const
+
+{
+  if (type != IPTR_JOIN)
+    return (JoinRecord *)0;
+  return manage->findJoin(offset);
 }
 
 /// This is a printing method for the debugging routines. It
@@ -310,17 +310,6 @@ uintb AddrSpace::read(const string &s,int4 &size) const
   return offset;
 }
 
-/// Write a tag fully describing the details of this space
-/// suitable for later recovery via decode.
-/// \param s is the stream being written
-void AddrSpace::saveXml(ostream &s) const
-
-{
-  s << "<space";		// This implies type=processor
-  saveBasicAttributes(s);
-  s << "/>\n";
-}
-
 /// Walk attributes of the current element and recover all the properties defining
 /// this space.  The processor translator, \e trans, and the
 /// \e type must already be filled in.
@@ -378,7 +367,7 @@ const int4 ConstantSpace::INDEX = 0;
 /// \param m is the associated address space manager
 /// \param t is the associated processor translator
 ConstantSpace::ConstantSpace(AddrSpaceManager *m,const Translate *t)
-  : AddrSpace(m,t,IPTR_CONSTANT,NAME,sizeof(uintb),1,INDEX,0,0)
+  : AddrSpace(m,t,IPTR_CONSTANT,NAME,false,sizeof(uintb),1,INDEX,0,0,0)
 {
   clearFlags(heritaged|does_deadcode|big_endian);
   if (HOST_ENDIAN==1)		// Endianness always matches host
@@ -397,14 +386,6 @@ void ConstantSpace::printRaw(ostream &s,uintb offset) const
 
 {
   s << "0x" << hex << offset;
-}
-
-/// The ConstantSpace should never be explicitly saved as it is
-/// always built automatically
-void ConstantSpace::saveXml(ostream &s) const
-
-{
-  throw LowlevelError("Should never save the constant space as XML");
 }
 
 /// As the ConstantSpace is never saved, it should never get
@@ -426,7 +407,7 @@ const int4 OtherSpace::INDEX = 1;
 /// \param t is the associated processor translator
 /// \param ind is the integer identifier
 OtherSpace::OtherSpace(AddrSpaceManager *m,const Translate *t,int4 ind)
-  : AddrSpace(m,t,IPTR_PROCESSOR,NAME,sizeof(uintb),1,INDEX,0,0)
+  : AddrSpace(m,t,IPTR_PROCESSOR,NAME,false,sizeof(uintb),1,INDEX,0,0,0)
 {
   clearFlags(heritaged|does_deadcode);
   setFlags(is_otherspace);
@@ -445,14 +426,6 @@ void OtherSpace::printRaw(ostream &s,uintb offset) const
   s << "0x" << hex << offset;
 }
 
-void OtherSpace::saveXml(ostream &s) const
-
-{
-  s << "<space_other";
-  saveBasicAttributes(s);
-  s << "/>\n";
-}
-
 const string UniqueSpace::NAME = "unique";
 
 const uint4 UniqueSpace::SIZE = 4;
@@ -465,7 +438,7 @@ const uint4 UniqueSpace::SIZE = 4;
 /// \param ind is the integer identifier
 /// \param fl are attribute flags (currently unused)
 UniqueSpace::UniqueSpace(AddrSpaceManager *m,const Translate *t,int4 ind,uint4 fl)
-  : AddrSpace(m,t,IPTR_INTERNAL,NAME,SIZE,1,ind,fl,0)
+  : AddrSpace(m,t,IPTR_INTERNAL,NAME,t->isBigEndian(),SIZE,1,ind,fl,0,0)
 {
   setFlags(hasphysical);
 }
@@ -476,14 +449,6 @@ UniqueSpace::UniqueSpace(AddrSpaceManager *m,const Translate *t)
   setFlags(hasphysical);
 }
 
-void UniqueSpace::saveXml(ostream &s) const
-
-{
-  s << "<space_unique";
-  saveBasicAttributes(s);
-  s << "/>\n";
-}
-
 const string JoinSpace::NAME = "join";
 
 /// This is the constructor for the \b join space, which is automatically constructed by the
@@ -492,7 +457,7 @@ const string JoinSpace::NAME = "join";
 /// \param t is the associated processor translator
 /// \param ind is the integer identifier
 JoinSpace::JoinSpace(AddrSpaceManager *m,const Translate *t,int4 ind)
-  : AddrSpace(m,t,IPTR_JOIN,NAME,sizeof(uintm),1,ind,0,0)
+  : AddrSpace(m,t,IPTR_JOIN,NAME,t->isBigEndian(),sizeof(uintm),1,ind,0,0,0)
 {
   // This is a virtual space
   // setFlags(hasphysical);
@@ -502,20 +467,23 @@ JoinSpace::JoinSpace(AddrSpaceManager *m,const Translate *t,int4 ind)
 int4 JoinSpace::overlapJoin(uintb offset,int4 size,AddrSpace *pointSpace,uintb pointOffset,int4 pointSkip) const
 
 {
+
   if (this == pointSpace) {
-    // If the point is in the join space, translate the point into the piece address space
-    JoinRecord *pieceRecord = getManager()->findJoin(pointOffset);
-    int4 pos;
-    Address addr = pieceRecord->getEquivalentAddress(pointOffset + pointSkip, pos);
-    pointSpace = addr.getSpace();
-    pointOffset = addr.getOffset();
+    // If the point is in the join space, we can treat it as a normal overlap
+    pointOffset = pointSpace->wrapOffset(pointOffset + pointSkip);
+    if (pointOffset < offset)
+      return -1;
+    uintb diff = pointOffset - offset;
+    if (diff >= size)
+      return -1;
+    return (int4)diff;
   }
   else {
     if (pointSpace->getType() == IPTR_CONSTANT)
       return -1;
     pointOffset = pointSpace->wrapOffset(pointOffset + pointSkip);
   }
-  JoinRecord *joinRecord = getManager()->findJoin(offset);
+  JoinRecord *joinRecord = manage->findJoin(offset);
   // Set up so we traverse pieces in data order
   int4 startPiece,endPiece,dir;
   if (isBigEndian()) {
@@ -550,7 +518,7 @@ int4 JoinSpace::overlapJoin(uintb offset,int4 size,AddrSpace *pointSpace,uintb p
 void JoinSpace::encodeAttributes(Encoder &encoder,uintb offset) const
 
 {
-  JoinRecord *rec = getManager()->findJoin(offset); // Record must already exist
+  JoinRecord *rec = manage->findJoin(offset); // Record must already exist
   encoder.writeSpace(ATTRIB_SPACE, this);
   int4 num = rec->numPieces();
   if (num > MAX_PIECES)
@@ -578,9 +546,9 @@ void JoinSpace::encodeAttributes(Encoder &encoder,uintb offset,int4 size) const
   encodeAttributes(encoder,offset);	// Ignore size
 }
 
-/// Parse a join address the current element.  Pieces of the join are encoded as a sequence
-/// of attributes.  The Translate::findAddJoin method is used to construct a logical
-/// address within the join space.
+/// Parse the current element as a join address.  Pieces of the join are encoded as a sequence
+/// of ATTRIB_PIECE attributes.  "piece1" corresponds to the most significant piece. The
+/// Translate::findAddJoin method is used to construct a logical address within the join space.
 /// \param decoder is the stream decoder
 /// \param size is a reference to be filled in as the size encoded by the tag
 /// \return the offset of the final address encoded by the tag
@@ -620,7 +588,7 @@ uintb JoinSpace::decodeAttributes(Decoder &decoder,uint4 &size) const
       if (szpos==string::npos)
 	throw LowlevelError("join address piece attribute is malformed");
       string spcname = attrVal.substr(0,offpos);
-      vdat.space = getManager()->getSpaceByName(spcname);
+      vdat.space = manage->getSpaceByName(spcname);
       istringstream s1(attrVal.substr(offpos+1,szpos));
       s1.unsetf(ios::dec | ios::hex | ios::oct);
       s1 >> vdat.offset;
@@ -630,7 +598,7 @@ uintb JoinSpace::decodeAttributes(Decoder &decoder,uint4 &size) const
     }
     sizesum += vdat.size;
   }
-  JoinRecord *rec = getManager()->findAddJoin(pieces,logicalsize);
+  JoinRecord *rec = manage->findAddJoin(pieces,logicalsize);
   size = rec->getUnified().size;
   return rec->getUnified().offset;
 }
@@ -638,7 +606,7 @@ uintb JoinSpace::decodeAttributes(Decoder &decoder,uint4 &size) const
 void JoinSpace::printRaw(ostream &s,uintb offset) const
 
 {
-  JoinRecord *rec = getManager()->findJoin(offset);
+  JoinRecord *rec = manage->findJoin(offset);
   int4 szsum = 0;
   int4 num = rec->numPieces();
   s << '{';
@@ -647,7 +615,10 @@ void JoinSpace::printRaw(ostream &s,uintb offset) const
     szsum += vdat.size;
     if (i!=0)
       s << ',';
-    vdat.space->printRaw(s,vdat.offset);
+    if (vdat.space->getType() == IPTR_CONSTANT)
+      s << "pad:" << dec << vdat.size;
+    else
+      vdat.printRaw(s);
   }
   if (num == 1) {
     szsum = rec->getUnified().size;
@@ -675,7 +646,7 @@ uintb JoinSpace::read(const string &s,int4 &size) const
     }
     catch(LowlevelError &err) {	// Name doesn't exist
       char tryShortcut = token[0];
-      AddrSpace *spc = getManager()->getSpaceByShortcut(tryShortcut);
+      AddrSpace *spc = manage->getSpaceByShortcut(tryShortcut);
       if (spc == (AddrSpace *)0)
 	throw LowlevelError("Could not parse join string");
 
@@ -686,15 +657,9 @@ uintb JoinSpace::read(const string &s,int4 &size) const
     }
     szsum += pieces.back().size;
   }
-  JoinRecord *rec = getManager()->findAddJoin(pieces,0);
+  JoinRecord *rec = manage->findAddJoin(pieces,0);
   size = szsum;
   return rec->getUnified().offset;
-}
-
-void JoinSpace::saveXml(ostream &s) const
-
-{
-  throw LowlevelError("Should never save join space to XML");
 }
 
 void JoinSpace::decode(Decoder &decoder)
@@ -710,16 +675,6 @@ OverlaySpace::OverlaySpace(AddrSpaceManager *m,const Translate *t)
 {
   baseSpace = (AddrSpace *)0;
   setFlags(overlay);
-}
-
-void OverlaySpace::saveXml(ostream &s) const
-
-{
-  s << "<space_overlay";
-  a_v(s,"name",name);
-  a_v_i(s,"index",index);
-  a_v(s,"base",baseSpace->getName());
-  s << "/>\n";
 }
 
 void OverlaySpace::decode(Decoder &decoder)

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,6 +15,11 @@
  */
 package ghidra.program.model.data;
 
+import ghidra.framework.model.DomainObjectEvent;
+import ghidra.framework.model.DomainObjectListener;
+import ghidra.program.model.dtarchive.DataTypeArchive;
+import ghidra.program.model.listing.Program;
+
 /**
  * The listener interface for notification of changes to a DataTypeManager
  */
@@ -22,6 +27,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when category is added.
+	 * 
 	 * @param dtm the dataType manager
 	 * @param path the categoryPath of the newly added category.
 	 */
@@ -29,6 +35,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when a category is removed.
+	 * 
 	 * @param dtm data type manager associated with the category
 	 * @param path the categoryPath of the category that was removed.
 	 */
@@ -36,6 +43,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when category is renamed.
+	 * 
 	 * @param dtm data type manager associated with the category
 	 * @param oldPath the path of the category before it was renamed.
 	 * @param newPath the path of the category after it was renamed.  This path will only differ in
@@ -44,7 +52,8 @@ public interface DataTypeManagerChangeListener {
 	public void categoryRenamed(DataTypeManager dtm, CategoryPath oldPath, CategoryPath newPath);
 
 	/**
-	 * Notification when a category is reparented to new category.  
+	 * Notification when a category is reparented to new category. 
+	 *  
 	 * @param dtm data type manager associated with the category
 	 * @param oldPath the path of the category before it was moved.
 	 * @param newPath the path of the category after it was moved.
@@ -53,6 +62,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when a data type is added to a category
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param path the DataTypePath of the newly added datatype.
 	 */
@@ -60,13 +70,32 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when data type is removed.
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param path the DataTypePath of the removed datatype.
 	 */
 	public void dataTypeRemoved(DataTypeManager dtm, DataTypePath path);
 
 	/**
+	 * Notification when data type is removed.
+	 * <P>	  
+	 * This method has been added to allow clients access the actual data type that was deleted. By
+	 * default this method simply calls the original 
+	 * {@link #dataTypeRemoved(DataTypeManager, DataTypePath)} so existing clients don't need to 
+	 * implement the new method.  
+	 * 
+	 * @param dtm data type manager for the given category paths.
+	 * @param dataType the removed datatype.
+	 * @since 12.3
+	 */
+	public default void dataTypeRemoved(DataTypeManager dtm, DataType dataType) {
+		DataTypePath dtPath = dataType.getDataTypePath();
+		dataTypeRemoved(dtm, dtPath);
+	}
+
+	/**
 	 * Notification when data type is renamed.
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param oldPath the path of the datatype before it was renamed.
 	 * @param newPath the path of the datatype after it was renamed.
@@ -75,6 +104,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when a data type is moved.
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param oldPath the path of the datatype before it was moved.
 	 * @param newPath the path of the datatype after it was moved.
@@ -83,6 +113,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when data type is changed.
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param path the path of the datatype that changed.
 	 */
@@ -90,6 +121,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification when a data type has been replaced.
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param oldPath the path of the datatype that was replaced.
 	 * @param newPath the path of the datatype that replaced the existing datatype.
@@ -100,6 +132,7 @@ public interface DataTypeManagerChangeListener {
 
 	/**
 	 * Notification the favorite status of a datatype has changed
+	 * 
 	 * @param dtm data type manager for the given category paths.
 	 * @param path the DataTypePath of the datatype had its favorite status changed.
 	 * @param isFavorite reflects the current favorite status of the datatype.
@@ -109,6 +142,7 @@ public interface DataTypeManagerChangeListener {
 	/**
 	 * Notification that the information for a particular source archive has changed. Typically,
 	 * this would be because it was renamed or moved.
+	 * 
 	 * @param dataTypeManager data type manager referring to the given source information.
 	 * @param sourceArchive the changed data type source information
 	 */
@@ -118,6 +152,7 @@ public interface DataTypeManagerChangeListener {
 	/**
 	 * Notification that the information for a source archive has been added. This happens when
 	 * a data type from the indicated source archive is added to this data type manager.
+	 * 
 	 * @param dataTypeManager data type manager referring to the given source information.
 	 * @param sourceArchive the new data type source information
 	 */
@@ -127,7 +162,17 @@ public interface DataTypeManagerChangeListener {
 	/**
 	 * Notification that the program architecture associated with the specified
 	 * dataTypeManager has changed.
+	 * 
 	 * @param dataTypeManager data type manager referring to the given source information.
 	 */
 	public void programArchitectureChanged(DataTypeManager dataTypeManager);
+
+	/**
+	 * Notification that the specified datatype manager has been restored to a 
+	 * previous state.  NOTE: this notification may duplicate the {@link DomainObjectEvent#RESTORED}
+	 * generated by {@link Program} or {@link DataTypeArchive} via a {@link DomainObjectListener}
+	 * 
+	 * @param dataTypeManager data type manager that has been restored
+	 */
+	public void restored(DataTypeManager dataTypeManager);
 }

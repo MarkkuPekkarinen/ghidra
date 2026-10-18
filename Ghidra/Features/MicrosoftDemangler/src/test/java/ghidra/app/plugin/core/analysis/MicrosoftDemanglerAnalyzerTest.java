@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,11 +21,13 @@ import org.junit.Before;
 import org.junit.Test;
 
 import ghidra.app.cmd.label.AddLabelCmd;
+import ghidra.app.util.demangler.microsoft.options.MsdApplyOption;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.options.Options;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.data.ParameterDefinition;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
@@ -69,7 +71,7 @@ public class MicrosoftDemanglerAnalyzerTest extends AbstractGhidraHeadedIntegrat
 		Address addr = addr("0x110");
 		createSymbol(addr, mangled);
 
-		setOption(MicrosoftDemanglerAnalyzer.OPTION_NAME_APPLY_SIGNATURE, true);
+		setApplySignatureOption(true);
 
 		analyze();
 
@@ -87,7 +89,7 @@ public class MicrosoftDemanglerAnalyzerTest extends AbstractGhidraHeadedIntegrat
 		Address addr = addr("0x110");
 		createSymbol(addr, mangled);
 
-		setOption(MicrosoftDemanglerAnalyzer.OPTION_NAME_APPLY_SIGNATURE, false);
+		setApplySignatureOption(false);
 
 		analyze();
 
@@ -95,6 +97,29 @@ public class MicrosoftDemanglerAnalyzerTest extends AbstractGhidraHeadedIntegrat
 		Function function = fm.getFunctionAt(addr);
 		assertNotNull(function);
 		assertEquals("undefined InvokeHelperV(void)", function.getSignature().toString());
+	}
+
+	@Test
+	public void testApplyComplicatedFunctionSignatureHavingReference() throws Exception {
+
+		String mangled = "?f2@@YAP6AP6AHH@ZP6ADD@Z@ZAAP6AP6AHH@Z0@Z@Z";
+
+		Address addr = addr("0x110");
+		createSymbol(addr, mangled);
+
+		analyze();
+
+		FunctionManager fm = program.getFunctionManager();
+		Function function = fm.getFunctionAt(addr);
+		assertNotNull(function);
+		ParameterDefinition[] params = function.getSignature().getArguments();
+		assertEquals(1, params.length);
+		ParameterDefinition param = params[0];
+		assertEquals("_func__func_int_int_ptr__func_char_char_ptr * * param_1",
+			param.toString());
+		assertEquals(
+			"_func__func_int_int_ptr__func_char_char_ptr * f2(_func__func_int_int_ptr__func_char_char_ptr * * param_1)",
+			function.getSignature().toString());
 	}
 
 //==================================================================================================
@@ -105,22 +130,21 @@ public class MicrosoftDemanglerAnalyzerTest extends AbstractGhidraHeadedIntegrat
 		tx(program, () -> analyzer.added(program, program.getMemory(), TaskMonitor.DUMMY, log));
 	}
 
-	private void setOption(String optionName, boolean doUse) {
+	private void setApplySignatureOption(boolean doUse) {
 
-		String fullOptionName = analyzer.getName() + Options.DELIMITER_STRING + optionName;
-		Options options = program.getOptions("Analyzers");
+		// Analyzers . Demangler Microsoft . msdApplyOptions . applyFunctionSignatures
 
-		for (String name : options.getOptionNames()) {
-			if (name.equals(fullOptionName)) {
-				tx(program, () -> options.setBoolean(optionName, doUse));
+		Options analyzerOptions = program.getOptions(
+			"Analyzers" + Options.DELIMITER_STRING + MicrosoftDemanglerAnalyzer.NAME);
 
-				// we must call this manually, since we are not using a tool
-				analyzer.optionsChanged(options, program);
-				return;
-			}
-		}
+		MsdApplyOption applyOption =
+			(MsdApplyOption) analyzerOptions
+					.getCustomOption(MicrosoftDemanglerAnalyzer.APPLY_OPTIONS_LABEL, null);
 
-		fail("Could not find option '" + optionName + "'");
+		tx(program, () -> {
+			applyOption.setApplySignature(doUse);
+		});
+		analyzer.optionsChanged(analyzerOptions, program);
 	}
 
 	private void registerOptions() {

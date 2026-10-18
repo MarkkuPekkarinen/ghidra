@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,23 +16,25 @@
 package ghidra.trace.database.data;
 
 import java.io.IOException;
-import java.util.LinkedList;
-import java.util.concurrent.locks.ReadWriteLock;
+import java.util.Map;
+import java.util.Set;
 
-import db.Transaction;
 import db.DBHandle;
+import db.Transaction;
+import ghidra.framework.data.OpenMode;
 import ghidra.framework.model.DomainFile;
 import ghidra.program.database.data.ProgramBasedDataTypeManagerDB;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.data.*;
-import ghidra.program.model.lang.*;
+import ghidra.program.model.dtarchive.DataTypeStore;
 import ghidra.trace.database.DBTrace;
 import ghidra.trace.database.DBTraceManager;
+import ghidra.trace.database.guest.DBTraceGuestPlatform;
+import ghidra.trace.database.guest.DBTracePlatformManager.DBTraceHostPlatform;
+import ghidra.trace.database.guest.InternalTracePlatform;
 import ghidra.trace.model.data.TraceBasedDataTypeManager;
-import ghidra.util.InvalidNameException;
+import ghidra.util.Lock;
 import ghidra.util.UniversalID;
-import ghidra.util.database.DBOpenMode;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.VersionException;
 import ghidra.util.task.TaskMonitor;
@@ -40,36 +42,34 @@ import ghidra.util.task.TaskMonitor;
 public class DBTraceDataTypeManager extends ProgramBasedDataTypeManagerDB
 		implements TraceBasedDataTypeManager, DBTraceManager {
 
-	protected final ReadWriteLock lock; // TODO: This lock object is not used
 	protected final DBTrace trace;
+	protected final InternalTracePlatform platform;
 
-	private static final String INSTANCE_TABLE_PREFIX = null; // placeholder only
+	private static String computePrefix(InternalTracePlatform platform) {
+		return switch (platform) {
+			case DBTraceHostPlatform host -> null;
+			case DBTraceGuestPlatform guest -> "Guest%d_".formatted(guest.getIntKey());
+			default -> throw new AssertionError();
+		};
+	}
 
-	public DBTraceDataTypeManager(DBHandle dbh, DBOpenMode openMode, ReadWriteLock lock,
-			TaskMonitor monitor, DBTrace trace)
+	public DBTraceDataTypeManager(DBHandle dbh, OpenMode openMode, Lock lock,
+			TaskMonitor monitor, DBTrace trace, InternalTracePlatform platform)
 			throws CancelledException, VersionException, IOException {
-		super(dbh, null, openMode.toInteger(), INSTANCE_TABLE_PREFIX, trace, trace.getLock(),
-			monitor);
-		this.lock = lock; // TODO: nothing uses this local lock - not sure what its purpose is
+		super(dbh, null, openMode, computePrefix(platform), trace, lock, monitor);
 		this.trace = trace;
+		this.platform = platform;
 
-		setProgramArchitecture(new ProgramArchitecture() {
+		setProgramArchitecture(platform, null, false, monitor);
 
-			@Override
-			public Language getLanguage() {
-				return trace.getBaseLanguage();
-			}
+		if (openMode == OpenMode.CREATE) {
+			saveDataOrganization();
+		}
+	}
 
-			@Override
-			public CompilerSpec getCompilerSpec() {
-				return trace.getBaseCompilerSpec();
-			}
-
-			@Override
-			public AddressFactory getAddressFactory() {
-				return trace.getBaseAddressFactory();
-			}
-		}, null, false, monitor);
+	@Override
+	public DataTypeStore getDataStore() {
+		return trace.getProgramView();
 	}
 
 	@Override
@@ -93,13 +93,8 @@ public class DBTraceDataTypeManager extends ProgramBasedDataTypeManagerDB
 	}
 
 	@Override
-	public void setName(String name) throws InvalidNameException {
-		if (name == null || name.length() == 0) {
-			throw new InvalidNameException("Name must be at least one character long: " + name);
-		}
-
-		trace.setName(name);
-		categoryRenamed(CategoryPath.ROOT, getCategory(CategoryPath.ROOT));
+	public InternalTracePlatform getPlatform() {
+		return platform;
 	}
 
 	@Override
@@ -150,8 +145,10 @@ public class DBTraceDataTypeManager extends ProgramBasedDataTypeManagerDB
 	}
 
 	@Override
-	protected void dataTypeDeleted(long deletedID, DataTypePath deletedPath) {
-		super.dataTypeDeleted(deletedID, deletedPath);
+	protected void dataTypeDeleted(long deletedID, DataType dataType) {
+		super.dataTypeDeleted(deletedID, dataType);
+
+		DataTypePath deletedPath = dataType.getDataTypePath();
 		trace.dataTypeDeleted(deletedID, deletedPath);
 	}
 
@@ -180,18 +177,15 @@ public class DBTraceDataTypeManager extends ProgramBasedDataTypeManagerDB
 	}
 
 	@Override
-	protected void replaceDataTypeIDs(long oldID, long newID) {
-		if (oldID == newID) {
-			return;
-		}
-		trace.getCodeManager().replaceDataTypes(oldID, newID);
-		trace.getSymbolManager().replaceDataTypes(oldID, newID);
+	protected void replaceDataTypesUsed(Map<Long, Long> dataTypeReplacementMap) {
+		trace.getCodeManager().replaceDataTypes(dataTypeReplacementMap);
+		trace.getSymbolManager().replaceDataTypes(dataTypeReplacementMap);
 	}
 
 	@Override
-	protected void deleteDataTypeIDs(LinkedList<Long> deletedIds, TaskMonitor monitor)
-			throws CancelledException {
-		trace.getCodeManager().clearData(deletedIds, monitor);
+	protected void deleteDataTypesUsed(Set<Long> deletedIds) {
+		// TODO: Should use replacement type instead of clearing
+		trace.getCodeManager().clearData(deletedIds, TaskMonitor.DUMMY);
 		trace.getSymbolManager().invalidateCache(false);
 	}
 
@@ -216,8 +210,8 @@ public class DBTraceDataTypeManager extends ProgramBasedDataTypeManagerDB
 	}
 
 	@Override
-	public void endTransaction(int transactionID, boolean commit) {
-		trace.endTransaction(transactionID, commit);
+	public boolean endTransaction(int transactionID, boolean commit) {
+		return trace.endTransaction(transactionID, commit);
 	}
 
 	@Override
@@ -231,20 +225,9 @@ public class DBTraceDataTypeManager extends ProgramBasedDataTypeManagerDB
 	}
 
 	@Override
-	public DomainFile getDomainFile() {
-		return trace.getDomainFile();
-	}
-
-	@Override
 	protected String getDomainFileID() {
 		DomainFile domainFile = trace.getDomainFile(); // Can be null if never saved
 		return domainFile == null ? null : domainFile.getFileID();
-	}
-
-	@Override
-	public String getPath() {
-		DomainFile domainFile = trace.getDomainFile(); // Can be null if never saved
-		return domainFile == null ? null : domainFile.getPathname();
 	}
 
 	@Override

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -114,6 +114,15 @@ public class SemisparseByteArray {
 		getData(loc, data, 0, data.length);
 	}
 
+	public synchronized byte[] getDirect(final long loc) {
+		long blockNum = Long.divideUnsigned(loc, BLOCK_SIZE);
+		int blockOffset = (int) Long.remainderUnsigned(loc, BLOCK_SIZE);
+		if (blockOffset != 0) {
+			throw new IllegalArgumentException("Offset must be at block boundary");
+		}
+		return blocks.computeIfAbsent(blockNum, _ -> new byte[BLOCK_SIZE]);
+	}
+
 	/**
 	 * Copy a range of data from the semisparse array into a portion of the given byte array
 	 * 
@@ -177,6 +186,16 @@ public class SemisparseByteArray {
 			result.add(query.intersect(span));
 		}
 		return result;
+	}
+
+	/**
+	 * {@return the full set of defined ranges}
+	 * 
+	 * Use of the returned span set is not thread safe. The client must not attempt to mutate the
+	 * set, or else there may be undefined behavior.
+	 */
+	public ULongSpanSet getInitialized() {
+		return defined;
 	}
 
 	/**
@@ -253,7 +272,7 @@ public class SemisparseByteArray {
 		// Write out portion of first block (could be full block)
 		long blockNum = Long.divideUnsigned(loc, BLOCK_SIZE);
 		int blockOffset = (int) Long.remainderUnsigned(loc, BLOCK_SIZE);
-		byte[] block = blocks.computeIfAbsent(blockNum, n -> new byte[BLOCK_SIZE]);
+		byte[] block = blocks.computeIfAbsent(blockNum, _ -> new byte[BLOCK_SIZE]);
 		int amt = Math.min(length, BLOCK_SIZE - blockOffset);
 		System.arraycopy(data, offset, block, blockOffset, amt);
 
@@ -264,7 +283,7 @@ public class SemisparseByteArray {
 			if (blockNum == 0) {
 				throw new BufferOverflowException();
 			}
-			block = blocks.computeIfAbsent(blockNum, n -> new byte[BLOCK_SIZE]);
+			block = blocks.computeIfAbsent(blockNum, _ -> new byte[BLOCK_SIZE]);
 			amt = Math.min(length - cur, BLOCK_SIZE);
 			System.arraycopy(data, cur + offset, block, 0, amt);
 			cur += amt;

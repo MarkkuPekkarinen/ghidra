@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,7 +33,7 @@ import generic.theme.GThemeDefaults.Colors;
 import ghidra.app.util.ToolTipUtils;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Composite;
-import ghidra.util.exception.DuplicateNameException;
+import ghidra.util.Msg;
 
 public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 
@@ -47,7 +47,9 @@ public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 		DataType dataTypeCopy = composite.copy(null);
 		Composite compositeCopy = (Composite) dataTypeCopy;
 		int fieldIndex = 0;
-		setName(compositeCopy, fieldIndex);
+
+		DataTypeComponent component = compositeCopy.getComponent(fieldIndex);
+		component.setFieldName("newName");
 
 		HTMLDataTypeRepresentation representation = ToolTipUtils.getHTMLRepresentation(composite);
 		HTMLDataTypeRepresentation otherRepresentation =
@@ -361,8 +363,8 @@ public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 
 	private String getParamText(String html) {
 
-		// function html format: 
-		// 	<HTML>void&nbsp;myFunction(<BR>&nbsp;&nbsp;&nbsp;&nbsp;byte&nbsp;)<BR></HTML>
+		// function html format:
+		// 	<html>void&nbsp;myFunction(<BR>&nbsp;&nbsp;&nbsp;&nbsp;byte&nbsp;)<BR></HTML>
 
 		Pattern p = Pattern.compile("\\((.*)\\)");
 		Matcher matcher = p.matcher(html);
@@ -789,8 +791,8 @@ public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 		assertEquals("ccc ddd", l3a.get(1));
 
 		//[a bbbbbbbb, bbbbbbbbbb, bbbbbbbbbb, bbbbbb c]
-		List<String> l4 = HTMLDataTypeRepresentation.breakLongLineAtWordBoundaries(
-			"a bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb c", 10);
+		List<String> l4 = HTMLDataTypeRepresentation
+				.breakLongLineAtWordBoundaries("a bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb c", 10);
 		assertEquals(4, l4.size());
 		assertEquals("a bbbbbbbb", l4.get(0));
 		assertEquals("bbbbbbbbbb", l4.get(1));
@@ -1219,18 +1221,6 @@ public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 		}
 	}
 
-	private void setName(Composite c, int fieldIndex) {
-		DataTypeComponent component = c.getComponent(fieldIndex);
-		try {
-			component.setFieldName("newName");
-		}
-		catch (DuplicateNameException e) {
-			// shouldn't happen
-			e.printStackTrace();
-			Assert.fail("Unexpected duplicate name");
-		}
-	}
-
 	private void assertCompositeHeaderEquals(HTMLDataTypeRepresentation[] diffedRepresentations) {
 		List<ValidatableLine> headerLines =
 			((CompositeDataTypeHTMLRepresentation) diffedRepresentations[0]).headerContent;
@@ -1471,7 +1461,7 @@ public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 
 		JPanel rightPanel = new JPanel(new BorderLayout());
 		String rightHtml = right.getHTMLString();
-		System.err.println("Right HTML: " + rightHtml);
+		Msg.info(HTMLDataTypeRepresentation.class, "Right HTML: " + rightHtml);
 		StringBuffer buffy1 = new StringBuffer(rightHtml);
 		JLabel rightLabel = new GDHtmlLabel();
 		rightLabel.setOpaque(true);
@@ -1481,7 +1471,7 @@ public class HTMLDataTypeRepresentationTest extends AbstractGenericTest {
 
 		JPanel leftPanel = new JPanel(new BorderLayout());
 		String leftHtml = left.getHTMLString();
-		System.err.println("Left HTML: " + leftHtml);
+		Msg.info(HTMLDataTypeRepresentation.class, "Left HTML: " + leftHtml);
 		StringBuffer buffy2 = new StringBuffer(leftHtml);
 		JLabel leftLabel = new GDHtmlLabel();
 		leftLabel.setOpaque(true);

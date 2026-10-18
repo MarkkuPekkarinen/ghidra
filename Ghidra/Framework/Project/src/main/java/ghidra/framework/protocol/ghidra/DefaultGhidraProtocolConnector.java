@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -61,31 +61,42 @@ public class DefaultGhidraProtocolConnector extends GhidraProtocolConnector {
 
 		this.readOnly = readOnlyAccess;
 
-		statusCode = StatusCode.UNAVAILABLE; // if uncaught exception occurs
+		// Check for explicitly denied server connections
+		if (!ClientUtil.getAllowListProvider().isAllowed(url)) {
+			statusCode = StatusCode.FORBIDDEN;
+			return statusCode;
+		}
 
+		statusCode = StatusCode.UNAVAILABLE;
 		repositoryServerAdapter =
 			ClientUtil.getRepositoryServer(url.getHost(), url.getPort(), true);
+		if (!repositoryServerAdapter.isConnected()) {
+			if (repositoryServerAdapter.isCancelled()) {
+				statusCode = StatusCode.CANCELLED;
+				return statusCode;
+			}
+			Throwable t = repositoryServerAdapter.getLastConnectError();
+			if (t instanceof LoginException) {
+				statusCode = StatusCode.UNAUTHORIZED;
+			}
+			return statusCode;
+		}
 
 		if (repositoryName == null) {
+			if (repositoryServerAdapter.isReadOnly()) {
+				this.readOnly = true; // write access not permitted
+				Msg.warn(this, "User does not have write permission for server");
+			}
 			statusCode = StatusCode.OK;
 			return statusCode;
 		}
 
 		repositoryAdapter = repositoryServerAdapter.getRepository(repositoryName);
-		if (repositoryServerAdapter.isConnected()) {
-			try {
-				repositoryAdapter.connect();
-			}
-			catch (RepositoryNotFoundException e) {
-				statusCode = StatusCode.NOT_FOUND;
-			}
+		try {
+			repositoryAdapter.connect();
 		}
-		else if (!repositoryServerAdapter.isCancelled()) {
-			Throwable t = repositoryServerAdapter.getLastConnectError();
-			if (t instanceof LoginException) {
-				statusCode = StatusCode.UNAUTHORIZED;
-			}
-			//throw new NotConnectedException("Not connected to repository server", t);
+		catch (RepositoryNotFoundException e) {
+			statusCode = StatusCode.NOT_FOUND;
 			return statusCode;
 		}
 

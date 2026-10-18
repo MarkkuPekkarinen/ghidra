@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,8 @@
 package ghidra.app.util.bin.format.macho.commands;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.StructConverter;
@@ -31,8 +33,8 @@ public class BuildVersionCommand extends LoadCommand {
 	private int platform;
 	private int minos;
 	private int sdk;
-	private int ntools;
-	private BuildToolVersion[] buildToolVersions;
+	private long ntools;
+	private List<BuildToolVersion> buildToolVersions = new ArrayList<>();
 
 	BuildVersionCommand(BinaryReader reader) throws IOException {
 		super(reader);
@@ -40,10 +42,9 @@ public class BuildVersionCommand extends LoadCommand {
 		platform = reader.readNextInt();
 		minos = reader.readNextInt();
 		sdk = reader.readNextInt();
-		ntools = reader.readNextInt();
-		buildToolVersions = new BuildToolVersion[ntools];
+		ntools = checkCount(reader.readNextUnsignedInt());
 		for (int i = 0; i < ntools; i++) {
-			buildToolVersions[i] = new BuildToolVersion(reader.readNextInt(), reader.readNextInt());
+			buildToolVersions.add(new BuildToolVersion(reader.readNextInt(), reader.readNextInt()));
 		}
 	}
 
@@ -58,7 +59,7 @@ public class BuildVersionCommand extends LoadCommand {
 		struct.add(DWORD, "sdk", null);
 		struct.add(DWORD, "ntools", null);
 		if (ntools > 0) {
-			struct.add(new ArrayDataType(buildToolVersionDataType, ntools,
+			struct.add(new ArrayDataType(buildToolVersionDataType, (int) ntools,
 				buildToolVersionDataType.getLength()), "build_tool_version[]", null);
 		}
 		struct.setCategoryPath(new CategoryPath(MachConstants.DATA_TYPE_CATEGORY));
@@ -70,39 +71,35 @@ public class BuildVersionCommand extends LoadCommand {
 		return "build_version_command";
 	}
 
+	/**
+	 * {@return the platform}
+	 */
 	public int getPlatform() {
 		return platform;
 	}
 
+	/**
+	 * {@return the minimum OS}
+	 */
 	public int getMinOS() {
 		return minos;
 	}
 
+	/**
+	 * {@return the SDK}
+	 */
 	public int getSdk() {
 		return sdk;
 	}
 
-	public int getNumTools() {
+	/**
+	 * {@return the number of tools}
+	 */
+	public long getNumTools() {
 		return ntools;
 	}
 
-	public static class BuildToolVersion implements StructConverter {
-
-		private int tool;
-		private int version;
-
-		public BuildToolVersion(int tool, int version) {
-			this.tool = tool;
-			this.version = version;
-		}
-
-		public int getTool() {
-			return tool;
-		}
-
-		public int getVersion() {
-			return version;
-		}
+	public static record BuildToolVersion(int tool, int version) implements StructConverter {
 
 		@Override
 		public DataType toDataType() throws DuplicateNameException, IOException {

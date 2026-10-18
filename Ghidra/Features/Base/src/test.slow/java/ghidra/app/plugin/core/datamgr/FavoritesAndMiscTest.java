@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -52,9 +52,9 @@ public class FavoritesAndMiscTest extends AbstractGhidraHeadedIntegrationTest {
 	private DataTypesProvider provider;
 	private DataTypeArchiveGTree tree;
 	private ArchiveRootNode archiveRootNode;
-	private ArchiveNode builtInNode;
+	private DataTypeStoreNode builtInNode;
 	private ToggleDockingAction favoritesAction;
-	private ArchiveNode programNode;
+	private DataTypeStoreNode programNode;
 
 	@Before
 	public void setUp() throws Exception {
@@ -70,8 +70,8 @@ public class FavoritesAndMiscTest extends AbstractGhidraHeadedIntegrationTest {
 		waitForTree();
 
 		archiveRootNode = (ArchiveRootNode) tree.getModelRoot();
-		builtInNode = (ArchiveNode) archiveRootNode.getChild("BuiltInTypes");
-		programNode = (ArchiveNode) archiveRootNode.getChild(PROGRAM_NAME);
+		builtInNode = (DataTypeStoreNode) archiveRootNode.getChild("BuiltInTypes");
+		programNode = (DataTypeStoreNode) archiveRootNode.getChild(PROGRAM_NAME);
 
 		tool.showComponentProvider(provider, true);
 		favoritesAction = (ToggleDockingAction) getAction(plugin, "Set Favorite Data Type");
@@ -181,8 +181,8 @@ public class FavoritesAndMiscTest extends AbstractGhidraHeadedIntegrationTest {
 
 		List<DataType> dts = changeListener.getFavoriteDts();
 		boolean found = false;
-		for (int i = 0; i < dts.size(); i++) {
-			if (dts.get(i).getName().equals("PascalUnicode")) {
+		for (DataType dt : dts) {
+			if (dt.getName().equals("PascalUnicode")) {
 				found = true;
 				break;
 			}
@@ -198,8 +198,8 @@ public class FavoritesAndMiscTest extends AbstractGhidraHeadedIntegrationTest {
 		waitForSwing();
 
 		dts = changeListener.getFavoriteDts();
-		for (int i = 0; i < dts.size(); i++) {
-			if (dts.get(i).getName().equals("MBCString")) {
+		for (DataType dt : dts) {
+			if (dt.getName().equals("MBCString")) {
 				Assert.fail("Should not have found MBCString as a favorite!");
 			}
 		}
@@ -338,7 +338,7 @@ public class FavoritesAndMiscTest extends AbstractGhidraHeadedIntegrationTest {
 		program.flushEvents();
 		waitForSwing();
 
-		runSwing(() -> plugin.getDataType("ArrayStruct"), false);
+		runSwing(() -> plugin.promptForDataType("ArrayStruct"), false);
 
 		DataTypeChooserDialog d = waitForDialogComponent(DataTypeChooserDialog.class);
 
@@ -348,7 +348,7 @@ public class FavoritesAndMiscTest extends AbstractGhidraHeadedIntegrationTest {
 		waitForTree(gtree);
 
 		ArchiveRootNode root = (ArchiveRootNode) gtree.getModelRoot();
-		ArchiveNode programNode1 = (ArchiveNode) root.getChild(PROGRAM_NAME);
+		DataTypeStoreNode programNode1 = (DataTypeStoreNode) root.getChild(PROGRAM_NAME);
 
 		assertNotNull("could not find " + PROGRAM_NAME + " in " + root, programNode1);
 		expandNode(programNode1);

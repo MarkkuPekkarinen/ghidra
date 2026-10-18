@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,8 +15,9 @@
  */
 package ghidra.app.util.viewer.field;
 
-import java.beans.PropertyEditor;
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.List;
 
 import docking.widgets.fieldpanel.field.*;
 import docking.widgets.fieldpanel.support.FieldLocation;
@@ -26,8 +27,10 @@ import ghidra.app.util.viewer.format.FieldFormatModel;
 import ghidra.app.util.viewer.format.FormatManager;
 import ghidra.app.util.viewer.proxy.ProxyObj;
 import ghidra.framework.options.*;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.listing.*;
+import ghidra.program.util.AddressFieldLocation;
 import ghidra.program.util.ProgramLocation;
 import ghidra.util.HelpLocation;
 import ghidra.util.exception.AssertException;
@@ -35,7 +38,6 @@ import ghidra.util.exception.AssertException;
 public class ArrayValuesFieldFactory extends FieldFactory {
 	public static final String FIELD_NAME = "Array Values";
 	private int valuesPerLine;
-	private PropertyEditor arrayOptionsEditor = new ArrayElementPropertyEditor();
 
 	public ArrayValuesFieldFactory() {
 		super(FIELD_NAME);
@@ -66,7 +68,7 @@ public class ArrayValuesFieldFactory extends FieldFactory {
 		// we need to install a custom editor that allows us to edit a group of related options
 		fieldOptions.registerOption(FormatManager.ARRAY_DISPLAY_OPTIONS, OptionType.CUSTOM_TYPE,
 			new ArrayElementWrappedOption(), null, FormatManager.ARRAY_DISPLAY_DESCRIPTION,
-			arrayOptionsEditor);
+			() -> new ArrayElementPropertyEditor());
 		CustomOption wrappedOption = fieldOptions.getCustomOption(
 			FormatManager.ARRAY_DISPLAY_OPTIONS, new ArrayElementWrappedOption());
 
@@ -98,28 +100,32 @@ public class ArrayValuesFieldFactory extends FieldFactory {
 		int itemCount = Math.min(remaining, valuesPerLine);
 		boolean isLastLine = remaining <= itemCount;
 
-		FieldElement[] aStrings = new FieldElement[itemCount];
+		List<FieldElement> elements = new ArrayList<>();
 		for (int i = 0; i < itemCount; i++) {
 			Data child = parent.getComponent(index++);
 			boolean isLastItem = isLastLine && (i == itemCount - 1);
 			String value = getDisplayValue(child, !isLastItem);
 			AttributedString as =
 				new AttributedString(value, ListingColors.ARRAY_VALUES, getMetrics());
-			aStrings[i] = new TextFieldElement(as, i, 0);
+			TextFieldElement element = new TextFieldElement(as, i, 0);
+			elements.add(element);
 		}
-		return ListingTextField.createPackedTextField(this, proxy, aStrings, startX + varWidth,
-			width, 1, hlProvider);
+
+		return ListingTextField.createPackedTextField(this, proxy,
+			elements.toArray(new FieldElement[0]), startX + varWidth, width, valuesPerLine,
+			hlProvider);
 
 	}
 
 	private String getDisplayValue(Data data, boolean addDelimeter) {
 		DataType dt = data.getDataType();
 		int minLength = data.getLength() * 3 + 1;  // this just seems a decent minimum size
-		StringBuffer buf = new StringBuffer(dt.getRepresentation(data, data, data.getLength()));
-		if (buf.length() < minLength) {
-			for (int i = buf.length(); i < minLength; i++) {
-				buf.insert(0, ' ');
-			}
+		String representation = dt.getRepresentation(data, data, data.getLength());
+		StringBuilder buf = new StringBuilder(representation);
+
+		// pad to minimum length for readability
+		for (int i = buf.length(); i < minLength; i++) {
+			buf.insert(0, ' ');
 		}
 		if (addDelimeter) {
 			buf.append(',');
@@ -130,16 +136,34 @@ public class ArrayValuesFieldFactory extends FieldFactory {
 	@Override
 	public FieldLocation getFieldLocation(ListingField lf, BigInteger index, int fieldNum,
 			ProgramLocation location) {
-		if (!(location instanceof ArrayElementFieldLocation)) {
+
+		// Unless the location is specifically targeting the address field, then we should
+		// process the location because the arrays display is different from all other format
+		// models in that one line actually represents more than one array data element. So
+		// this field has the best chance of representing the location for array data elements.
+
+		if (location instanceof AddressFieldLocation) {
 			return null;
 		}
-		ArrayElementFieldLocation loc = (ArrayElementFieldLocation) location;
-		ListingTextField btf = (ListingTextField) lf;
-		Data firstDataOnLine = (Data) btf.getProxy().getObject();
-		int elementIndex = loc.getElementIndexOnLine(firstDataOnLine);
-		RowColLocation rcl = btf.dataToScreenLocation(elementIndex, loc.getCharOffset());
-		return new FieldLocation(index, fieldNum, rcl.row(), rcl.col());
 
+		RowColLocation rcl = getDataRowColumnLocation(location, lf);
+		return new FieldLocation(index, fieldNum, rcl.row(), rcl.col());
+	}
+
+	private RowColLocation getDataRowColumnLocation(ProgramLocation location, ListingField field) {
+		ListingTextField ltf = (ListingTextField) field;
+		Data firstDataOnLine = (Data) field.getProxy().getObject();
+
+		if (location instanceof ArrayElementFieldLocation loc) {
+			int elementIndex = loc.getElementIndexOnLine(firstDataOnLine);
+			return ltf.dataToScreenLocation(elementIndex, loc.getCharOffset());
+		}
+
+		Address byteAddress = location.getByteAddress();
+		int byteOffset = (int) byteAddress.subtract(firstDataOnLine.getAddress());
+		int componentSize = firstDataOnLine.getLength();
+		int elementOffset = byteOffset / componentSize;
+		return ltf.dataToScreenLocation(elementOffset, 0);
 	}
 
 	@Override

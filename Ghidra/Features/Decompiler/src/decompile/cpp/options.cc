@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,6 +33,7 @@ ElementId ELEM_DEFAULTPROTOTYPE = ElementId("defaultprototype",183);
 ElementId ELEM_ERRORREINTERPRETED = ElementId("errorreinterpreted",184);
 ElementId ELEM_ERRORTOOMANYINSTRUCTIONS = ElementId("errortoomanyinstructions",185);
 ElementId ELEM_ERRORUNIMPLEMENTED = ElementId("errorunimplemented",186);
+ElementId ELEM_BADDATACOUNT = ElementId("baddatacount",290);
 ElementId ELEM_EXTRAPOP = ElementId("extrapop",187);
 ElementId ELEM_IGNOREUNIMPLEMENTED = ElementId("ignoreunimplemented",188);
 ElementId ELEM_INDENTINCREMENT = ElementId("indentincrement",189);
@@ -59,6 +60,8 @@ ElementId ELEM_STRUCTALIGN = ElementId("structalign",208);
 ElementId ELEM_TOGGLERULE = ElementId("togglerule",209);
 ElementId ELEM_WARNING = ElementId("warning",210);
 ElementId ELEM_JUMPTABLEMAX = ElementId("jumptablemax",271);
+ElementId ELEM_NANIGNORE = ElementId("nanignore",272);
+ElementId ELEM_BRACEFORMAT = ElementId("braceformat",284);
 
 /// If the parameter is "on" return \b true, if "off" return \b false.
 /// Any other value causes an exception.
@@ -82,7 +85,7 @@ bool ArchOption::onOrOff(const string &p)
 void OptionDatabase::registerOption(ArchOption *option)
 
 {
-  uint4 id = ElementId::find(option->getName());	// Option name must match a known element name
+  uint4 id = ElementId::find(option->getName(),0);	// Option name must match a known element name
   optionmap[id] = option;
 }
 
@@ -98,12 +101,12 @@ OptionDatabase::OptionDatabase(Architecture *g)
   registerOption(new OptionErrorUnimplemented());
   registerOption(new OptionErrorReinterpreted());
   registerOption(new OptionErrorTooManyInstructions());
+  registerOption(new OptionBadDataCount());
   registerOption(new OptionDefaultPrototype());
   registerOption(new OptionInferConstPtr());
   registerOption(new OptionForLoops());
   registerOption(new OptionInline());
   registerOption(new OptionNoReturn());
-  registerOption(new OptionStructAlign());
   registerOption(new OptionProtoEval());
   registerOption(new OptionWarning());
   registerOption(new OptionNullPrinting());
@@ -117,6 +120,7 @@ OptionDatabase::OptionDatabase(Architecture *g)
   registerOption(new OptionCommentHeader());
   registerOption(new OptionCommentInstruction());
   registerOption(new OptionIntegerFormat());
+  registerOption(new OptionBraceFormat());
   registerOption(new OptionCurrentAction());
   registerOption(new OptionAllowContextSet());
   registerOption(new OptionSetAction());
@@ -128,6 +132,7 @@ OptionDatabase::OptionDatabase(Architecture *g)
   registerOption(new OptionMaxInstruction());
   registerOption(new OptionNamespaceStrategy());
   registerOption(new OptionSplitDatatypes());
+  registerOption(new OptionNanIgnore());
 }
 
 OptionDatabase::~OptionDatabase(void)
@@ -362,23 +367,6 @@ string OptionNoReturn::apply(Architecture *glb,const string &p1,const string &p2
   return res;
 }
 
-/// \class OptionStructAlign
-/// \brief Alter the "structure alignment" data organization setting
-///
-/// The first parameter must an integer value indicating the desired alignment
-string OptionStructAlign::apply(Architecture *glb,const string &p1,const string &p2,const string &p3) const
-
-{
-  int4 val  = -1;
-  istringstream s(p1);
-  s >> dec >> val;
-  if (val == -1)
-    throw ParseError("Missing alignment value");
-
-  glb->types->setStructAlign(val);
-  return "Structure alignment set";
-}
-
 /// \class OptionWarning
 /// \brief Toggle whether a warning should be issued if a specific action/rule is applied.
 ///
@@ -594,6 +582,47 @@ string OptionIntegerFormat::apply(Architecture *glb,const string &p1,const strin
   return "Integer format set to "+p1;
 }
 
+/// \class OptionBraceFormat
+/// \brief Set the brace formatting strategy for various types of code block
+///
+/// The first parameter is the strategy name:
+///   - \b same  - For an opening brace on the same line
+///   - \b next  - For an opening brace on the next line
+///   - \b skip  - For an opening brace after a blank line
+///
+/// The second parameter is the type of code block:
+///   - \b function - For the main function body
+///   - \b ifelse   - For if/else blocks
+///   - \b loop     - For do/while/for loop blocks
+///   - \b switch   - For a switch block
+string OptionBraceFormat::apply(Architecture *glb,const string &p1,const string &p2,const string &p3) const
+
+{
+  PrintC *lng = dynamic_cast<PrintC *>(glb->print);
+  if (lng == (PrintC *)0)
+    return "Can only set brace formatting for C language";
+  Emit::brace_style style;
+  if (p2 == "same")
+    style = Emit::same_line;
+  else if (p2 == "next")
+    style = Emit::next_line;
+  else if (p2 == "skip")
+    style = Emit::skip_line;
+  else
+    throw ParseError("Unknown brace style: "+p2);
+  if (p1 == "function")
+    lng->setBraceFormatFunction(style);
+  else if (p1 == "ifelse")
+    lng->setBraceFormatIfElse(style);
+  else if (p1 == "loop")
+    lng->setBraceFormatLoop(style);
+  else if (p1 == "switch")
+    lng->setBraceFormatSwitch(style);
+  else
+    throw ParseError("Unknown brace format category: "+p1);
+  return "Brace formatting for " + p1 + " set to " + p2;
+}
+
 /// \class OptionSetAction
 /// \brief Establish a new root Action for the decompiler
 ///
@@ -752,6 +781,33 @@ string OptionErrorTooManyInstructions::apply(Architecture *glb,const string &p1,
     glb->flowoptions &= ~((uint4)FlowInfo::error_toomanyinstructions);
   }
 
+  return res;
+}
+
+/// \class OptionBadDataCount
+/// \brief Toggle whether disassembling bytes that can't be decoded or at a non-existent address is considered a fatal error.
+///
+/// If the first parameter is "on" then any BadDataError encountered while following flow will cause a fatal error.
+/// Otherwise, artificial halts are generated at addresses causing the BadDataError, allowing analysis to continue.
+string OptionBadDataCount::apply(Architecture *glb,const string &p1,const string &p2,const string &p3) const
+
+{
+  uint4 newMax;
+  string res;
+  if (p1.size() == 0) {
+    newMax = 0xffffffff;
+    res = "No limit on instructions that cannot be disassembled";
+  }
+  else {
+    newMax = 0xdeadbeef;
+    istringstream s1(p1);
+    s1.unsetf(ios::dec | ios::hex | ios::oct); // Let user specify base
+    s1 >> newMax;
+    if (newMax == 0xdeadbeef)
+      throw ParseError("Bad baddatacount parameter");
+    res = "Maximum instructions that cannot be disassembled set to " + p1;
+  }
+  glb->max_baddata = newMax;
   return res;
 }
 
@@ -962,6 +1018,13 @@ uint4 OptionSplitDatatypes::getOptionBit(const string &val)
   throw LowlevelError("Unknown data-type split option: "+val);
 }
 
+/// \class OptionSplitDatatypes
+/// \brief Control which data-type assignments are split into multiple COPY/LOAD/STORE operations
+///
+/// Any combination of the three options can be given:
+///   - "struct"  = Divide structure data-types into separate field assignments
+///   - "array"   = Divide array data-types into separate element assignments
+///   - "pointer" = Divide assignments, via LOAD/STORE, through pointers
 string OptionSplitDatatypes::apply(Architecture *glb,const string &p1,const string &p2,const string &p3) const
 
 {
@@ -983,6 +1046,47 @@ string OptionSplitDatatypes::apply(Architecture *glb,const string &p1,const stri
   if (oldConfig == glb->split_datatype_config)
     return "Split data-type configuration unchanged";
   return "Split data-type configuration set";
+}
+
+/// \class OptionNanIgnore
+/// \brief Which Not a Number (NaN) operations should be ignored
+///
+/// The option controls which p-code NaN operations are replaced with a \b false constant, assuming
+/// the input is a valid floating-point value.
+///   - "none"  = No operations are replaced
+///   - "compare" = Replace NaN operations associated with floating-poing comparisons
+///   - "all" = Replace all NaN operations
+string OptionNanIgnore::apply(Architecture *glb,const string &p1,const string &p2,const string &p3) const
+
+{
+  bool oldIgnoreAll = glb->nan_ignore_all;
+  bool oldIgnoreCompare = glb->nan_ignore_compare;
+
+  if (p1 == "none") {			// Don't ignore any NaN operation
+    glb->nan_ignore_all = false;
+    glb->nan_ignore_compare = false;
+  }
+  else if (p1 == "compare") {		// Ignore only NaN operations protecting floating-point comparisons
+    glb->nan_ignore_all = false;
+    glb->nan_ignore_compare = true;
+  }
+  else if (p1 == "all") {		// Ignore all NaN operations
+    glb->nan_ignore_all = true;
+    glb->nan_ignore_compare = true;
+  }
+  else {
+    throw LowlevelError("Unknown nanignore option: "+p1);
+  }
+  Action *root = glb->allacts.getCurrent();
+  if (!glb->nan_ignore_all && !glb->nan_ignore_compare) {
+    root->disableRule("ignorenan");
+  }
+  else {
+    root->enableRule("ignorenan");
+  }
+  if (oldIgnoreAll == glb->nan_ignore_all && oldIgnoreCompare == glb->nan_ignore_compare)
+    return "NaN ignore configuration unchanged";
+  return "Nan ignore configuration set to: " + p1;
 }
 
 } // End namespace ghidra

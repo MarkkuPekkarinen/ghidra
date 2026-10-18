@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -46,18 +46,20 @@ import generic.test.AbstractGTest;
 import generic.theme.GThemeDefaults.Colors.Palette;
 import generic.util.WindowUtilities;
 import generic.util.image.ImageUtils;
+import ghidra.app.plugin.core.datamgr.ArchiveManager;
 import ghidra.app.plugin.core.datamgr.DataTypeManagerPlugin;
-import ghidra.app.plugin.core.datamgr.archive.Archive;
-import ghidra.app.plugin.core.datamgr.archive.DataTypeManagerHandler;
 import ghidra.app.plugin.core.datamgr.tree.DataTypeArchiveGTree;
 import ghidra.app.plugin.core.datamgr.tree.DataTypeNode;
 import ghidra.app.plugin.core.datamgr.util.DataTypeChooserDialog;
 import ghidra.app.services.DataTypeManagerService;
 import ghidra.app.services.ProgramManager;
+import ghidra.framework.Application;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.framework.plugintool.ServiceProvider;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.database.data.ProgramDataTypeManager;
 import ghidra.program.model.data.*;
+import ghidra.program.model.dtarchive.PersistentDataTypeArchive;
 import ghidra.program.model.listing.Program;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 import ghidra.test.TestEnv;
@@ -75,7 +77,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 
 	private ReportingDataListener reportingListener = new ReportingDataListener();
 
-	private Set<Archive> archivesToClose = new HashSet<>();
+	private Set<PersistentDataTypeArchive> archivesToClose = new HashSet<>();
 
 	private SpyDropDownSelectionTextField spyTextField;
 
@@ -84,8 +86,6 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		Msg.debug(this, "\n\nsetUp() - " + testName.getMethodName());
 
 		setErrorGUIEnabled(false);
-
-		UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
 
 		env = new TestEnv();
 
@@ -122,9 +122,9 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 			dialog = new DataTypeSelectionDialog(tool, program.getDataTypeManager(), -1,
 				AllowedDataTypes.ALL) {
 				@Override
-				protected DataTypeSelectionEditor createEditor(PluginTool pluginTool,
+				protected DataTypeSelectionEditor createEditor(ServiceProvider sp,
 						AllowedDataTypes allowedDataTypes) {
-					return new DataTypeSelectionEditor(pluginTool, allowedDataTypes) {
+					return new DataTypeSelectionEditor(null, sp, allowedDataTypes) {
 
 						@Override
 						protected DropDownSelectionTextField<DataType> createDropDownSelectionTextField(
@@ -152,18 +152,18 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 	// close all archives but the builtin and the program archive
 	private void closeUndesiredArchives() {
 		DataTypeManagerPlugin plugin = env.getPlugin(DataTypeManagerPlugin.class);
-		DataTypeManagerHandler dataTypeManagerHandler = plugin.getDataTypeManagerHandler();
-		List<Archive> archives = dataTypeManagerHandler.getAllFileOrProjectArchives();
-		for (Archive archive : archives) {
-			dataTypeManagerHandler.closeArchive(archive);
+		ArchiveManager archiveManager = plugin.getArchiveManager();
+		List<PersistentDataTypeArchive> archives = archiveManager.getOpenArchives();
+		for (PersistentDataTypeArchive archive : archives) {
+			archiveManager.closeArchive(archive);
 		}
 	}
 
 	@After
 	public void tearDown() throws Exception {
-		System.err.println("tearDown() - " + testName.getMethodName() + "\n");
+		Msg.debug(this, "tearDown() - " + testName.getMethodName() + "\n");
 
-		for (Archive archive : archivesToClose) {
+		for (PersistentDataTypeArchive archive : archivesToClose) {
 			closeArchive(archive);
 		}
 
@@ -540,7 +540,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		File imageFile = new File(temp, name + ".img.png");
 		try {
 			ImageUtils.writeFile((RenderedImage) image, imageFile);
-			Msg.info(this, "Captured screenshot to " + imageFile.getCanonicalPath());
+			Msg.debug(this, "Captured screenshot to " + imageFile.getCanonicalPath());
 		}
 		catch (Exception e) {
 			Msg.error(this, "Unable to write debug image");
@@ -556,7 +556,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 
 	@Test
 	public void testPickFromListThenAddPointerChar() {
-		Archive archive = createTestFileArchive();
+		PersistentDataTypeArchive archive = createTestFileArchive();
 
 		String structureName = "foo";
 		Structure structure = createStructure(archive, structureName);
@@ -594,7 +594,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		// We are trying to test that the user can type the name of a type (not pick it from the
 		// list) that exists in an open archive *that is not set on the dialog*.  The intent is
 		// that if we have to parse the text provided by the user, that we don't automatically
-		// pick one when it is an an archive that we didn't specify (like the program archive).
+		// pick one when it is an archive that we didn't specify (like the program archive).
 		//
 		// To test this, start with 3 types in a file archive: foo and a typedef to foo
 		// (foo_typedef) and a pointer to the typedef.
@@ -605,7 +605,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		//
 		//
 
-		Archive archive = createTestFileArchive();
+		PersistentDataTypeArchive archive = createTestFileArchive();
 
 		String structureName = "foo";
 		Structure structure = createStructure(archive, structureName);
@@ -641,8 +641,8 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		//
 		// Same as the above test, but with multiple archives form which to choose
 		//
-		Archive archive1 = createTestFileArchive();
-		Archive archive2 = createTestFileArchive();
+		PersistentDataTypeArchive archive1 = createTestFileArchive();
+		PersistentDataTypeArchive archive2 = createTestFileArchive();
 
 		String structureName = "foo";
 		Structure structure = createStructure(archive1, structureName);
@@ -680,7 +680,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 // Support methods
 //==================================================================================================
 
-	private void addType(final Archive archive, final DataType dt) {
+	private void addType(PersistentDataTypeArchive archive, DataType dt) {
 		runSwing(() -> {
 			DataTypeManager dtm = archive.getDataTypeManager();
 			int txID = dtm.startTransaction("Test Add Data Type");
@@ -693,7 +693,7 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		});
 	}
 
-	private Structure createStructure(Archive archive, String name) {
+	private Structure createStructure(PersistentDataTypeArchive archive, String name) {
 		StructureDataType structure = new StructureDataType(name, 0);
 		structure.add(IntegerDataType.dataType, "field1", "Comment 1");
 		structure.add(IntegerDataType.dataType, "field2", "Comment 2");
@@ -704,26 +704,26 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		return structure;
 	}
 
-	private TypeDef createTypeDef(Archive archive, Structure structure, String name) {
+	private TypeDef createTypeDef(PersistentDataTypeArchive archive, Structure structure, String name) {
 		TypedefDataType dt = new TypedefDataType(name, structure);
 		addType(archive, dt);
 		return dt;
 	}
 
-	private Pointer createPointer(Archive archive, DataType dt) {
+	private Pointer createPointer(PersistentDataTypeArchive archive, DataType dt) {
 		PointerDataType pointer = new PointerDataType(dt);
 		addType(archive, pointer);
 		return pointer;
 	}
 
-	private Archive createTestFileArchive() {
-		final AtomicReference<Archive> ref = new AtomicReference<>();
+	private PersistentDataTypeArchive createTestFileArchive() {
+		final AtomicReference<PersistentDataTypeArchive> ref = new AtomicReference<>();
 		runSwing(() -> {
 			DataTypeManagerPlugin plugin = env.getPlugin(DataTypeManagerPlugin.class);
-			DataTypeManagerHandler dataTypeManagerHandler = plugin.getDataTypeManagerHandler();
+			ArchiveManager archiveManager = plugin.getArchiveManager();
 			File tempArchiveFile;
 			try {
-				tempArchiveFile = File.createTempFile("TestFileArchive", ".gdt");
+				tempArchiveFile = Application.createTempFile("TestFileArchive", ".gdt");
 			}
 			catch (IOException e) {
 				e.printStackTrace();
@@ -734,21 +734,21 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 				tempArchiveFile.delete();
 			}
 			tempArchiveFile.deleteOnExit();
-			Archive archive = dataTypeManagerHandler.createArchive(tempArchiveFile);
+			PersistentDataTypeArchive archive = archiveManager.createFileArchive(tempArchiveFile);
 			ref.set(archive);
 		});
 
-		Archive archive = ref.get();
+		PersistentDataTypeArchive archive = ref.get();
 		assertNotNull(archive);
 		archivesToClose.add(archive);
 		return archive;
 	}
 
-	private void closeArchive(final Archive archive) {
+	private void closeArchive(PersistentDataTypeArchive archive) {
 		runSwing(() -> {
 			DataTypeManagerPlugin plugin = env.getPlugin(DataTypeManagerPlugin.class);
-			DataTypeManagerHandler dataTypeManagerHandler = plugin.getDataTypeManagerHandler();
-			dataTypeManagerHandler.closeArchive(archive);
+			ArchiveManager archiveManager = plugin.getArchiveManager();
+			archiveManager.closeArchive(archive);
 		});
 	}
 
@@ -1118,6 +1118,11 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 		public void programArchitectureChanged(DataTypeManager dataTypeManager) {
 			// don't care for now
 		}
+
+		@Override
+		public void restored(DataTypeManager dataTypeManager) {
+			// don't care for now
+		}
 	}
 
 	private class CustomDataType extends StructureDataType {
@@ -1140,13 +1145,6 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 //==================================================================================================
 
 	public static void main(String[] args) throws Exception {
-
-		try {
-			UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-		}
 
 		JFrame frame = new JFrame(DropDownSelectionTextField.class.getName());
 		frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
@@ -1201,8 +1199,8 @@ public class DataTypeSelectionDialogTest extends AbstractGhidraHeadedIntegration
 			new DefaultHighlighter.DefaultHighlightPainter(Palette.YELLOW));
 
 		JPanel editorPanel = new JPanel(new BorderLayout());
-		DataTypeSelectionEditor editor = new DataTypeSelectionEditor(tool, AllowedDataTypes.ALL);
-		editor.setPreferredDataTypeManager(program.getDataTypeManager());
+		DataTypeSelectionEditor editor =
+			new DataTypeSelectionEditor(program.getDataTypeManager(), tool, AllowedDataTypes.ALL);
 
 		editorPanel.add(panelUpdateField, BorderLayout.SOUTH);
 		editorPanel.add(editor.getEditorComponent(), BorderLayout.NORTH);

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,13 +31,11 @@ import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.pcode.*;
-import ghidra.util.exception.InvalidInputException;
-import ghidra.util.exception.NotFoundException;
+import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
 
 /**
  * The interpreter of p-code ops in the domain of {@link Sym}
- * 
  * <p>
  * This is used for static analysis by executing specific basic blocks. As such, it should never be
  * expected to interpret a conditional jump. (TODO: This rule might be violated if a fall-through
@@ -54,7 +52,7 @@ import ghidra.util.task.TaskMonitor;
  * but for the {@code __stdcall} convention prominent in 32-bit x86 binaries for Windows, the input
  * parameters must also be examined.
  */
-class SymPcodeExecutor extends PcodeExecutor<Sym> {
+public class SymPcodeExecutor extends PcodeExecutor<Sym> {
 
 	/**
 	 * Construct an executor for performing stack unwind analysis of a given program
@@ -62,22 +60,20 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 	 * @param program the program to analyze
 	 * @param state the symbolic state
 	 * @param reason a reason to give when reading state
-	 * @param warnings a place to emit warnings
 	 * @param monitor a monitor for analysis, usually decompilation
 	 * @return the executor
 	 */
 	public static SymPcodeExecutor forProgram(Program program, SymPcodeExecutorState state,
-			Reason reason, Set<StackUnwindWarning> warnings, TaskMonitor monitor) {
+			Reason reason, TaskMonitor monitor) {
 		CompilerSpec cSpec = program.getCompilerSpec();
 		SleighLanguage language = (SleighLanguage) cSpec.getLanguage();
 		SymPcodeArithmetic arithmetic = new SymPcodeArithmetic(cSpec);
-		return new SymPcodeExecutor(program, cSpec, language, arithmetic, state, reason, warnings,
-			monitor);
+		return new SymPcodeExecutor(program, cSpec, language, arithmetic, state, reason, monitor);
 	}
 
 	private final Program program;
 	private final Register sp;
-	private final Set<StackUnwindWarning> warnings;
+	final Set<StackUnwindWarning> warnings;
 	private final TaskMonitor monitor;
 
 	private final DecompInterface decomp = new DecompInterface();
@@ -87,11 +83,11 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 
 	public SymPcodeExecutor(Program program, CompilerSpec cSpec, SleighLanguage language,
 			SymPcodeArithmetic arithmetic, SymPcodeExecutorState state, Reason reason,
-			Set<StackUnwindWarning> warnings, TaskMonitor monitor) {
+			TaskMonitor monitor) {
 		super(language, arithmetic, state, reason);
 		this.program = program;
 		this.sp = cSpec.getStackPointer();
-		this.warnings = warnings;
+		this.warnings = state.warnings;
 		this.monitor = monitor;
 	}
 
@@ -99,6 +95,23 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 	public void executeCallother(PcodeOp op, PcodeFrame frame, PcodeUseropLibrary<Sym> library) {
 		// Do nothing
 		// TODO: Is there a way to know if a userop affects the stack?
+	}
+
+	@Override
+	public void stepOp(PcodeOp op, PcodeFrame frame, PcodeUseropLibrary<Sym> library) {
+		try {
+			monitor.checkCancelled();
+		}
+		catch (CancelledException e) {
+			throw new PcodeExecutionException("Cancelled", frame, e);
+		}
+		super.stepOp(op, frame, library);
+	}
+
+	@Override
+	protected void branchInternal(PcodeOp op, PcodeFrame frame, int relative) {
+		warnings.add(new IgnoredInternalFlowStackUnwindWarning(op.getSeqnum()));
+		// Don't call super! Could put us in a loop
 	}
 
 	/**
@@ -122,7 +135,8 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 		}
 		int extrapop = convention.getExtrapop();
 		if (extrapop == PrototypeModel.UNKNOWN_EXTRAPOP) {
-			throw new PcodeExecutionException("Cannot get stack change for function " + function);
+			extrapop = convention.getStackshift();
+			//throw new PcodeExecutionException("Cannot get stack change for function " + function);
 		}
 		if (function.isStackPurgeSizeValid()) {
 			return extrapop + function.getStackPurgeSize();
@@ -216,7 +230,14 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 	 */
 	protected FunctionSignature getSignatureFromTargetPointerType(PcodeOpAST op) {
 		VarnodeAST target = (VarnodeAST) op.getInput(0);
-		DataType dataType = target.getHigh().getDataType();
+		HighVariable high = target.getHigh();
+
+		if (high == null) {
+			warnings.add(new NoHighVariableFromTargetPointerTypeUnwindWarning(target));
+			return null;
+		}
+
+		DataType dataType = high.getDataType();
 		if (!(dataType instanceof Pointer ptrType)) {
 			warnings.add(new UnexpectedTargetTypeStackUnwindWarning(dataType));
 			return null;
@@ -236,7 +257,13 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 	 */
 	protected FunctionSignature getSignatureFromContextAtCallSite(PcodeOpAST op) {
 		FunctionDefinitionDataType sig = new FunctionDefinitionDataType("__indirect");
-		sig.setReturnType(op.getOutput().getHigh().getDataType());
+		Varnode output = op.getOutput();
+		if (output == null) {
+			sig.setReturnType(VoidDataType.dataType);
+		}
+		else {
+			sig.setReturnType(output.getHigh().getDataType());
+		}
 		// input 0 is the target, so drop it.
 		int numInputs = op.getNumInputs();
 		Parameter[] params = new Parameter[numInputs - 1];
@@ -244,19 +271,19 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 		for (int i = 1; i < numInputs; i++) {
 			Varnode input = op.getInput(i);
 			HighVariable highVar = input.getHigh();
+			DataType dataType = highVar.getDataType();
 			try {
 				/**
 				 * NOTE: Not specifying storage, since: 1) It's not germane to the function
 				 * signature, and 2) It may require chasing use-def chains through uniques.
 				 */
-				params[i - 1] = new ParameterImpl("param_" + i, highVar.getDataType(),
+				params[i - 1] = new ParameterImpl("param_" + i, dataType,
 					/*new VariableStorage(program, input),*/ program);
 			}
 			catch (InvalidInputException e) {
 				throw new AssertionError(e);
 			}
-			arguments[i - 1] = new ParameterDefinitionImpl("param_" + i,
-				input.getHigh().getDataType(), "generated");
+			arguments[i - 1] = new ParameterDefinitionImpl("param_" + i, dataType, "generated");
 		}
 		sig.setArguments(arguments);
 		sig.setComment("generated");
@@ -314,7 +341,8 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 		for (int i = 0; i < arguments.length; i++) {
 			types[i + 1] = arguments[0].getDataType();
 		}
-		VariableStorage[] vsLocs = convention.getStorageLocations(program, types, false);
+		VariableStorage[] vsLocs =
+			convention.getStorageLocations(program, types, false, sig.hasVarArgs());
 		Address min = null;
 		Address max = null; // Exclusive
 		for (VariableStorage vs : vsLocs) {
@@ -392,8 +420,15 @@ class SymPcodeExecutor extends PcodeExecutor<Sym> {
 		// This should always end a basic block, so just do nothing
 	}
 
+	/**
+	 * {@inheritDoc}
+	 * <p>
+	 * This could be a {@link PcodeOp#RETURN return} and the slaspec does not always set PC
+	 * explicitly, so do it here, but don't perform any actual control transfer.
+	 */
 	@Override
 	protected void doExecuteIndirectBranch(PcodeOp op, PcodeFrame frame) {
-		// This should always end a basic block, so just do nothing
+		Sym offset = state.getVar(getIndirectBranchTarget(op), reason);
+		branchToOffset(op, offset, frame);
 	}
 }

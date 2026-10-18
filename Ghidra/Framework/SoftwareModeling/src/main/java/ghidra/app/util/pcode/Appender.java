@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,7 +21,6 @@ import ghidra.program.model.lang.Register;
 
 /**
  * An appender to receive formatted p-code ops.
- * 
  * <p>
  * Using {@link AbstractAppender} is highly recommended, as it makes available methods for
  * displaying elements according to established Ghidra conventions.
@@ -30,9 +29,7 @@ import ghidra.program.model.lang.Register;
  */
 interface Appender<T> {
 	/**
-	 * Get the language of the p-code being formatted
-	 * 
-	 * @return
+	 * {@return the language of the p-code being formatted}
 	 */
 	Language getLanguage();
 
@@ -68,7 +65,7 @@ interface Appender<T> {
 	void appendMnemonic(int opcode);
 
 	/**
-	 * Append the the given userop
+	 * Append the given userop
 	 * 
 	 * @param id the userop id
 	 */
@@ -85,7 +82,6 @@ interface Appender<T> {
 
 	/**
 	 * Append a character
-	 * 
 	 * <p>
 	 * <b>NOTE:</b> if extra spacing is desired, esp., surrounding the equals sign, it must be
 	 * appended manually.

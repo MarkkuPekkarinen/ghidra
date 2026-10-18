@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -55,7 +55,7 @@ public class SpecExtensionPanel extends JPanel {
 	private boolean unappliedChanges;
 	private SpecExtension specExtension;
 	private List<CompilerElement> tableElements;
-	private ExtensionTableModel tableModel;
+	private SpecExtensionTableModel tableModel;
 	private GTable extensionTable;
 	private JButton exportButton;
 	private JButton removeButton;
@@ -163,7 +163,7 @@ public class SpecExtensionPanel extends JPanel {
 		}
 	}
 
-	private class ExtensionTableModel extends AbstractGTableModel<CompilerElement> {
+	private class SpecExtensionTableModel extends AbstractGTableModel<CompilerElement> {
 		private final String[] columnNames = { "Extension Type", "Name", "Status" };
 
 		@Override
@@ -383,7 +383,7 @@ public class SpecExtensionPanel extends JPanel {
 
 	private void createPanel() {
 		setLayout(new BorderLayout(10, 10));
-		tableModel = new ExtensionTableModel();
+		tableModel = new SpecExtensionTableModel();
 		extensionTable = new CompilerElementTable(tableModel);
 
 		JScrollPane sp = new JScrollPane(extensionTable);
@@ -401,7 +401,10 @@ public class SpecExtensionPanel extends JPanel {
 	private static File getStartingDir() {
 		String lastDirectoryPath = Preferences.getProperty(LAST_EXPORT_DIRECTORY);
 		if (lastDirectoryPath != null) {
-			return new File(lastDirectoryPath);
+			File dir = new File(lastDirectoryPath);
+			if (dir.isDirectory()) {
+				return dir;
+			}
 		}
 
 		return new File(System.getProperty("user.home"));
@@ -543,6 +546,23 @@ public class SpecExtensionPanel extends JPanel {
 		}
 	}
 
+	private static PrototypeModel findPrototypeModel(CompilerSpec compilerSpec, String name) {
+		PrototypeModel model = compilerSpec.getCallingConvention(name);
+		if (model != null) {
+			return model;
+		}
+		for (PrototypeModel candidate : compilerSpec.getAllModels()) {
+			if (name.equals(candidate.getName())) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	private static String toExportFilename(String name) {
+		return name.replace('/', '_').replace('\\', '_');
+	}
+
 	private String getXmlString(CompilerElement element) throws IOException {
 		CompilerSpec compilerSpec = program.getCompilerSpec();
 		PcodeInjectLibrary injectLibrary = compilerSpec.getPcodeInjectLibrary();
@@ -567,7 +587,7 @@ public class SpecExtensionPanel extends JPanel {
 					break;
 				case PROTOTYPE_MODEL:
 				case MERGE_MODEL:
-					model = compilerSpec.getCallingConvention(element.name);
+					model = findPrototypeModel(compilerSpec, element.name);
 					if (model != null) {
 						model.encode(encoder, injectLibrary);
 					}
@@ -593,7 +613,7 @@ public class SpecExtensionPanel extends JPanel {
 		if (!compilerElement.isExisting()) {
 			return;		// Only export existing elements
 		}
-		String suggestedName = compilerElement.name + PREFERENCES_FILE_EXTENSION;
+		String suggestedName = toExportFilename(compilerElement.name) + PREFERENCES_FILE_EXTENSION;
 		File outputFile = getFileFromUser(suggestedName);
 		if (outputFile == null) {
 			return;

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -132,11 +132,19 @@ public class MultipleActionDockingToolbarButton extends EmptyBorderButton {
 		return new Rectangle(leftIconWidth, 0, rightButtonWidth, height);
 	}
 
-	private ActionContext getActionContext() {
+	protected ActionContext getActionContext() {
 		ComponentProvider provider = getComponentProvider();
-		ActionContext context = provider == null ? null : provider.getActionContext(null);
-		final ActionContext actionContext = context == null ? new DefaultActionContext() : context;
-		return actionContext;
+		ActionContext context = null;
+		if (provider != null) {
+			context = provider.getActionContext(null);
+		}
+
+		if (context == null) {
+			context = new DefaultActionContext();
+		}
+
+		context.setContextProvider(provider);
+		return context;
 	}
 
 	private ComponentProvider getComponentProvider() {
@@ -152,7 +160,7 @@ public class MultipleActionDockingToolbarButton extends EmptyBorderButton {
 	 * 
 	 * @return the popup menu that was shown
 	 */
-	JPopupMenu showPopup() {
+	protected JPopupMenu showPopup() {
 
 		if (popupIsShowing()) {
 			popupMenu.setVisible(false);
@@ -164,16 +172,26 @@ public class MultipleActionDockingToolbarButton extends EmptyBorderButton {
 		// 1) show a popup if it was not showing
 		// 2) hide the popup if it was showing
 		//
-		// Case 2 requires timestamps.  Java will close the popup as the button is clicked. This 
-		// means that when we are told to show the popup as the result of a click, the popup will 
-		// never be showing.  To work around this, we track the elapsed time since last click.  If 
-		// the period is too short, then we assume Java closed the popup when the click happened 
+		// Case 2 requires timestamps.  Java will close the popup as the button is clicked. This
+		// means that when we are told to show the popup as the result of a click, the popup will
+		// never be showing.  To work around this, we track the elapsed time since last click.  If
+		// the period is too short, then we assume Java closed the popup when the click happened
 		//and thus we should ignore it.
 		//
 		long elapsedTime = System.currentTimeMillis() - popupLastClosedTime;
 		if (elapsedTime < 500) { // somewhat arbitrary time window
 			return null;
 		}
+
+		JPopupMenu menu = doCreateMenu();
+
+		menu.addPopupMenuListener(popupListener);
+		Point p = getPopupPoint();
+		menu.show(this, p.x, p.y);
+		return menu;
+	}
+
+	protected JPopupMenu doCreateMenu() {
 
 		JPopupMenu menu = new JPopupMenu();
 		List<DockingActionIf> actionList = multipleAction.getActionList(getActionContext());
@@ -187,8 +205,8 @@ public class MultipleActionDockingToolbarButton extends EmptyBorderButton {
 			}
 
 			// a custom Ghidra UI that handles alignment issues and allows for tabulating presentation
-			item.setUI((DockingMenuItemUI) DockingMenuItemUI.createUI(item));
-			final DockingActionIf delegateAction = dockingAction;
+			item.setUI(DockingMenuItemUI.createUI(item));
+			DockingActionIf delegateAction = dockingAction;
 			item.addActionListener(e -> {
 				ActionContext context = getActionContext();
 				context.setSourceObject(e.getSource());
@@ -203,10 +221,6 @@ public class MultipleActionDockingToolbarButton extends EmptyBorderButton {
 
 			menu.add(item);
 		}
-
-		menu.addPopupMenuListener(popupListener);
-		Point p = getPopupPoint();
-		menu.show(this, p.x, p.y);
 		return menu;
 	}
 

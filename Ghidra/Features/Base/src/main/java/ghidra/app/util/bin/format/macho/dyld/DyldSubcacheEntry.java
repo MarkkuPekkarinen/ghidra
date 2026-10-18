@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@ import ghidra.util.exception.DuplicateNameException;
 /**
  * Represents a dyld_subcache_entry structure.
  * 
- * @see <a href="https://github.com/apple-oss-distributions/dyld/blob/main/cache-builder/dyld_cache_format.h">dyld_cache_format.h</a> 
+ * @see <a href="https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/dyld_cache_format.h">dyld_cache_format.h</a> 
  */
 public class DyldSubcacheEntry implements StructConverter {
 
@@ -36,21 +36,19 @@ public class DyldSubcacheEntry implements StructConverter {
 	private long cacheVMOffset;
 	private byte[] cacheExtension;
 
-	private long headerType;
-
 	/**
 	 * Create a new {@link DyldSubcacheEntry}.
 	 * 
 	 * @param reader A {@link BinaryReader} positioned at the start of a DYLD subCache entry
-	 * @param headerType The header type value
 	 * @throws IOException if there was an IO-related problem creating the DYLD subCache entry
 	 */
-	public DyldSubcacheEntry(BinaryReader reader, long headerType) throws IOException {
-		this.headerType = headerType;
-
+	public DyldSubcacheEntry(BinaryReader reader) throws IOException {
 		uuid = reader.readNextByteArray(16);
 		cacheVMOffset = reader.readNextLong();
-		if (supportsCacheExtension()) {
+
+		// A bit of a hack.  Is there a safer way to know if you are reading a dyld_subcache_entry
+		// or a dyld_subcache_entry_v1?
+		if (reader.readByte(reader.getPointerIndex()) == '.') {
 			cacheExtension = reader.readNextByteArray(32);
 		}
 	}
@@ -97,20 +95,11 @@ public class DyldSubcacheEntry implements StructConverter {
 		struct.add(new ArrayDataType(BYTE, 16, 1), "uuid", "The UUID of the subCache file");
 		struct.add(QWORD, "cacheVMOffset",
 			"The offset of this subcache from the main cache base address");
-		if (supportsCacheExtension()) {
+		if (cacheExtension != null) {
 			struct.add(new ArrayDataType(ASCII, 32, 1), "cacheExtension",
 				"The extension of the subCache file");
 		}
 		struct.setCategoryPath(new CategoryPath(MachConstants.DATA_TYPE_CATEGORY));
 		return struct;
-	}
-
-	/**
-	 * Checks to see if the subCache extension is known
-	 * 
-	 * @return True if the subCache extension is known; otherwise, false
-	 */
-	private boolean supportsCacheExtension() {
-		return headerType >= 9;
 	}
 }

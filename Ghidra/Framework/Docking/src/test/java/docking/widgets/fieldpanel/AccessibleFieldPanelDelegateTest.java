@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,13 +25,13 @@ import java.util.Locale;
 
 import javax.accessibility.*;
 import javax.swing.JLabel;
-import javax.swing.JPanel;
 
 import org.junit.Before;
 import org.junit.Test;
 
 import docking.widgets.EventTrigger;
 import docking.widgets.fieldpanel.field.*;
+import docking.widgets.fieldpanel.internal.EmptyBigLayoutModel;
 import docking.widgets.fieldpanel.support.*;
 
 public class AccessibleFieldPanelDelegateTest {
@@ -42,14 +42,18 @@ public class AccessibleFieldPanelDelegateTest {
 	private static FontMetrics fontMetrics =
 		new JLabel("Dummy").getFontMetrics(new Font("Monospaced", Font.PLAIN, 12));
 	private List<AnchoredLayout> layouts;
-	private JPanel panel = new JPanel();
+	private FieldPanel panel = new FieldPanel(new EmptyBigLayoutModel());
 	private TestAccessibleContext testContext = new TestAccessibleContext();
 	private int fieldLineHeight = fontMetrics.getHeight() + 1;
 
 	@Before
 	public void setup() {
 		layouts = List.of(buildAnchoredLayout(0, 0, 3), buildAnchoredLayout(1, FIELD_HEIGHT, 13));
-		delegate = new AccessibleFieldPanelDelegate(layouts, testContext, panel);
+		delegate = new AccessibleFieldPanelDelegate(layouts, testContext, panel) {
+			protected boolean isFocused() {
+				return true;
+			};
+		};
 		delegate.setFieldDescriptionProvider(new TestFieldDescriptionProvider());
 		delegate.setCaret(new FieldLocation(BigInteger.ZERO, 0, 0, 0), EventTrigger.API_CALL);
 

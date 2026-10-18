@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -55,6 +55,8 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcCleararch(),"clear","architecture");
   status->registerCom(new IfcMapaddress(),"map","address");
   status->registerCom(new IfcMaphash(),"map","hash");
+  status->registerCom(new IfcMapParam(),"map","param");
+  status->registerCom(new IfcMapReturn(),"map","return");
   status->registerCom(new IfcMapfunction(),"map","function");
   status->registerCom(new IfcMapexternalref(),"map","externalref");
   status->registerCom(new IfcMaplabel(),"map","label");
@@ -70,6 +72,7 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcProtooverride(),"override","prototype");
   status->registerCom(new IfcJumpOverride(),"override","jumptable");
   status->registerCom(new IfcFlowOverride(),"override","flow");
+  status->registerCom(new IfcDestinationOverride(),"override","destination");
   status->registerCom(new IfcDeadcodedelay(),"deadcode","delay");
   status->registerCom(new IfcGlobalAdd(),"global","add");
   status->registerCom(new IfcGlobalRemove(),"global","remove");
@@ -120,6 +123,8 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcLockPrototype(),"prototype","lock");
   status->registerCom(new IfcUnlockPrototype(),"prototype","unlock");
   status->registerCom(new IfcCommentInstr(),"comment","instruction");
+  status->registerCom(new IfcFindVarnodeHash(),"find","varnode","hash");
+  status->registerCom(new IfcFindOpHash(),"find","op","hash");
   status->registerCom(new IfcDuplicateHash(),"duplicate","hash");
   status->registerCom(new IfcCallGraphBuild(),"callgraph","build");
   status->registerCom(new IfcCallGraphBuildQuick(),"callgraph","build","quick");
@@ -152,6 +157,10 @@ void IfaceDecompCapability::registerCommands(IfaceStatus *status)
   status->registerCom(new IfcTraceClear(),"trace","clear");
   status->registerCom(new IfcTraceList(),"trace","list");
   status->registerCom(new IfcBreakjump(),"break","jumptable");
+#endif
+
+#ifdef TYPEPROP_DEBUG
+  status->registerCom(new IfcTracePropagation(),"trace","propagation");
 #endif
 }
 
@@ -319,7 +328,7 @@ void IfcOption::execute(istream &s)
   }
   
   try {
-    string res = dcp->conf->options->set(ElementId::find(optname),p1,p2,p3);
+    string res = dcp->conf->options->set(ElementId::find(optname,0),p1,p2,p3);
     *status->optr << res << endl;
   }
   catch(ParseError &err) {
@@ -453,7 +462,7 @@ void IfaceDecompData::followFlow(ostream &s,int4 size)
 /// \class IfcFuncload
 /// \brief Make a specific function current: `load function <functionname>`
 ///
-/// The name must be a fully qualified symbol with "::" separating namespaces.
+/// The name must be a fully qualified symbol with namespaces.
 /// If the symbol represents a function, that function becomes \e current for
 /// the console. If there are bytes for the function, raw p-code and control-flow
 /// are calculated.
@@ -469,7 +478,7 @@ void IfcFuncload::execute(istream &s)
     throw IfaceExecutionError("No image loaded");
 
   string basename;
-  Scope *funcscope = dcp->conf->symboltab->resolveScopeFromSymbolName(funcname,"::",basename,(Scope *)0);
+  Scope *funcscope = dcp->conf->symboltab->resolveScopeFromSymbolName(funcname,basename,(Scope *)0);
   if (funcscope == (Scope *)0)
     throw IfaceExecutionError("Bad namespace: "+funcname);
   dcp->fd = funcscope->queryFunction( basename ); // Is function already in database
@@ -528,7 +537,7 @@ void IfcReadSymbols::execute(istream &s)
   if (dcp->conf->loader == (LoadImage *)0)
     throw IfaceExecutionError("No binary loaded");
 
-  dcp->conf->readLoaderSymbols("::");
+  dcp->conf->readLoaderSymbols();
 }
 
 /// \class IfcMapaddress
@@ -538,8 +547,8 @@ void IfcReadSymbols::execute(istream &s)
 /// \code
 ///    map address r0x1000 int4 globalvar
 /// \endcode
-/// The symbol specified in the type declaration can qualify the namespace using the "::"
-/// specifier.  If there is a current function, the variable is local to the function.
+/// The symbol specified in the type declaration can qualify the namespace.
+/// If there is a current function, the variable is local to the function.
 /// Otherwise the symbol is created relative to the global scope.
 void IfcMapaddress::execute(istream &s)
 
@@ -557,16 +566,15 @@ void IfcMapaddress::execute(istream &s)
     sym->getScope()->setAttribute(sym,Varnode::namelock|Varnode::typelock);
   }
   else {
-    Symbol *sym;
     uint4 flags = Varnode::namelock|Varnode::typelock;
     flags |= dcp->conf->symboltab->getProperty(addr); // Inherit existing properties
     string basename;
-    Scope *scope = dcp->conf->symboltab->findCreateScopeFromSymbolName(name, "::", basename, (Scope *)0);
-    sym = scope->addSymbol(basename,ct,addr,Address())->getSymbol();
+    Scope *scope = dcp->conf->symboltab->findCreateScopeFromSymbolName(name, basename, (Scope *)0);
+    MapEntry *entry = scope->addSymbol(basename,ct,addr,Address());
+    Symbol *sym = entry->getSymbol();
     sym->getScope()->setAttribute(sym,flags);
     if (scope->getParent() != (Scope *)0) {		// If this is a global namespace scope
-      SymbolEntry *e = sym->getFirstWholeMap();		// Adjust range
-      dcp->conf->symboltab->addRange(scope,e->getAddr().getSpace(),e->getFirst(),e->getLast());
+      dcp->conf->symboltab->addRange(scope,entry->getAddr().getSpace(),entry->getFirst(),entry->getLast());
     }
   }
 
@@ -598,6 +606,49 @@ void IfcMaphash::execute(istream &s)
   sym->getScope()->setAttribute(sym,Varnode::namelock|Varnode::typelock);
 }
 
+/// \class IfcMapParam
+/// \brief Map a parameter symbol for the current function: `map param #i <address> <typedeclaration>`
+///
+/// The position of the parameter in the input list is parsed as an integer, starting at 0.
+/// The address range used for parameter is explicitly set.  The data-type and name of the parameter
+/// are parsed from the type declaration.  The parameter is treated as name and type locked.
+void IfcMapParam::execute(istream &s)
+
+{
+  if (dcp->fd == (Funcdata *)0)
+    throw IfaceExecutionError("No function loaded");
+  int4 i;
+  string name;
+  int4 size;
+  ParameterPieces piece;
+  s >> dec >> i;		// Position of the parameter
+  piece.addr = parse_machaddr(s,size,*dcp->conf->types);	// Starting address of parameter
+  piece.type = parse_type(s,name,dcp->conf);
+  piece.flags = ParameterPieces::typelock | ParameterPieces::namelock;
+
+  dcp->fd->getFuncProto().setParam(i, name, piece);
+}
+
+/// \class IfcMapReturn
+/// \brief Map the return storage for the current function: `map return <address> <typedeclaration>`
+///
+/// The address range used for return storage is explicitly set, and the return value is set to the
+/// parsed data-type.  The function's output is considered locked.
+void IfcMapReturn::execute(istream &s)
+
+{
+  if (dcp->fd == (Funcdata *)0)
+    throw IfaceExecutionError("No function loaded");
+  string name;
+  int4 size;
+  ParameterPieces piece;
+  piece.addr = parse_machaddr(s,size,*dcp->conf->types);	// Starting address of return storage
+  piece.type = parse_type(s,name,dcp->conf);
+  piece.flags = ParameterPieces::typelock;
+
+  dcp->fd->getFuncProto().setOutput(piece);
+}
+
 /// \class IfcMapfunction
 /// \brief Create a new function: `map function <address> [<functionname>] [nocode]`
 ///
@@ -621,7 +672,7 @@ void IfcMapfunction::execute(istream &s)
   if (name.empty())
     dcp->conf->nameFunction(addr,name); // Pick default name if necessary
   string basename;
-  Scope *scope = dcp->conf->symboltab->findCreateScopeFromSymbolName(name, "::", basename, (Scope *)0);
+  Scope *scope = dcp->conf->symboltab->findCreateScopeFromSymbolName(name, basename, (Scope *)0);
   dcp->fd = scope->addFunction(addr,name)->getFunction();
 
   string nocode;
@@ -919,7 +970,9 @@ void IfcPrintCXml::execute(istream &s)
 
   dcp->conf->print->setOutputStream(status->fileoptr);
   dcp->conf->print->setMarkup(true);
+  dcp->conf->print->setPackedOutput(false);
   dcp->conf->print->docFunction(dcp->fd);
+  *status->fileoptr << endl;
   dcp->conf->print->setMarkup(false);
 }
 
@@ -1302,6 +1355,7 @@ void IfcRename::execute(istream &s)
 
   if (sym->getCategory() == Symbol::function_parameter)
     dcp->fd->getFuncProto().setInputLock(true);
+  dcp->fd->remapConflictSymbol(sym);
   sym->getScope()->renameSymbol(sym,newname);
   sym->getScope()->setAttribute(sym,Varnode::namelock|Varnode::typelock);
 }
@@ -1360,6 +1414,7 @@ void IfcRetype::execute(istream &s)
 
   if (sym->getCategory()==Symbol::function_parameter)
     dcp->fd->getFuncProto().setInputLock(true);
+  dcp->fd->remapConflictSymbol(sym);
   sym->getScope()->retypeSymbol(sym,ct);
   sym->getScope()->setAttribute(sym,Varnode::typelock);
   if ((newname.size()!=0)&&(newname != name)) {
@@ -1474,7 +1529,7 @@ void IfaceDecompData::readSymbol(const string &name,vector<Symbol *> &res)
 {
   Scope *scope = (fd == (Funcdata *)0) ? conf->symboltab->getGlobalScope() : fd->getScopeLocal();
   string basename;
-  scope = conf->symboltab->resolveScopeFromSymbolName(name, "::", basename, scope);
+  scope = conf->symboltab->resolveScopeFromSymbolName(name, basename, scope);
   if (scope == (Scope *)0)
     throw IfaceParseError("Bad namespace for symbol: " + name);
   scope->queryByName(basename,res);
@@ -1797,7 +1852,7 @@ void IfcProtooverride::execute(istream &s)
   s >> ws;
   Address callpoint(parse_machaddr(s,discard,*dcp->conf->types));
   int4 i;
-  for(i=0;dcp->fd->numCalls();++i)
+  for(i=0;i<dcp->fd->numCalls();++i)
     if (dcp->fd->getCallSpecs(i)->getOp()->getAddr() == callpoint) break;
   if (i == dcp->fd->numCalls())
     throw IfaceExecutionError("No call is made at this address");
@@ -1805,12 +1860,12 @@ void IfcProtooverride::execute(istream &s)
   PrototypePieces pieces;
   parse_protopieces(pieces,s,dcp->conf); // Parse the prototype from stream
 
-  FuncProto *newproto = new FuncProto();
+  unique_ptr<FuncProto> newproto(new FuncProto());
 
   // Make proto whose storage is internal, not backed by a real scope
   newproto->setInternal(pieces.model,dcp->conf->types->getTypeVoid());
   newproto->setPieces(pieces);
-  dcp->fd->getOverride().insertProtoOverride(callpoint,newproto);
+  dcp->fd->getOverride().insertProtoOverride(callpoint,newproto.release());
   dcp->fd->clear();		// Clear any analysis (this leaves overrides intact)
 }
 
@@ -1882,7 +1937,6 @@ void IfcFlowOverride::execute(istream &s)
 
 {
   int4 discard;
-  uint4 type;
   string token;
 
   if (dcp->fd == (Funcdata *)0)
@@ -1893,12 +1947,37 @@ void IfcFlowOverride::execute(istream &s)
   s >> token;
   if (token.size() == 0)
     throw IfaceParseError("Missing override type");
-  type = Override::stringToType(token);
-  if (type == Override::NONE)
-    throw IfaceParseError("Bad override type");
 
-  dcp->fd->getOverride().insertFlowOverride(addr,type);
-  *status->optr << "Successfully added override" << endl;
+  dcp->fd->getOverride().insertFlowOverride(addr,token);
+  *status->optr << "Successfully added flow override" << endl;
+}
+
+/// \class IfcDestinationOverride
+/// \brief Create an override changing a call destination: `override destination <address> <type> <destaddress>`
+///
+/// The override modifies a branching op-code at \<address\> to have particular destination address,
+/// depending on the \<type\>.
+///   - callind_call converts a CALLIND to CALL (with the destination address)
+///   - callother_call converts a CALLOTHER to a CALL
+///   - callother_branch converts a CALLOTHER to a BRANCH
+///   - call_call converts a CALL to have the specified destination address
+void IfcDestinationOverride::execute(istream &s)
+
+{
+  int4 discard;
+  string token;
+
+  if (dcp->fd == (Funcdata *)0)
+    throw IfaceExecutionError("No function selected");
+
+  s >> ws;
+  Address addr( parse_machaddr(s,discard,*dcp->conf->types));
+  s >> token >> ws;
+  if (token.size() == 0)
+    throw IfaceParseError("Missing override type");
+  Address dest( parse_machaddr(s,discard,*dcp->conf->types));
+  dcp->fd->getOverride().insertDestinationOverride(addr, dest, token);
+  *status->optr << "Successfully added destination override" << endl;
 }
 
 /// \class IfcDeadcodedelay
@@ -2288,7 +2367,7 @@ void IfcPrintMap::execute(istream &s)
     throw IfaceExecutionError("No load image");
   if (name.size() != 0 || dcp->fd==(Funcdata *)0) {
     string fullname = name + "::a";		// Add fake variable name
-    scope = dcp->conf->symboltab->resolveScopeFromSymbolName(fullname, "::", fullname, (Scope *)0);
+    scope = dcp->conf->symboltab->resolveScopeFromSymbolName(fullname, fullname, (Scope *)0);
   }
   else
     scope = dcp->fd->getScopeLocal();
@@ -2620,6 +2699,55 @@ void IfcDuplicateHash::check(Funcdata *fd,ostream &s)
   }
 }
 
+/// \class IfcFindVarnodeHash
+/// \brief Find a Varnode in the current function given a hash and address
+///
+/// If a matching Varnode is found, info is displayed. Otherwise "Varnode not found" is displayed.
+void IfcFindVarnodeHash::execute(istream &s)
+
+{
+  if (dcp->conf == (Architecture *)0)
+    throw IfaceExecutionError("Image not loaded");
+  if (dcp->fd == (Funcdata *)0)
+    throw IfaceExecutionError("No function selected");
+  int4 size;
+  Address addr = parse_machaddr(s,size,*dcp->conf->types); // Read required address
+  uint8 hash = 0;
+  s >> ws >> hex >> hash;
+  DynamicHash dynamic;
+  Varnode *vn = dynamic.findVarnode(dcp->fd,addr,hash);
+  if (vn == (Varnode *)0)
+    *status->optr << "Varnode not found" << endl;
+  else {
+    vn->printInfo(*status->optr);
+  }
+}
+
+/// \class IfcFindOpHash
+/// \brief Find a PcodeOp in the current function given a hash and address
+///
+/// If a matching PcodeOp is found, info is displayed. Otherwise "Op not found" is displayed.
+void IfcFindOpHash::execute(istream &s)
+
+{
+  if (dcp->conf == (Architecture *)0)
+    throw IfaceExecutionError("Image not loaded");
+  if (dcp->fd == (Funcdata *)0)
+    throw IfaceExecutionError("No function selected");
+  int4 size;
+  Address addr = parse_machaddr(s,size,*dcp->conf->types); // Read required address
+  uint8 hash = 0;
+  s >> ws >> hex >> hash;
+  DynamicHash dynamic;
+  PcodeOp *op = dynamic.findOp(dcp->fd,addr,hash);
+  if (op == (PcodeOp *)0)
+    *status->optr << "Op not found" << endl;
+  else {
+    op->printRaw(*status->optr);
+    *status->optr << endl;
+  }
+}
+
 /// \class IfcDuplicateHash
 /// \brief Check for duplicate hashes in functions: `duplicate hash`
 ///
@@ -2936,7 +3064,7 @@ void IfcFixupApply::execute(istream &s)
     throw IfaceExecutionError("Unknown fixup: " + fixupName);
 
   string basename;
-  Scope *funcscope = dcp->conf->symboltab->resolveScopeFromSymbolName(funcName,"::",basename,(Scope *)0);
+  Scope *funcscope = dcp->conf->symboltab->resolveScopeFromSymbolName(funcName,basename,(Scope *)0);
   if (funcscope == (Scope *)0)
     throw IfaceExecutionError("Bad namespace: "+funcName);
   Funcdata *fd = funcscope->queryFunction( basename ); // Is function already in database
@@ -3535,6 +3663,24 @@ void IfcBreakjump::execute(istream &s)
   *status->optr << "Jumptable debugging enabled" << endl;
   if (dcp->fd != (Funcdata *)0)
     dcp->fd->enableJTCallback(jump_callback);
+}
+
+#endif
+
+#ifdef TYPEPROP_DEBUG
+
+void IfcTracePropagation::execute(istream &s)
+
+{
+  string token;
+  s >> ws >> token;
+  if (token == "on")
+    TypeFactory::propagatedbg_on = true;
+  else if (token == "off")
+    TypeFactory::propagatedbg_on = false;
+  else
+    throw IfaceParseError("Must specific on/off");
+  *status->optr << "Data-type propagation trace set to: "<< token << endl;
 }
 
 #endif

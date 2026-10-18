@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,10 +22,12 @@ import java.awt.datatransfer.Clipboard;
 import java.awt.font.TextAttribute;
 import java.awt.im.InputMethodHighlight;
 import java.awt.image.*;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.util.Map;
 import java.util.Properties;
 
+import ghidra.util.classfinder.ClassSearcher;
 import sun.awt.HeadlessToolkit;
 
 public class MyHeadlessToolkit extends Toolkit {
@@ -90,7 +92,7 @@ public class MyHeadlessToolkit extends Toolkit {
 
 	@Override
 	public String[] getFontList() {
-		return localToolKit.getFontList();
+		return GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
 	}
 
 	@Override
@@ -162,34 +164,28 @@ public class MyHeadlessToolkit extends Toolkit {
 	}
 
 	private void getRealToolkit() {
+
+		Class<? extends Toolkit> cls = null;
 		try {
-            // We disable the JIT during toolkit initialization.  This
-            // tends to touch lots of classes that aren't needed again
-            // later and therefore JITing is counter-productiive.
-            java.lang.Compiler.disable();
-            
-			Class<?> cls = null;
-            try {
-            	try {
-                	cls = Class.forName(preferredToolkit);
-                } catch (ClassNotFoundException ee) {
-                    throw new AWTError("Toolkit not found: " + preferredToolkit);
-                }
-                if (cls != null) {
-                    localToolKit = (Toolkit)cls.newInstance();
-                    if (GraphicsEnvironment.isHeadless()) {
-                    	localToolKit = new HeadlessToolkit(localToolKit);
-                    }
-                }
-            } catch (InstantiationException e) {
-                throw new AWTError("Could not instantiate Toolkit: " + preferredToolkit);
-            } catch (IllegalAccessException e) {
-                throw new AWTError("Could not access Toolkit: " + preferredToolkit);
-            }
-            
-        } finally {
-            // Make sure to always re-enable the JIT.
-            java.lang.Compiler.enable();
-        }
+			try {
+				cls = ClassSearcher.forNameSafe(preferredToolkit, Toolkit.class,
+					getClass().getClassLoader());
+			}
+			catch (ClassNotFoundException ee) {
+				throw new AWTError("Toolkit not found: " + preferredToolkit);
+			}
+			if (cls != null) {
+				localToolKit = cls.getConstructor().newInstance();
+				if (GraphicsEnvironment.isHeadless()) {
+					localToolKit = new HeadlessToolkit(localToolKit);
+				}
+			}
+		}
+		catch (InstantiationException | NoSuchMethodException | InvocationTargetException e) {
+			throw new AWTError("Could not instantiate Toolkit: " + preferredToolkit);
+		}
+		catch (IllegalAccessException e) {
+			throw new AWTError("Could not access Toolkit: " + preferredToolkit);
+		}
 	}
 }

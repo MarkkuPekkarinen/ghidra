@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,10 +25,11 @@ import java.net.URL;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import javax.swing.*;
 
-import org.jdom.Element;
+import org.jdom2.Element;
 
 import docking.*;
 import docking.action.*;
@@ -37,6 +38,7 @@ import docking.actions.PopupActionProvider;
 import docking.actions.ToolActions;
 import docking.framework.AboutDialog;
 import docking.framework.ApplicationInformationDisplayFactory;
+import docking.options.OptionsService;
 import docking.tool.ToolConstants;
 import docking.tool.util.DockingToolConstants;
 import docking.util.image.ToolIconURL;
@@ -45,14 +47,15 @@ import ghidra.framework.OperatingSystem;
 import ghidra.framework.Platform;
 import ghidra.framework.cmd.BackgroundCommand;
 import ghidra.framework.cmd.Command;
-import ghidra.framework.main.*;
+import ghidra.framework.main.AppInfo;
+import ghidra.framework.main.UserAgreementDialog;
 import ghidra.framework.model.*;
 import ghidra.framework.options.*;
-import ghidra.framework.plugintool.dialog.ExtensionTableProvider;
 import ghidra.framework.plugintool.dialog.ManagePluginsDialog;
 import ghidra.framework.plugintool.mgr.*;
 import ghidra.framework.plugintool.util.*;
 import ghidra.framework.project.ProjectDataService;
+import ghidra.framework.project.extensions.ExtensionTableDialog;
 import ghidra.util.*;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.*;
@@ -175,7 +178,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 		eventMgr = new EventManager(this);
 		serviceMgr = new ServiceManager();
 		installServices();
-		pluginMgr = new PluginManager(this, serviceMgr);
+		pluginMgr = new PluginManager(this, serviceMgr, createPluginsConfigurations());
 		dialogMgr = new DialogManager(this);
 		initActions();
 		initOptions();
@@ -192,7 +195,13 @@ public abstract class PluginTool extends AbstractDockingTool {
 		// non-public constructor for stub subclasses
 	}
 
-	public abstract PluginClassManager getPluginClassManager();
+	protected PluginsConfiguration createPluginsConfigurations() {
+		return new DefaultPluginsConfiguration();
+	}
+
+	public PluginsConfiguration getPluginsConfiguration() {
+		return pluginMgr.getPluginsConfiguration();
+	}
 
 	/**
 	 * This method exists here, as opposed to inline in the constructor, so that subclasses can
@@ -233,21 +242,15 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 */
 	protected void installUtilityPlugins() {
 
-		PluginClassManager classManager = getPluginClassManager();
-		PluginPackage utilityPackage = PluginPackage.getPluginPackage(UtilityPluginPackage.NAME);
-		List<PluginDescription> descriptions = classManager.getPluginDescriptions(utilityPackage);
-
-		Set<String> classNames = new HashSet<>();
-		if (descriptions == null) {
-			return;
-		}
-		for (PluginDescription description : descriptions) {
-			String pluginClass = description.getPluginClass().getName();
-			classNames.add(pluginClass);
-		}
-
 		try {
-			addPlugins(classNames);
+			checkedRunSwingNow(() -> {
+				try {
+					pluginMgr.installUtilityPlugins();
+				}
+				finally {
+					setConfigChanged(true);
+				}
+			}, PluginException.class);
 		}
 		catch (PluginException e) {
 			Msg.showError(this, null, "Error Adding Utility Plugins",
@@ -336,7 +339,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * Displays the extensions installation dialog.
 	 */
 	public void showExtensions() {
-		showDialog(new ExtensionTableProvider(this));
+		showDialog(new ExtensionTableDialog(this));
 	}
 
 	/**
@@ -631,7 +634,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 		}
 
 		winMgr.restoreWindowDataFromXml(root);
-		winMgr.setToolName(fullName);
+		updateTitle();
 		return hasErrors;
 	}
 
@@ -690,6 +693,39 @@ public abstract class PluginTool extends AbstractDockingTool {
 	}
 
 	/**
+	 * Execute the given command in the foreground.  Required domain object transaction will be
+	 * started with delayed end to ensure that any follow-on analysis starts prior to transaction 
+	 * end.
+	 * 
+	 * @param <T> {@link DomainObject} implementation interface
+	 * @param commandName command name to be associated with transaction
+	 * @param domainObject domain object to be modified
+	 * @param f command function callback which should return true on success or false on failure.
+	 * @return result from command function callback
+	 */
+	public <T extends DomainObject> boolean execute(String commandName, T domainObject,
+			Function<T, Boolean> f) {
+		return taskMgr.execute(commandName, domainObject, f);
+	}
+
+	/**
+	 * Execute the given command in the foreground.  Required domain object transaction will be
+	 * started with delayed end to ensure that any follow-on analysis starts prior to transaction 
+	 * end.
+	 * 
+	 * @param <T> {@link DomainObject} implementation interface
+	 * @param commandName command name to be associated with transaction
+	 * @param domainObject domain object to be modified
+	 * @param r command function runnable
+	 */
+	public <T extends DomainObject> void execute(String commandName, T domainObject, Runnable r) {
+		execute(commandName, domainObject, d -> {
+			r.run();
+			return true;
+		});
+	}
+
+	/**
 	 * Call the applyTo() method on the given command to make some change to
 	 * the domain object; the command is done in the AWT thread, therefore,
 	 * the command that is to be executed should be a relatively quick operation
@@ -698,9 +734,9 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * @param command command to apply
 	 * @param obj domain object that the command will be applied to
 	 * @return status of the command's applyTo() method
-	 * @see #executeBackgroundCommand(BackgroundCommand, UndoableDomainObject)
+	 * @see #executeBackgroundCommand(BackgroundCommand, DomainObject)
 	 */
-	public boolean execute(Command command, DomainObject obj) {
+	public <T extends DomainObject> boolean execute(Command<T> command, T obj) {
 		return taskMgr.execute(command, obj);
 	}
 
@@ -734,7 +770,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * AWT Thread)
 	 * @param obj domain object that the command will be applied to
 	 */
-	public void executeBackgroundCommand(BackgroundCommand cmd, UndoableDomainObject obj) {
+	public <T extends DomainObject> void executeBackgroundCommand(BackgroundCommand<T> cmd, T obj) {
 		taskMgr.executeCommand(cmd, obj);
 	}
 
@@ -744,7 +780,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * @param cmd background command to submit
 	 * @param obj the domain object to be modified by the command.
 	 */
-	public void scheduleFollowOnCommand(BackgroundCommand cmd, UndoableDomainObject obj) {
+	public <T extends DomainObject> void scheduleFollowOnCommand(BackgroundCommand<T> cmd, T obj) {
 		taskMgr.scheduleFollowOnCommand(cmd, obj);
 	}
 
@@ -858,19 +894,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 
 	/**
 	 * Add plugins to the tool.
-	 * @param classNames array of plugin class names
-	 * @throws PluginException if a plugin could not be constructed, or
-	 * there was problem executing its init() method, or if a plugin of this
-	 * class already exists in the tool
-	 * @deprecated use {@link #addPlugins(Collection)}
-	 */
-	@Deprecated(since = "10.2", forRemoval = true)
-	public void addPlugins(String[] classNames) throws PluginException {
-		addPlugins(Arrays.asList(classNames));
-	}
-
-	/**
-	 * Add plugins to the tool.
 	 * @param classNames collection of plugin class names
 	 * @throws PluginException if a plugin could not be constructed, or
 	 * there was problem executing its init() method, or if a plugin of this
@@ -892,16 +915,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 			pluginMgr.addPlugin(p);
 			setConfigChanged(true);
 		}, PluginException.class);
-	}
-
-	/**
-	 * Remove the array of plugins from the tool.
-	 * @param plugins array of plugins to remove
-	 * @deprecated use {@link #removePlugins(List)}
-	 */
-	@Deprecated(since = "10.2", forRemoval = true)
-	public void removePlugins(Plugin[] plugins) {
-		removePlugins(Arrays.asList(plugins));
 	}
 
 	/**
@@ -1048,8 +1061,28 @@ public abstract class PluginTool extends AbstractDockingTool {
 		addAction(saveAsAction);
 	}
 
-	protected void addExportToolAction() {
+	/**
+	 * Adds actions to the tool for transferring focus to the first component in the next
+	 * or previous dockable component provider.
+	 */
+	protected void addNextPreviousProviderActions() {
+		// @formatter:off
+		new ActionBuilder("Jump to Next Dockable Provider", ToolConstants.TOOL_OWNER)
+			.keyBinding(KeyStroke.getKeyStroke("control J"))
+			.description("Transfer focus to the next major component in this windows")
+			.onAction(e -> nextDockableComponent(true))
+			.buildAndInstall(this);
 
+		new ActionBuilder("Jump to Previous Dockable Provider", ToolConstants.TOOL_OWNER)
+			.keyBinding("shift control J")
+			.description("Transfer focus to the previous major component in this windows")
+			.onAction(e -> nextDockableComponent(false))
+			.buildAndInstall(this);
+		// @formatter:on
+
+	}
+
+	protected void addExportToolAction() {
 		String menuGroup = "Tool";
 		String exportPullright = "Export";
 		setMenuGroup(new String[] { ToolConstants.MENU_FILE, exportPullright }, menuGroup);
@@ -1090,6 +1123,37 @@ public abstract class PluginTool extends AbstractDockingTool {
 	}
 
 	protected void addHelpActions() {
+
+		HelpService help = Help.getHelpService();
+
+		int subgroup = 0;
+		new ActionBuilder("Contents", ToolConstants.TOOL_OWNER)
+				.menuPath(ToolConstants.MENU_HELP, "&Contents")
+				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP, Integer.toString(subgroup++))
+				.helpLocation(new HelpLocation("Misc", "Welcome_to_Ghidra_Help"))
+				.inWindow(ActionBuilder.When.ALWAYS)
+				.onAction(c -> help.showHelp(null, false, getToolFrame()))
+				.buildAndInstall(this);
+
+		new ActionBuilder("Accessibility", ToolConstants.TOOL_OWNER)
+				.menuPath(ToolConstants.MENU_HELP, "&Accessibility")
+				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP, Integer.toString(subgroup++))
+				.helpLocation(new HelpLocation("Accessibility", "AccessibilityOverview"))
+				.inWindow(ActionBuilder.When.ALWAYS)
+				.onAction(c -> {
+					help.showHelp(new HelpLocation("Accessibility", "AccessibilityOverview"));
+				})
+				.buildAndInstall(this);
+
+		new ActionBuilder("User Agreement", ToolConstants.TOOL_OWNER)
+				.menuPath(ToolConstants.MENU_HELP, "&User Agreement")
+				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP, Integer.toString(subgroup++))
+				.helpLocation(new HelpLocation(ToolConstants.ABOUT_HELP_TOPIC, "User_Agreement"))
+				.inWindow(ActionBuilder.When.ALWAYS)
+				.onAction(
+					c -> DockingWindowManager.showDialog(new UserAgreementDialog(false, false)))
+				.buildAndInstall(this);
+
 		new ActionBuilder("About Ghidra", ToolConstants.TOOL_OWNER)
 				.menuPath(ToolConstants.MENU_HELP, "&About Ghidra")
 				.menuGroup("ZZA")
@@ -1098,16 +1162,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 				.onAction(c -> DockingWindowManager.showDialog(new AboutDialog()))
 				.buildAndInstall(this);
 
-		new ActionBuilder("User Agreement", ToolConstants.TOOL_OWNER)
-				.menuPath(ToolConstants.MENU_HELP, "&User Agreement")
-				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP)
-				.helpLocation(new HelpLocation(ToolConstants.ABOUT_HELP_TOPIC, "User_Agreement"))
-				.inWindow(ActionBuilder.When.ALWAYS)
-				.onAction(
-					c -> DockingWindowManager.showDialog(new UserAgreementDialog(false, false)))
-				.buildAndInstall(this);
-
-		final ErrorReporter reporter = ErrLogDialog.getErrorReporter();
+		ErrorReporter reporter = ErrLogDialog.getErrorReporter();
 		if (reporter != null) {
 			new ActionBuilder("Report Bug", ToolConstants.TOOL_OWNER)
 					.menuPath(ToolConstants.MENU_HELP, "&Report Bug...")
@@ -1117,16 +1172,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 					.onAction(c -> reporter.report(getToolFrame(), "User Bug Report", null))
 					.buildAndInstall(this);
 		}
-
-		HelpService help = Help.getHelpService();
-
-		new ActionBuilder("Contents", ToolConstants.TOOL_OWNER)
-				.menuPath(ToolConstants.MENU_HELP, "&Contents")
-				.menuGroup(ToolConstants.HELP_CONTENTS_MENU_GROUP)
-				.helpLocation(new HelpLocation("Misc", "Welcome_to_Ghidra_Help"))
-				.inWindow(ActionBuilder.When.ALWAYS)
-				.onAction(c -> help.showHelp(null, false, getToolFrame()))
-				.buildAndInstall(this);
 	}
 
 	/**
@@ -1141,13 +1186,13 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 * Closes this tool, possibly with input from the user. The following conditions are checked
 	 * and can prompt the user for more info and allow them to cancel the close.
 	 * <OL>
-	 * 	<LI>Running tasks. Closing with running tasks could lead to data loss.
+	 * 	<LI>Running tasks. Closing with running tasks could lead to data loss.</LI>
 	 *  <LI>Plugins get asked if they can be closed. They may prompt the user to resolve
-	 *  some plugin specific state.
-	 * 	<LI>The user is prompted to save any data changes.
+	 *  some plugin specific state.</LI>
+	 * 	<LI>The user is prompted to save any data changes.</LI>
 	 * 	<LI>Tools are saved, possibly asking the user to resolve any conflicts caused by
-	 *  changing multiple instances of the same tool in different ways.
-	 * 	<LI>If all the above conditions passed, the tool is closed and disposed.
+	 *  changing multiple instances of the same tool in different ways.</LI>
+	 * 	<LI>If all the above conditions passed, the tool is closed and disposed.</LI>
 	 * </OL>
 	 */
 	@Override
@@ -1346,7 +1391,7 @@ public abstract class PluginTool extends AbstractDockingTool {
 
 	protected void restoreOptionsFromXml(Element root) {
 		optionsMgr.setConfigState(root.getChild("OPTIONS"));
-		toolActions.restoreKeyBindings();
+		toolActions.optionsRebuilt();
 		setToolOptionsHelpLocation();
 	}
 
@@ -1362,7 +1407,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 
 	protected void restorePluginsFromXml(Element elem) throws PluginException {
 		pluginMgr.restorePluginsFromXml(elem);
-
 	}
 
 	PluginEvent[] getLastEvents() {
@@ -1407,22 +1451,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 	 */
 	void removeEventListener(String className) {
 		eventMgr.removeEventListener(className);
-	}
-
-	/**
-	 * Display an text edit box on top of the specified component.
-	 * @param defaultText initial text to be displayed in edit box
-	 * @param comp component over which the edit box will be placed
-	 * @param rect specifies the bounds of the edit box relative to the
-	 * component.  The height is ignored.  The default text field height
-	 * is used as the preferred height.
-	 * @param listener when the edit is complete, this listener is notified
-	 * with the new text.  The edit box is dismissed prior to notifying
-	 * the listener.
-	 */
-	public void showEditWindow(String defaultText, Component comp, Rectangle rect,
-			EditListener listener) {
-		winMgr.showEditWindow(defaultText, comp, rect, listener);
 	}
 
 	/**
@@ -1497,10 +1525,6 @@ public abstract class PluginTool extends AbstractDockingTool {
 		return winMgr.getActiveComponentProvider();
 	}
 
-	public void refreshKeybindings() {
-		toolActions.restoreKeyBindings();
-	}
-
 	public void setUnconfigurable() {
 		isConfigurable = false;
 	}
@@ -1509,6 +1533,13 @@ public abstract class PluginTool extends AbstractDockingTool {
 		return isConfigurable;
 	}
 
+	/**
+	 * This method will be deleted.  Preference state should be managed with the 
+	 * {@link DockingWindowManager}.
+	 * @param name the name
+	 * @deprecated use the {@link DockingWindowManager}
+	 */
+	@Deprecated(since = "11.3", forRemoval = true)
 	public void removePreferenceState(String name) {
 		winMgr.removePreferenceState(name);
 	}
@@ -1523,6 +1554,63 @@ public abstract class PluginTool extends AbstractDockingTool {
 
 	public boolean isRestoringDataState() {
 		return restoringDataState;
+	}
+
+	/**
+	 * Transfers focus to the first component in the next/previous dockable component provider.
+	 * @param forward true to go to next provider, false to go to previous provider
+	 */
+	private void nextDockableComponent(boolean forward) {
+		KeyboardFocusManager focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
+		Component focusOwner = focusManager.getPermanentFocusOwner();
+		Component next = findNextProviderComponent(focusOwner, forward);
+
+		// If going backwards, go back one more provider, then go forward to get the first
+		// component in the resulting provider. This makes it so that when going backwards, you
+		// still get the first component in the component provider and not the last.
+		if (!forward) {
+			next = findNextProviderComponent(next, false);
+			next = findNextProviderComponent(next, true);
+		}
+		if (next != null) {
+			next.requestFocus();
+		}
+	}
+
+	private Component findNextProviderComponent(Component component, boolean forward) {
+		if (component == null) {
+			return null;
+		}
+
+		DockingWindowManager windowManager = getWindowManager();
+		ComponentProvider startingProvider = windowManager.getComponentProvider(component);
+
+		Component next = getNext(component, forward);
+		while (next != null && next != component) {
+			// Skip JTabbedPanes. Assume the user prefers that the component inside the tabbed
+			// pane gets focus, not the tabbed pane itself so the user does not have to navigate
+			// twice to get the internal component.
+			if (next instanceof JTabbedPane) {
+				next = getNext(next, forward);
+				continue;
+			}
+			ComponentProvider nextProvider = windowManager.getComponentProvider(next);
+			if (nextProvider != startingProvider) {
+				return next;
+			}
+			next = getNext(next, forward);
+		}
+		return null;
+	}
+
+	private Component getNext(Component component, boolean forward) {
+		KeyboardFocusManager focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
+		Window window = focusManager.getFocusedWindow();
+		FocusTraversalPolicy policy = window.getFocusTraversalPolicy();
+		if (forward) {
+			return policy.getComponentAfter(window, component);
+		}
+		return policy.getComponentBefore(window, component);
 	}
 
 //==================================================================================================

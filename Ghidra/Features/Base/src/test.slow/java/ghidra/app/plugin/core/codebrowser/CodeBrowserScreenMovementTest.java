@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -34,6 +34,7 @@ import docking.widgets.fieldpanel.support.FieldLocation;
 import docking.widgets.fieldpanel.support.FieldSelection;
 import ghidra.app.cmd.data.CreateDataCmd;
 import ghidra.app.cmd.data.CreateStructureCmd;
+import ghidra.app.events.OpenProgramPluginEvent;
 import ghidra.app.events.ProgramSelectionPluginEvent;
 import ghidra.app.services.ProgramManager;
 import ghidra.app.util.viewer.field.*;
@@ -43,19 +44,20 @@ import ghidra.app.util.viewer.listingpanel.ListingPanel;
 import ghidra.framework.options.Options;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.database.ProgramBuilder;
-import ghidra.program.model.address.*;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.util.*;
 import ghidra.test.AbstractProgramBasedTest;
+import ghidra.util.Msg;
 
 public class CodeBrowserScreenMovementTest extends AbstractProgramBasedTest {
 
 	private static final String NESTED_STRUCT_ADDR = "0x1007000";
 
-	private AddressFactory addrFactory;
 	private FieldPanel fp;
 
 	@Before
@@ -382,6 +384,9 @@ public class CodeBrowserScreenMovementTest extends AbstractProgramBasedTest {
 
 		env.connectTools(tool, tool2);
 
+		// open same program in second tool - cannot rely on tool connection for this
+		tool2.firePluginEvent(new OpenProgramPluginEvent("Test", program));
+
 		codeBrowser.goToField(addr("0x1006420"), "Address", 0, 0);
 		assertEquals("01006420", cb2.getCurrentFieldText());
 
@@ -529,12 +534,12 @@ public class CodeBrowserScreenMovementTest extends AbstractProgramBasedTest {
 			cursorRight(fp);
 
 			if (!codeBrowser.getCurrentFieldText().equals(cb2.getCurrentFieldText())) {
-				System.err.println("text not equal at cursor move: " + i);
+				Msg.error(this, "text not equal at cursor move: " + i);
 			}
 			assertEquals(codeBrowser.getCurrentFieldText(), cb2.getCurrentFieldText());
 
 			if (!codeBrowser.getCurrentFieldLoction().equals(cb2.getCurrentFieldLoction())) {
-				System.err.println("location not equal at cursor move: " + i);
+				Msg.error(this, "location not equal at cursor move: " + i);
 			}
 
 			assertEquals(codeBrowser.getCurrentFieldLoction(), cb2.getCurrentFieldLoction());
@@ -625,7 +630,7 @@ public class CodeBrowserScreenMovementTest extends AbstractProgramBasedTest {
 
 		// now make a real program selection and verify the text selection goes away
 		ProgramSelection programSelection =
-			new ProgramSelection(addrFactory, addr("0x1003600"), addr("0x10036f0"));
+			new ProgramSelection(addr("0x1003600"), addr("0x10036f0"));
 		tool.firePluginEvent(
 			new ProgramSelectionPluginEvent(testName.getMethodName(), programSelection, program));
 
@@ -701,8 +706,7 @@ public class CodeBrowserScreenMovementTest extends AbstractProgramBasedTest {
 	}
 
 	private void setView(final AddressSet addrSet) {
-		runSwing(() -> codeBrowser.viewChanged(addrSet), true);
-
+		runSwing(() -> codeBrowser.setView(addrSet), true);
 	}
 
 	private void adjustFieldPanelSize(int numRows) {
@@ -795,8 +799,7 @@ public class CodeBrowserScreenMovementTest extends AbstractProgramBasedTest {
 	private void resetFormatOptions(CodeBrowserPlugin plugin) {
 		Options fieldOptions = plugin.getFormatManager().getFieldOptions();
 		List<String> names = fieldOptions.getOptionNames();
-		for (int i = 0; i < names.size(); i++) {
-			String name = names.get(i);
+		for (String name : names) {
 			if (!name.startsWith("Format Code")) {
 				continue;
 			}

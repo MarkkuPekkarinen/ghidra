@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,12 +36,12 @@ import javax.swing.undo.UndoableEdit;
 
 import org.junit.*;
 
+import docking.ActionContext;
 import docking.DefaultActionContext;
 import docking.action.DockingActionIf;
 import docking.widgets.OptionDialog;
 import docking.widgets.filter.FilterTextField;
-import docking.widgets.table.GDynamicColumnTableModel;
-import docking.widgets.table.RowObjectTableModel;
+import docking.widgets.table.*;
 import docking.widgets.tree.GTree;
 import docking.widgets.tree.GTreeNode;
 import generic.jar.ResourceFile;
@@ -78,7 +78,7 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 	protected ConsoleService console;
 
 	protected Program program;
-	protected DraggableScriptTable scriptTable;
+	protected GTable scriptTable;
 	protected JTextPane consoleTextPane;
 	protected GhidraScriptEditorComponentProvider editor;
 	protected JTextArea editorTextArea;
@@ -122,11 +122,10 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 		ConsoleComponentProvider consoleProvider =
 			waitForComponentProvider(ConsoleComponentProvider.class);
 		consoleTextPane =
-			(JTextPane) findComponentByName(consoleProvider.getComponent(), "CONSOLE");
+			(JTextPane) findComponentByName(consoleProvider.getComponent(), "Console Text Pane");
 		assertNotNull(consoleTextPane);
 
-		scriptTable =
-			(DraggableScriptTable) findComponentByName(provider.getComponent(), "SCRIPT_TABLE");
+		scriptTable = (GTable) findComponentByName(provider.getComponent(), "Scripts Table");
 		assertNotNull(scriptTable);
 
 		clearConsole();
@@ -182,9 +181,8 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 	}
 
 	protected void deleteUserScripts() throws IOException {
-
 		Path userScriptDir = Paths.get(GhidraScriptUtil.USER_SCRIPTS_DIR);
-		FileUtilities.forEachFile(userScriptDir, paths -> paths.forEach(p -> delete(p)));
+		FileUtilities.forEachFile(userScriptDir, script -> delete(script));
 	}
 
 //==================================================================================================
@@ -212,11 +210,8 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 	}
 
 	protected void selectCategory(String category) {
-
-		GTree categoryTree = (GTree) findComponentByName(provider.getComponent(), "CATEGORY_TREE");
+		GTree categoryTree = provider.getTree();
 		waitForTree(categoryTree);
-		JTree jTree = (JTree) invokeInstanceMethod("getJTree", categoryTree);
-		assertNotNull(jTree);
 		GTreeNode child = categoryTree.getModelRoot().getChild(category);
 		categoryTree.setSelectedNode(child);
 		waitForTree(categoryTree);
@@ -685,7 +680,7 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 		String fileText = readFileContents(file);
 
 		if (!expectedContents.trim().equals(fileText.trim())) {
-			System.err.println(
+			Msg.error(this,
 				"Contents of file on disk do not match that of the editor after performing " +
 					"a save operation: " + file);
 			printChars(expectedContents, fileText);
@@ -703,7 +698,7 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 		String fileText = readFileContents(file);
 
 		if (!expectedContents.trim().equals(fileText.trim())) {
-			System.err.println("Contents of file on disk have been unexpectedly changed: " + file);
+			Msg.error(this, "Contents of file on disk have been unexpectedly changed: " + file);
 			printChars(expectedContents, fileText);
 			Assert.fail("Contents of file on disk have been unexpectedly changed: " + file);
 		}
@@ -805,7 +800,7 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 		if (!expectedText.equals(box[0])) {
 //			// let's examine these strings a bit closer, as something in the error reporting
 //			// is not quite right
-//			System.err.println("length of strings: " + expectedText.length() + " and " +
+//			Msg.error(this, "length of strings: " + expectedText.length() + " and " +
 //				box[0].length());
 //
 //			int start = 0;
@@ -813,19 +808,19 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 //			for (StringDiff diff : diffs) {
 //				boolean isInsert = diff.insertData != null;
 //				if (isInsert) {
-//					System.err.println("\n\n>>>\t\tdiff context:\t\t<<<\n" +
+//					Msg.error(this, "\n\n>>>\t\tdiff context:\t\t<<<\n" +
 //						box[0].substring(start, diff.pos1 - diff.insertData.length()));
-//					System.err.println("\n\n>>>>\tinserted value:\t\t<<<\n" + diff.insertData);
+//					Msg.error(this, "\n\n>>>>\tinserted value:\t\t<<<\n" + diff.insertData);
 //				}
 //				else {
-//					System.err.println("\n\n>>>\t\tdiff context:\t\t<<<\n" +
+//					Msg.error(this, "\n\n>>>\t\tdiff context:\t\t<<<\n" +
 //						box[0].substring(start, diff.pos1));
-//					System.err.println("\n\n>>>>\tdeleted value:\t\t<<<\n" +
+//					Msg.error(this, "\n\n>>>>\tdeleted value:\t\t<<<\n" +
 //						expectedText.substring(diff.pos1, diff.pos2));
 //				}
 //			}
 //
-			System.err.println("The editor's text does not contain the expected text");
+			Msg.error(this, "The editor's text does not contain the expected text");
 			printChars(expectedText, box[0]);
 			Assert.fail("The editor's text does not contain the expected text");
 		}
@@ -835,16 +830,16 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 
 	protected void printChars(String expected, String found) {
 		// maybe there is a whitespace issue...print each char code
-		System.err.println("chars for expected string: ");
+		Msg.error(this, "chars for expected string: ");
 		for (int i = 0; i < expected.length(); i++) {
 			char c = expected.charAt(i);
-			System.err.println(c + " and value: " + ((int) c));
+			Msg.error(this, c + " and value: " + ((int) c));
 		}
 
-		System.err.println("chars for found string: ");
+		Msg.error(this, "chars for found string: ");
 		for (int i = 0; i < found.length(); i++) {
 			char c = found.charAt(i);
-			System.err.println(c + " and value: " + ((int) c));
+			Msg.error(this, c + " and value: " + ((int) c));
 		}
 	}
 
@@ -988,10 +983,10 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 
 		// destroy any NewScriptxxx files...and Temp ones too
 		List<ResourceFile> paths = provider.getBundleHost()
-			.getBundleFiles()
-			.stream()
-			.filter(ResourceFile::isDirectory)
-			.collect(Collectors.toList());
+				.getBundleFiles()
+				.stream()
+				.filter(ResourceFile::isDirectory)
+				.collect(Collectors.toList());
 
 		for (ResourceFile path : paths) {
 			File file = path.getFile(false);
@@ -1092,7 +1087,8 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 		waitForSwing();
 		DockingActionIf saveAction = getAction(plugin, "Save Script");
 
-		boolean isEnabled = saveAction.isEnabledForContext(editor.getActionContext(null));
+		ActionContext context = createActionContext(editor);
+		boolean isEnabled = saveAction.isEnabledForContext(context);
 		if (!isEnabled) {
 			// the action is enabled when the provider detects changes; it is disabled for read-only
 
@@ -1141,7 +1137,8 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 	protected void assertSaveButtonDisabled() {
 		waitForSwing();
 		DockingActionIf saveAction = getAction(plugin, "Save Script");
-		assertFalse(saveAction.isEnabledForContext(editor.getActionContext(null)));
+		ActionContext context = createActionContext(editor);
+		assertFalse(saveAction.isEnabledForContext(context));
 
 		assertEditorHasNoChanges();
 	}
@@ -1203,6 +1200,34 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 
 		boolean success = script.waitForFinish();
 		assertTrue("Timed-out waiting for cancelled script to complete", success);
+	}
+
+	protected void runScript(ResourceFile scriptFile) throws Exception {
+
+		GhidraScriptProvider scriptProvider = GhidraScriptUtil.getProvider(scriptFile);
+		GhidraScript script =
+			scriptProvider.getScriptInstance(scriptFile, new PrintWriter(System.err));
+
+		Task task = new RunScriptTask(script, plugin.getCurrentState(), console);
+		task.addTaskListener(provider.getTaskListener());
+
+		CountDownLatch latch = new CountDownLatch(1);
+		task.addTaskListener(new TaskListener() {
+
+			@Override
+			public void taskCompleted(Task t) {
+				latch.countDown();
+			}
+
+			@Override
+			public void taskCancelled(Task t) {
+				latch.countDown();
+			}
+		});
+
+		TaskLauncher.launch(task);
+
+		latch.await(TASK_RUN_SCRIPT_TIMEOUT_SECS, TimeUnit.SECONDS);
 	}
 
 	protected void startRunScriptTask(GhidraScript script) throws Exception {
@@ -1616,16 +1641,14 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 	}
 
 	protected class SpyConsole extends ConsoleComponentProvider {
-		protected StringBuffer apiBuffer;
 
 		protected StringWriter outBuffer = new StringWriter();
 		protected StringWriter errBuffer = new StringWriter();
-		protected PrintWriter out = new PrintWriter(outBuffer);
-		protected PrintWriter err = new PrintWriter(errBuffer);
+		protected PrintWriter out = new PrintWriter(outBuffer, true);
+		protected PrintWriter err = new PrintWriter(errBuffer, true);
 
 		SpyConsole() {
 			super(plugin.getTool(), "Spy Console");
-			this.apiBuffer = new StringBuffer();
 		}
 
 		@Override
@@ -1639,25 +1662,24 @@ public abstract class AbstractGhidraScriptMgrPluginTest
 		}
 
 		void clear() {
-			apiBuffer = new StringBuffer();
 			outBuffer = new StringWriter();
 			errBuffer = new StringWriter();
 		}
 
 		@Override
 		public void println(String msg) {
-			apiBuffer.append(msg).append('\n');
+			out.println(msg);
 			Msg.trace(this, "Spy Script Console - println(): " + msg);
 		}
 
 		@Override
 		public void addMessage(String originator, String msg) {
-			apiBuffer.append(msg).append('\n');
+			out.println(msg);
 			Msg.trace(this, "Spy Script Console - addMessage(): " + msg);
 		}
 
 		String getApiOutput() {
-			return apiBuffer.toString();
+			return outBuffer.toString();
 		}
 	}
 

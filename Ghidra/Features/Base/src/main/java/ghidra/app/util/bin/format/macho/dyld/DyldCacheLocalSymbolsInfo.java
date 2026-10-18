@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -38,7 +38,7 @@ import ghidra.util.task.TaskMonitor;
 /**
  * Represents a dyld_cache_local_symbols_info structure.
  * 
- * @see <a href="https://github.com/apple-oss-distributions/dyld/blob/main/cache-builder/dyld_cache_format.h">dyld_cache_format.h</a> 
+ * @see <a href="https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/dyld_cache_format.h">dyld_cache_format.h</a> 
  */
 @SuppressWarnings("unused")
 public class DyldCacheLocalSymbolsInfo implements StructConverter {
@@ -56,16 +56,19 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 	private List<NList> nlistList;
 	private List<DyldCacheLocalSymbolsEntry> localSymbolsEntryList;
 	private boolean is32bit;
+	private boolean use64bitOffsets;
 
 	/**
 	 * Create a new {@link DyldCacheLocalSymbolsInfo}.
 	 * 
 	 * @param reader A {@link BinaryReader} positioned at the start of a DYLD local symbols info
 	 * @param architecture The {@link DyldArchitecture}
+	 * @param use64bitOffsets True if the DYLD local symbol entries use 64-bit dylib offsets; false
+	 *   if they use 32-bit 
 	 * @throws IOException if there was an IO-related problem creating the DYLD local symbols info
 	 */
-	public DyldCacheLocalSymbolsInfo(BinaryReader reader, DyldArchitecture architecture)
-			throws IOException {
+	public DyldCacheLocalSymbolsInfo(BinaryReader reader, DyldArchitecture architecture,
+			boolean use64bitOffsets) throws IOException {
 		this.reader = reader;
 		this.startIndex = reader.getPointerIndex();
 
@@ -76,11 +79,13 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 		entriesOffset = reader.readNextInt();
 		entriesCount = reader.readNextInt();
 
-		nlistList = new ArrayList<>(nlistCount);
-		localSymbolsEntryList = new ArrayList<>(entriesCount);
+		nlistList = new ArrayList<>();
+		localSymbolsEntryList = new ArrayList<>();
 
 		is32bit = !(architecture.getCpuType() == CpuTypes.CPU_TYPE_ARM_64 ||
 			architecture.getCpuType() == CpuTypes.CPU_TYPE_X86_64);
+
+		this.use64bitOffsets = use64bitOffsets;
 	}
 
 	/**
@@ -111,21 +116,33 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 	}
 
 	/**
-	 * Gets the {@link List} of {@link NList}.
-	 * 
-	 * @return The {@link List} of {@link NList}
+	 * {@return the {@link List} of {@link DyldCacheLocalSymbolsEntry}s}
+	 */
+	public List<DyldCacheLocalSymbolsEntry> getLocalSymbolsEntries() {
+		return localSymbolsEntryList;
+	}
+
+	/**
+	 * {@return the {@link List} of {@link NList}s}
 	 */
 	public List<NList> getNList() {
 		return nlistList;
 	}
 
 	/**
-	 * Gets the {@link List} of {@link DyldCacheLocalSymbolsEntry}s.
+	 * {@return the {@link List} of {@link NList}s for the given dylib offset}
 	 * 
-	 * @return The {@link List} of {@link DyldCacheLocalSymbolsEntry}
+	 * @param dylibOffset The offset of dylib in the DYLD Cache
 	 */
-	public List<DyldCacheLocalSymbolsEntry> getLocalSymbolsEntries() {
-		return localSymbolsEntryList;
+	public List<NList> getNList(long dylibOffset) {
+		for (DyldCacheLocalSymbolsEntry entry : localSymbolsEntryList) {
+			int index = entry.getNListStartIndex();
+			int count = entry.getNListCount();
+			if (dylibOffset == entry.getDylibOffset()) {
+				return nlistList.subList(index, index + count);
+			}
+		}
+		return List.of();
 	}
 
 	@Override
@@ -153,8 +170,7 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 
 			for (int i = 0; i < nlistCount; ++i) {
 				nlistList.add(new NList(nListReader, is32bit));
-				monitor.checkCancelled();
-				monitor.incrementProgress(1);
+				monitor.increment();
 			}
 			// sort the entries by the index in the string table, so don't jump around reading
 			List<NList> sortedList = nlistList.stream()
@@ -165,8 +181,7 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 			// initialize the NList strings from string table
 			long stringTableOffset = startIndex + stringsOffset;
 			for (NList nList : sortedList) {
-				monitor.checkCancelled();
-				monitor.incrementProgress(1);
+				monitor.increment();
 				nList.initString(nListReader, stringTableOffset);
 			}
 		}
@@ -175,15 +190,15 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 		}
 	}
 
-	private void parseLocalSymbols(MessageLog log, TaskMonitor monitor) throws CancelledException {
+	private void parseLocalSymbols(MessageLog log, TaskMonitor monitor)
+			throws CancelledException {
 		monitor.setMessage("Parsing DYLD local symbol entries...");
 		monitor.initialize(entriesCount);
 		reader.setPointerIndex(startIndex + entriesOffset);
 		try {
 			for (int i = 0; i < entriesCount; ++i) {
-				localSymbolsEntryList.add(new DyldCacheLocalSymbolsEntry(reader));
-				monitor.checkCancelled();
-				monitor.incrementProgress(1);
+				localSymbolsEntryList.add(new DyldCacheLocalSymbolsEntry(reader, use64bitOffsets));
+				monitor.increment();
 			}
 		}
 		catch (IOException e) {
@@ -201,8 +216,7 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 			for (NList nlist : nlistList) {
 				Data d = program.getListing().createData(addr, nlist.toDataType());
 				addr = addr.add(d.getLength());
-				monitor.checkCancelled();
-				monitor.incrementProgress(1);
+				monitor.increment();
 			}
 		}
 		catch (CodeUnitInsertionException | DuplicateNameException | IOException e) {
@@ -219,8 +233,7 @@ public class DyldCacheLocalSymbolsInfo implements StructConverter {
 			for (DyldCacheLocalSymbolsEntry localSymbolsEntry : localSymbolsEntryList) {
 				Data d = program.getListing().createData(addr, localSymbolsEntry.toDataType());
 				addr = addr.add(d.getLength());
-				monitor.checkCancelled();
-				monitor.incrementProgress(1);
+				monitor.increment();
 			}
 		}
 		catch (CodeUnitInsertionException | DuplicateNameException | IOException e) {

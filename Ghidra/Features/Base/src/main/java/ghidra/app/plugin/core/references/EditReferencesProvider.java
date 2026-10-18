@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -112,23 +112,6 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 	private DropTgtAdapter dropTargetAdapter;
 	private Droppable dropHandler = new Droppable() {
 
-		/**
-		 * Set drag feedback according to the ok parameter.
-		 *
-		 * @param ok true means the drop action is OK
-		 * @param e event that has current state of drag and drop operation
-		 */
-		@Override
-		public void dragUnderFeedback(boolean ok, DropTargetDragEvent e) {
-			// don't care
-		}
-
-		/**
-		 * Return true if is OK to drop the transferable at the location
-		 * specified the event.
-		 *
-		 * @param e event that has current state of drag and drop operation
-		 */
 		@Override
 		public boolean isDropOk(DropTargetDragEvent e) {
 			if (currentCodeUnit != null) {
@@ -151,24 +134,6 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 			return false;
 		}
 
-		/**
-		 * Revert back to normal if any drag feedback was set.
-		 */
-		@Override
-		public void undoDragUnderFeedback() {
-			// don't care
-		}
-
-		/**
-		 * Add the object to the droppable component. The DropTargetAdapter
-		 * calls this method from its drop() method.
-		 *
-		 * @param obj Transferable object that is to be dropped; in this case,
-		 *            it is an AddressSetView
-		 * @param e has current state of drop operation
-		 * @param f represents the opaque concept of a data format as would
-		 *            appear on a clipboard, during drag and drop.
-		 */
 		@Override
 		public void add(Object obj, DropTargetDropEvent e, DataFlavor f) {
 			AddressSetView view = ((SelectionTransferData) obj).getAddressSet();
@@ -192,6 +157,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 		setWindowMenuGroup(TITLE_PREFIX);
 
 		tool.addComponentProvider(this, false);
+		setupActions();
 	}
 
 	private void setupActions() {
@@ -214,7 +180,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 			new MenuData(new String[] { "Add..." }, ADD_ICON, ADD_REFS_GROUP));
 		addRefAction.setToolBarData(new ToolBarData(ADD_ICON, "EditAction"));
 		addRefAction.setEnabled(true);
-		tool.addLocalAction(this, addRefAction);
+		addLocalAction(addRefAction);
 
 		deleteRefAction = new DockingAction("Delete References", plugin.getName()) {
 			@Override
@@ -234,7 +200,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 			new MenuData(new String[] { "Delete..." }, DELETE_ICON, ADD_REFS_GROUP));
 		deleteRefAction.setToolBarData(new ToolBarData(DELETE_ICON, "EditAction"));
 		deleteRefAction.setEnabled(false);
-		tool.addLocalAction(this, deleteRefAction);
+		addLocalAction(deleteRefAction);
 
 		editRefAction = new DockingAction("Edit Reference", plugin.getName()) {
 			@Override
@@ -254,7 +220,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 			new MenuData(new String[] { "Edit..." }, EDIT_ICON, ADD_REFS_GROUP));
 		editRefAction.setToolBarData(new ToolBarData(EDIT_ICON, "EditAction"));
 		editRefAction.setEnabled(false);
-		tool.addLocalAction(this, editRefAction);
+		addLocalAction(editRefAction);
 
 		selectAction = new DockingAction("Select Destinations", plugin.getName()) {
 			@Override
@@ -267,7 +233,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 		selectAction.setDescription("Select reference destinations");
 		selectAction.setToolBarData(new ToolBarData(SELECT_ICON, "NavAction"));
 		selectAction.setEnabled(true);
-		tool.addLocalAction(this, selectAction);
+		addLocalAction(selectAction);
 
 		followLocationToggleAction =
 			new ToggleDockingAction("Follow location changes", plugin.getName()) {
@@ -278,7 +244,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 			};
 		followLocationToggleAction.setEnabled(true);
 		followLocationToggleAction.setToolBarData(new ToolBarData(RECV_LOCATION_ICON, "NavAction"));
-		tool.addLocalAction(this, followLocationToggleAction);
+		addLocalAction(followLocationToggleAction);
 
 		gotoReferenceLocationToggleAction =
 			new ToggleDockingAction("GoTo selected destination", plugin.getName()) {
@@ -290,7 +256,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 		gotoReferenceLocationToggleAction
 				.setToolBarData(new ToolBarData(SEND_LOCATION_ICON, "NavAction"));
 		gotoReferenceLocationToggleAction.setEnabled(true);
-		tool.addLocalAction(this, gotoReferenceLocationToggleAction);
+		addLocalAction(gotoReferenceLocationToggleAction);
 
 		goHomeAction = new DockingAction("GoTo source location", plugin.getName()) {
 			@Override
@@ -304,7 +270,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 		goHomeAction.setToolBarData(new ToolBarData(HOME_ICON, "NavAction"));
 		goHomeAction.setDescription("GoTo reference source location");
 		goHomeAction.setEnabled(true);
-		tool.addLocalAction(this, goHomeAction);
+		addLocalAction(goHomeAction);
 		enableGotoReferenceLocation(plugin.getDefaultGotoReferenceLocation());
 		enableFollowLocation(plugin.getDefaultFollowOnLocation());
 
@@ -411,7 +377,6 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 
 		if (!tool.isVisible(this)) {
 			tool.showComponentProvider(this, true);
-			setupActions();
 		}
 		else {
 			init(referenceInfo);
@@ -638,13 +603,7 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 					instrPanel.setSelectedOpIndex(opIndex, -1);
 					followSelectedReference();
 				}
-//					else {
-//						int opIndex = MNEONIC_OPINDEX;
-//						if (selRows.length != 0) {
-//							opIndex = tableModel.getReference(selRows[0]).getOperandIndex();
-//						}
-//						instrPanel.setSelectedOpIndex(opIndex);
-//					}
+
 				selectionBusy = false;
 				updateLocation();
 				adjustActionState();
@@ -1019,8 +978,6 @@ public class EditReferencesProvider extends ComponentProviderAdapter
 	private class RefCellTextRenderer extends GTableCellRenderer {
 
 		RefCellTextRenderer() {
-			defaultFont = getFont();
-			boldFont = defaultFont.deriveFont(defaultFont.getStyle() | Font.BOLD);
 			setBorder(BorderFactory.createEmptyBorder(0, 3, 0, 0));
 		}
 

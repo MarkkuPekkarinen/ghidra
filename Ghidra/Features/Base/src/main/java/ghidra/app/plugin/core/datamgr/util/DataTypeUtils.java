@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,8 +24,13 @@ import javax.swing.Icon;
 import generic.theme.GColor;
 import generic.theme.GIcon;
 import ghidra.app.services.DataTypeQueryService;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
+import ghidra.program.model.data.Composite;
 import ghidra.program.model.data.Enum;
+import ghidra.program.model.dtarchive.*;
+import ghidra.program.model.listing.Data;
+import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import ghidra.util.exception.AssertException;
 import resources.MultiIcon;
@@ -253,6 +258,22 @@ public class DataTypeUtils {
 	}
 
 	/**
+	 * {@return descriptive text for the given data type's icon}
+	 * @param dataType the data type
+	 */
+	public static String getIconTextForDataType(DataType dataType) {
+		loadImages();
+
+		for (DataTypeIconWrapper element : dataTypeIconWrappers) {
+			Icon icon = element.getIcon(dataType, false);
+			if (icon != null) {
+				return element.getDescription(dataType);
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Returns an icon that adds highlighting to the provided icon.
 	 *
 	 * @param baseIcon The icon to highlight.
@@ -429,29 +450,26 @@ public class DataTypeUtils {
 
 	public static void showUnmodifiableArchiveErrorMessage(Component parent, String title,
 			DataTypeManager dtm) {
-		String msg;
-		if (dtm instanceof ProgramBasedDataTypeManager) {
-			msg = "The Program is not modifiable!\n";
-		}
-		else if (dtm instanceof FileArchiveBasedDataTypeManager) {
-			msg = "The archive file is not modifiable!\nYou must open the archive for editing\n" +
-				"before performing this operation.\n" + dtm.getName();
-		}
-		else if (dtm instanceof ProjectArchiveBasedDataTypeManager) {
-			ProjectArchiveBasedDataTypeManager projectDtm =
-				(ProjectArchiveBasedDataTypeManager) dtm;
-			if (!projectDtm.isUpdatable() && !projectDtm.getDomainFile().canCheckout()) {
-				msg = "The project archive is not modifiable!\n" + dtm.getName();
-			}
-			else {
-				msg = "The project archive is not modifiable!\nYou must check out the archive\n" +
-					"before performing this operation.\n" + dtm.getName();
-			}
-		}
-		else {
-			msg = "The Archive is not modifiable!\n";
-		}
+		String msg = getUnmodifiableArchiveMessage(dtm.getDataStore());
 		Msg.showInfo(DataTypeUtils.class, parent, title, msg);
+	}
+
+	private static String getUnmodifiableArchiveMessage(DataTypeStore dataStore) {
+		if (dataStore instanceof Program) {
+			return "The Program is not modifiable!\n";
+		}
+		else if (dataStore instanceof FileDataTypeArchive) {
+			return "The archive file is not modifiable!\nYou must open the archive for editing\n" +
+				"before performing this operation.\n" + dataStore.getName();
+		}
+		else if (dataStore instanceof ProjectDataTypeArchive projectArchive) {
+			if (!projectArchive.isUpdatable() && !projectArchive.getDomainFile().canCheckout()) {
+				return "The project archive is not modifiable!\n" + projectArchive.getName();
+			}
+			return "The project archive is not modifiable!\nYou must check out the archive\n" +
+				"before performing this operation.\n" + projectArchive.getName();
+		}
+		return "The Archive is not modifiable!\n";
 	}
 
 	public static int binarySearchWithDuplicates(List<DataType> data,
@@ -467,6 +485,30 @@ public class DataTypeUtils {
 			index = findTrueStartIndex(searchItem, data, index, comparator);
 		}
 		return index;
+	}
+
+	/**
+	 * Finds the DataTypeComponent at an address and component path in a program.
+	 * @param program the program to look for a datatype component
+	 * @param address the address to look for a datatype component
+	 * @param componentPath the component path (an array of indexes into hierarchy of nested
+	 * datatypes)
+	 * @return The datatype component at that address and component path or null if there is
+	 * none at that location.
+	 */
+	public static DataTypeComponent getDataTypeComponent(Program program, Address address,
+			int[] componentPath) {
+		Data data = program.getListing().getDataContaining(address);
+		DataType dt = data.getDataType();
+		DataTypeComponent comp = null;
+		for (int i = 0; i < componentPath.length; i++) {
+			if (!(dt instanceof Composite composite)) {
+				return null;
+			}
+			comp = composite.getComponent(componentPath[i]);
+			dt = comp.getDataType();
+		}
+		return comp;
 	}
 
 	// finds the index of the first element in the given list--this is used in conjunction with
@@ -504,6 +546,10 @@ class DataTypeIconWrapper {
 		this.dataTypeClass = dataTypeClass;
 		this.defaultIcon = defaultIcon;
 		this.disabledIcon = disabledIcon;
+	}
+
+	public String getDescription(DataType dataType) {
+		return dataTypeClass.getSimpleName();
 	}
 
 	Icon getIcon(DataType dataType, boolean disabled) {

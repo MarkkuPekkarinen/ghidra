@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,8 @@
 package ghidra.app.util.bin.format.elf;
 
 import java.io.IOException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -91,15 +93,19 @@ public class ElfSymbol {
 	/**Not preemptible, not exported*/
 	public static final byte STV_PROTECTED = 3;
 
-	private ElfSymbolTable symbolTable;
-	private int symbolTableIndex;
+	/** Pattern for recognized .cold symbol names in ELF files **/
+	private static final Pattern COLD_ELF_SYMBOL_PATTERN =
+		Pattern.compile(".+\\.cold((\\.[0-9]+)?)");
 
-	private int st_name;
-	private long st_value;
-	private long st_size;
-	private byte st_info;
-	private byte st_other;
-	private short st_shndx;
+	private ElfSymbolTable symbolTable;
+	private final int symbolTableIndex;
+
+	private final int st_name;
+	private final long st_value;
+	private final long st_size;
+	private final byte st_info;
+	private final byte st_other;
+	private final short st_shndx;
 
 	private String nameAsString;
 
@@ -107,28 +113,36 @@ public class ElfSymbol {
 	 * Construct a new special null symbol which corresponds to symbol index 0.
 	 */
 	public ElfSymbol() {
-		this.nameAsString = "";
+		symbolTableIndex = 0;
+		st_name = 0;
+		st_value = 0;
+		st_size = 0;
+		st_info = 0;
+		st_other = 0;
+		st_shndx = 0;
+		nameAsString = "";
 	}
 
 	/**
 	 * Construct a normal ElfSymbol.
 	 * Warning! the routine initSymbolName() must be called on the symbol later
 	 * to initialize the string name.  This is a performance enhancement.
-	 * @param reader to read symbol from
+	 * @param reader to read symbol entry at current position 
+	 * 				(reader is not retained, position is altered)
 	 * @param symbolIndex index of the symbol to read
 	 * @param symbolTable symbol table to associate the symbol to
-	 * @param header else header
-	 * @throws IOException if an issue with reading occurs
+	 * @param header ELF header
+	 * @throws IOException if an IO error occurs during parse
 	 */
-	public ElfSymbol(BinaryReader reader, int symbolIndex,
-			ElfSymbolTable symbolTable, ElfHeader header) throws IOException {
+	public ElfSymbol(BinaryReader reader, int symbolIndex, ElfSymbolTable symbolTable,
+			ElfHeader header) throws IOException {
 		this.symbolTable = symbolTable;
 		this.symbolTableIndex = symbolIndex;
 
 		if (header.is32Bit()) {
 			st_name = reader.readNextInt();
-			st_value = Integer.toUnsignedLong(reader.readNextInt());
-			st_size = Integer.toUnsignedLong(reader.readNextInt());
+			st_value = reader.readNextUnsignedInt();
+			st_size = reader.readNextUnsignedInt();
 			st_info = reader.readNextByte();
 			st_other = reader.readNextByte();
 			st_shndx = reader.readNextShort();
@@ -171,7 +185,7 @@ public class ElfSymbol {
 	 * at the same time the reading buffer will jump around and significantly
 	 * degrade reading performance.
 	 * 
-	 * @param reader to read from
+	 * @param reader to read from (position remains unchanged)
 	 * @param stringTable stringTable to initialize symbol name
 	 */
 	public void initSymbolName(BinaryReader reader, ElfStringTable stringTable) {
@@ -295,8 +309,7 @@ public class ElfSymbol {
 	 * @return true if this is an external symbol
 	 */
 	public boolean isExternal() {
-		return (isGlobal() || isWeak()) && getValue() == 0 && getSize() == 0 &&
-			getType() == STT_NOTYPE &&
+		return (isGlobal() || isWeak()) &&
 			getSectionHeaderIndex() == ElfSectionHeaderConstants.SHN_UNDEF;
 	}
 
@@ -309,11 +322,36 @@ public class ElfSymbol {
 	}
 
 	/**
-	 * Returns true if this symbol defines a function.
-	 * @return true if this symbol defines a function
+	 * Returns true if this symbol has type {@link ElfSymbol#STT_FUNC}.
+	 * <br>
+	 * Note: compare to {@link ElfSymbol#isFunction(boolean)}
+	 * @return true if symbol type is {@code STT_FUNC}
 	 */
 	public boolean isFunction() {
-		return getType() == STT_FUNC;
+		return isFunction(false);
+	}
+
+	/**
+	 * If {@code entryPointsOnly} is false, this method tests whether the symbol's type is 
+	 * {@link ElfSymbol#STT_FUNC}. If {@code entryPointsOnly} is true, this method tests whether
+	 * the symbol's type is {@link ElfSymbol#STT_FUNC} and whether the symbol represents an actual 
+	 * function entry point (currently by checking whether the symbol name ends in {@code .cold}
+	 * or {@code .cold.N})
+	 * @param entryPointsOnly if true, restrict to function entry points
+	 * @return true if the symbol is a (possibly restricted) function symbol.
+	 */
+	public boolean isFunction(boolean entryPointsOnly) {
+		if (getType() != STT_FUNC) {
+			// not a function symbol 
+			return false;
+		}
+		if (!entryPointsOnly) {
+			// only care about whether it is a function symbol
+			return true;
+		}
+		// check the symbol name
+		Matcher matcher = COLD_ELF_SYMBOL_PATTERN.matcher(getNameAsString());
+		return !matcher.matches();
 	}
 
 	/**
@@ -492,8 +530,18 @@ public class ElfSymbol {
 		return nameAsString + " - " + "st_value: 0x" + Long.toHexString(st_value) + " - " +
 			"st_size: 0x" + Long.toHexString(st_size) + " - " + "st_info: 0x" +
 			Integer.toHexString(Byte.toUnsignedInt(st_info)) + " - " + "st_other: 0x" +
-			Integer.toHexString(Byte.toUnsignedInt(st_other)) +
-			" - " + "st_shndx: 0x" + Integer.toHexString(Short.toUnsignedInt(st_shndx));
+			Integer.toHexString(Byte.toUnsignedInt(st_other)) + " - " + "st_shndx: 0x" +
+			Integer.toHexString(Short.toUnsignedInt(st_shndx));
+	}
+
+	/**
+	 * Tests whether {@code name} is the name of a "cold" Elf symbol.
+	 * @param name string to test
+	 * @return true if cold, false otherwise
+	 */
+	public static boolean isColdSymbolName(String name) {
+		Matcher matcher = COLD_ELF_SYMBOL_PATTERN.matcher(name);
+		return matcher.matches();
 	}
 
 }

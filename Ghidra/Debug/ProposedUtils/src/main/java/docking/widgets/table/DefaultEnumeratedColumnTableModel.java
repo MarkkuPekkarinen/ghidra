@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,10 +18,6 @@ package docking.widgets.table;
 import java.util.*;
 import java.util.function.Predicate;
 
-import docking.widgets.table.ColumnSortState.SortDirection;
-import docking.widgets.table.DefaultEnumeratedColumnTableModel.EnumeratedTableColumn;
-import ghidra.docking.settings.Settings;
-import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.ServiceProvider;
 
 /**
@@ -35,87 +31,16 @@ import ghidra.framework.plugintool.ServiceProvider;
  */
 public class DefaultEnumeratedColumnTableModel<C extends Enum<C> & EnumeratedTableColumn<C, R>, R>
 		extends GDynamicColumnTableModel<R, Void> implements EnumeratedColumnTableModel<R> {
-	// NOTE: If I need to track indices, addSortListener
-	/**
-	 * An interface on enums used to describe table columns
-	 *
-	 * @param <C> the type of the enum
-	 * @param <R> the type of rows
-	 */
-	public static interface EnumeratedTableColumn<C extends Enum<C>, R> {
-		/**
-		 * Get the value class of cells in this column
-		 * 
-		 * @return the class
-		 */
-		public Class<?> getValueClass();
-
-		/**
-		 * Get the value of this column for the given row
-		 * 
-		 * @param row the row
-		 * @return the value
-		 */
-		public Object getValueOf(R row);
-
-		/**
-		 * Get the name of this column
-		 * 
-		 * @return the name
-		 */
-		public String getHeader();
-
-		/**
-		 * Get the value of this column for the given row
-		 * 
-		 * @param row the row
-		 * @param value the new value
-		 */
-		default public void setValueOf(R row, Object value) {
-			throw new UnsupportedOperationException("Cell is not editable");
-		}
-
-		/**
-		 * Check if this column can be modified for the given row
-		 * 
-		 * @param row the row
-		 * @return true if editable
-		 */
-		default public boolean isEditable(R row) {
-			return false;
-		}
-
-		/**
-		 * Check if this column can be sorted
-		 * 
-		 * <p>
-		 * TODO: Either this should be implemented as ported to {@link GDynamicColumnTableModel}, or
-		 * removed.
-		 * 
-		 * @return true if sortable
-		 */
-		default public boolean isSortable() {
-			return true;
-		}
-
-		/**
-		 * Get the default sort direction for this column
-		 * 
-		 * @return the sort direction
-		 */
-		default public SortDirection defaultSortDirection() {
-			return SortDirection.ASCENDING;
-		}
-	}
 
 	private final List<R> modelData = new ArrayList<>();
 	private final String name;
-	private final C[] cols;
+	private final List<C> cols;
 
-	public DefaultEnumeratedColumnTableModel(PluginTool tool, String name, Class<C> colType) {
-		super(tool);
+	public DefaultEnumeratedColumnTableModel(ServiceProvider serviceProvider, String name,
+			Class<C> colType) {
+		super(serviceProvider);
 		this.name = name;
-		this.cols = colType.getEnumConstants();
+		this.cols = List.of(colType.getEnumConstants());
 
 		reloadColumns(); // Smell
 	}
@@ -130,58 +55,15 @@ public class DefaultEnumeratedColumnTableModel<C extends Enum<C> & EnumeratedTab
 		return modelData;
 	}
 
-	static class EnumeratedDynamicTableColumn<R>
-			extends AbstractDynamicTableColumn<R, Object, Void>
-			implements EditableDynamicTableColumn<R, Object, Void> {
-		private final EnumeratedTableColumn<?, R> col;
-
-		public EnumeratedDynamicTableColumn(EnumeratedTableColumn<?, R> col) {
-			this.col = col;
-		}
-
-		@Override
-		public String getColumnName() {
-			return col.getHeader();
-		}
-
-		@Override
-		public Object getValue(R rowObject, Settings settings, Void data,
-				ServiceProvider serviceProvider) throws IllegalArgumentException {
-			return col.getValueOf(rowObject);
-		}
-
-		@Override
-		@SuppressWarnings("unchecked")
-		public Class<Object> getColumnClass() {
-			return (Class<Object>) col.getValueClass();
-		}
-
-		@Override
-		public boolean isEditable(R row, Settings settings, Void dataSource,
-				ServiceProvider serviceProvider) {
-			return col.isEditable(row);
-		}
-
-		@Override
-		public void setValueOf(R row, Object value, Settings settings, Void dataSource,
-				ServiceProvider serviceProvider) {
-			col.setValueOf(row, value);
+	public List<R> copyModelData() {
+		synchronized (modelData) {
+			return List.copyOf(modelData);
 		}
 	}
 
 	@Override
 	protected TableColumnDescriptor<R> createTableColumnDescriptor() {
-		TableColumnDescriptor<R> descriptor = new TableColumnDescriptor<>();
-		if (cols != null) { // Smells
-			List<C> defaultOrder = defaultSortOrder();
-			for (C col : cols) {
-				descriptor.addVisibleColumn(
-					new EnumeratedDynamicTableColumn<R>(col),
-					defaultOrder.indexOf(col), // -1 means not found, not sorted
-					col.defaultSortDirection().isAscending());
-			}
-		}
-		return descriptor;
+		return EnumeratedColumnTableModel.createTableColumnDescriptor(cols, defaultSortOrder());
 	}
 
 	@Override

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,27 +15,34 @@
  */
 package ghidra.app.plugin.core.datamgr;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.Transferable;
+import java.util.*;
 
 import javax.swing.tree.TreePath;
 
 import docking.widgets.tree.GTree;
 import docking.widgets.tree.GTreeNode;
+import docking.widgets.tree.support.GTreeNodeTransferable;
 import ghidra.app.context.ProgramActionContext;
 import ghidra.app.plugin.core.datamgr.archive.BuiltInSourceArchive;
-import ghidra.app.plugin.core.datamgr.archive.ProjectArchive;
 import ghidra.app.plugin.core.datamgr.tree.*;
 import ghidra.framework.main.datatable.DomainFileContext;
 import ghidra.framework.model.DomainFile;
 import ghidra.program.model.data.*;
+import ghidra.program.model.dtarchive.ProjectDataTypeArchive;
 import ghidra.program.model.listing.Program;
 
-public class DataTypesActionContext extends ProgramActionContext implements DomainFileContext {
+public class DataTypesActionContext extends ProgramActionContext
+		implements DataTypeContext, DomainFileContext {
+
 	private final GTreeNode clickedNode;
 	private final boolean isToolbarAction;
 	private DataTypeArchiveGTree archiveGTree;
 	private List<DomainFile> domainFiles;
+
+	private List<GTreeNode> clipboardNodes; // lazy
+	private List<DataType> dataTypes; // lazy
 
 	public DataTypesActionContext(DataTypesProvider provider, Program program,
 			DataTypeArchiveGTree archiveGTree, GTreeNode clickedNode) {
@@ -44,15 +51,84 @@ public class DataTypesActionContext extends ProgramActionContext implements Doma
 
 	public DataTypesActionContext(DataTypesProvider provider, Program program,
 			DataTypeArchiveGTree archiveGTree, GTreeNode clickedNode, boolean isToolbarAction) {
-
 		super(provider, program, archiveGTree);
 		this.archiveGTree = archiveGTree;
 		this.clickedNode = clickedNode;
 		this.isToolbarAction = isToolbarAction;
 	}
 
+	public List<GTreeNode> getClipboardNodes() {
+		if (clipboardNodes != null) {
+			return clipboardNodes;
+		}
+
+		// cache, since this could be slow 
+		DataTypesProvider dtProvider = (DataTypesProvider) getComponentProvider();
+		DataTypeManagerPlugin plugin = dtProvider.getPlugin();
+		Clipboard clipboard = plugin.getClipboard();
+		Transferable transferable = clipboard.getContents(this);
+		if (transferable instanceof GTreeNodeTransferable) {
+			GTreeNodeTransferable gtTransferable = (GTreeNodeTransferable) transferable;
+			clipboardNodes = gtTransferable.getAllData();
+		}
+
+		if (clipboardNodes == null) {
+			clipboardNodes = Collections.emptyList();
+		}
+		return clipboardNodes;
+	}
+
 	public boolean isToolbarAction() {
 		return isToolbarAction;
+	}
+
+	@Override
+	public DataType getSelectedDataType() {
+		TreePath[] selectionPaths = archiveGTree.getSelectionPaths();
+		if (selectionPaths.length > 1) {
+			return null;
+		}
+		if (clickedNode instanceof DataTypeNode dtNode) {
+			return dtNode.getDataType();
+		}
+		return null;
+	}
+
+	@Override
+	public boolean hasSelectedDataTypes() {
+		if (dataTypes != null) {
+			return dataTypes.size() > 1;
+		}
+
+		TreePath[] selectionPaths = archiveGTree.getSelectionPaths();
+		for (TreePath path : selectionPaths) {
+			Object last = path.getLastPathComponent();
+			if (last instanceof DataTypeNode) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public List<DataType> getSelectedDataTypes() {
+
+		if (dataTypes != null) {
+			return dataTypes;
+		}
+
+		List<DataType> types = new ArrayList<>();
+		TreePath[] selectionPaths = archiveGTree.getSelectionPaths();
+		for (TreePath path : selectionPaths) {
+			Object last = path.getLastPathComponent();
+			if (last instanceof DataTypeNode dtNode) {
+				DataType dt = dtNode.getDataType();
+				types.add(dt);
+			}
+		}
+
+		dataTypes = Collections.unmodifiableList(types);
+		return dataTypes;
 	}
 
 	public GTreeNode getClickedNode() {
@@ -66,11 +142,11 @@ public class DataTypesActionContext extends ProgramActionContext implements Doma
 			domainFiles = new ArrayList<DomainFile>();
 			for (TreePath path : selectionPaths) {
 				Object lastPathComponent = path.getLastPathComponent();
-				if (lastPathComponent instanceof ProjectArchiveNode) {
-					ProjectArchiveNode node = (ProjectArchiveNode) lastPathComponent;
-					ProjectArchive archive = (ProjectArchive) node.getArchive();
-					DomainFile originalDomainFile = archive.getDomainFile();
-					domainFiles.add(originalDomainFile);
+				if (lastPathComponent instanceof ProjectArchiveNode node) {
+					DomainFile originalDomainFile = node.getOriginalDomainFile();
+					if (originalDomainFile != null) {
+						domainFiles.add(originalDomainFile);
+					}
 				}
 			}
 		}
@@ -132,4 +208,16 @@ public class DataTypesActionContext extends ProgramActionContext implements Doma
 		return dataTypeNode;
 	}
 
+	public List<ProjectDataTypeArchive> getSelectedProjectArchives() {
+		List<ProjectDataTypeArchive> list = new ArrayList<>();
+
+		List<GTreeNode> selectedNodes = getSelectedNodes();
+		for (GTreeNode node : selectedNodes) {
+			if (node instanceof ProjectArchiveNode projectNode) {
+				ProjectDataTypeArchive archive = projectNode.getArchive();
+				list.add(archive);
+			}
+		}
+		return list;
+	}
 }

@@ -1326,7 +1326,7 @@
     <informalexample>
       <itemizedlist spacing='compact'>
 	<listitem>Processor family</listitem>
-	<listitem>Endianess</listitem>
+	<listitem>Endianness</listitem>
 	<listitem>Size of the address bus</listitem>
 	<listitem>Processor variant</listitem>
 	<listitem>Compiler producing the Program</listitem>
@@ -2059,6 +2059,34 @@
 	  <link linkend="AnalysisSplitStruct">Splitting Structure Accesses</link>.
 	</para>
       </sect4>
+      <sect4 id="TypeBitField">
+	<title>Bitfields</title>
+	<para>
+	  Bitfields are fully supported.  Bitfields are a special type of integer field, defined within a structure data-type,
+	  that does not respect byte boundaries.  A bitfield can be as small as a single bit, and multiple bitfields can be packed
+	  into a single byte or word of the structure. The Decompiler does not infer bitfields, but propagates them into
+	  the function from structures that explicitly define them.
+	</para>
+	<para>
+	  The Decompiler will attempt to display reads and writes to individual bitfields
+	  using the field's name and a standard structure access operator, like '.' or '->'.  This hides the
+	  longer sequence of byte-based operations that the underlying code is using to isolate the individual bitfield
+	  from its neighbors.
+	  <informalexample>
+	    <programlisting>
+	      iVar1 = ptr->bit1;        //  iVar1 = ((*ptr) &gt;&gt; 3) &amp; 7
+	      struct1.bit1 = i;         //  struct1._0_1 = ((i &amp; 7) &lt;&lt; 3) | (struct1._0_1 &amp; 0xc7)
+	    </programlisting>
+	  </informalexample>
+	</para>
+	<para>
+	  If a code sequence sets multiple bitfields simultaneously, the Decompiler will display the sequence
+	  using multiple assignment statements, one for each bitfield affected.  If bitfields are read simultaneously, the
+	  Decompiler will display each bitfield as a separate element of the expression. If a code sequence does not seem to respect
+	  the boundaries of individual bitfields, the Decompiler will revert to using auto-generated, byte-based,
+	  field tokens to represent the sequence.
+	</para>
+      </sect4>
       <sect4 id="TypeEnum">
 	<title>Enumeration</title>
 	<para>
@@ -2589,6 +2617,7 @@
       <informalexample>
 	<itemizedlist mark='none'>
 	  <listitem><emphasis>DEFAULT</emphasis> - for basic or no information</listitem>
+	  <listitem><emphasis>AI</emphasis> - for information that is produced with AI assistance</listitem>
 	  <listitem><emphasis>ANALYSIS</emphasis> - for information derived by an Analyzer</listitem>
 	  <listitem><emphasis>IMPORTED</emphasis> - for information imported from an external source</listitem>
 	  <listitem><emphasis>USER_DEFINED</emphasis> - for information set by the user</listitem>
@@ -3054,7 +3083,9 @@
 	  this to <emphasis>off</emphasis> lets the user see the dead code, which is typically demarcated
 	  by the control-flow structure:
 	  <informalexample>
-	    <code>if (false) { ... }</code>
+	    <programlisting>
+	      if (false) { ... }
+	    </programlisting>
 	  </informalexample>
 	</para>
       </listitem>
@@ -3088,6 +3119,35 @@
 	</para>
       </listitem>
     </varlistentry>
+    <varlistentry id="AnalysisNanIgnore">
+      <term><emphasis role="bold">NaN operations</emphasis></term>
+      <listitem>
+        <para>
+          This option determines how the Decompiler treats floating-point <emphasis role="bold">NaN</emphasis>
+          (Not a Number) operations.  Many processors automatically perform NaN checks on the operands of
+          floating-point instructions, and unless specifically configured, these show up in Decompiler output
+          as <code>NAN()</code> functional tokens.  Common floating-point source code operations, like
+          <code>&lt;</code>, <code>&gt;</code>, and <code>==</code> can generate <code>NAN</code> tokens as a
+          side effect, even if the original source code was not designed to handle NaN values, and the
+          tokens can clutter the output.
+        </para>
+        <para>
+          The user can optionally configure some or all of the NaN operations to be ignored, meaning that
+          inputs to the NaN operation are <emphasis>assumed</emphasis> to be valid floating-point values and the
+          <code>NAN</code> function is removed, replacing it with the value: <emphasis role="bold">false</emphasis>.
+          The possible settings are:
+          <informalexample>
+            <itemizedlist mark='bullet'>
+	      <listitem><emphasis role="bold">Ignore none</emphasis> - No NaN operations are removed</listitem>
+	      <listitem><emphasis role="bold">Ignore with comparisons</emphasis> - NaN operations associated with comparisons are removed</listitem>
+	      <listitem><emphasis role="bold">Ignore all</emphasis> - All NaN operations are removed</listitem>
+	    </itemizedlist>
+	  </informalexample>
+          The Decompiler considers a NaN operation to be associated with a floating-point comparison if they both
+          can be considered boolean clauses of the same <emphasis role="bold">if</emphasis> condition.
+        </para>
+      </listitem>
+    </varlistentry>
     <varlistentry id="AnalysisForLoops">
       <term><emphasis role="bold">Recover -for- loops</emphasis></term>
       <listitem>
@@ -3098,7 +3158,9 @@
 	  rendered using a standard <emphasis role="bold">for</emphasis> loop header
 	  that contains an initializer statement, condition, and iterating statement.
 	  <informalexample>
-	    <code>for (iVar2 = 10; iVar2 &lt; len; iVar2 = iVar2 + 1) { ...</code>
+	    <programlisting>
+	      for (iVar2 = 10; iVar2 &lt; len; iVar2 = iVar2 + 1) { ...
+	    </programlisting>
 	  </informalexample>
 	</para>
 	<para>
@@ -3126,6 +3188,24 @@
 	  <emphasis>Memory Manager</emphasis>, and individual data elements can be marked
 	  as <emphasis>constant</emphasis> via the <emphasis role="bold">Mutability</emphasis> setting
 	  (see <xref linkend="AnnoteMutability"/>). 
+	</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry id="AnalysisBitfields">
+      <term><emphasis role="bold">Simplify bitfield access</emphasis></term>
+      <listitem>
+	<para>
+	  When this option is active, the Decompiler attempts to identify expressions where bitfields,
+	  as defined in structure data-types, are either being written to or read from.  
+	  Any sequence of logical operations that access an individual bitfield are collapsed into a
+	  normal field access, displaying the bitfield's name.
+          <informalexample>
+	    <programlisting>
+	      uVar1 = my1._3_1 &lt;&lt; 2 &amp; 3;  // Isolating a 2-bit field 'mode' within variable 'my1'
+	        ...
+              uVar1 = my1.mode;   // The same assignment after simplification
+	    </programlisting>
+          </informalexample>
 	</para>
       </listitem>
     </varlistentry>
@@ -3240,6 +3320,36 @@
 	</para>
       </listitem>
     </varlistentry>
+    <varlistentry id="DisplayBraceFormatting">
+      <term><emphasis role="bold">Brace Format for &lt;kind-of&gt; blocks</emphasis></term>
+      <listitem>
+	<para>
+          Choose how braces are placed after function declarations, or other kinds of code blocks in Decompiler output.
+          Formatting can be controlled for:
+          <informalexample>
+            <itemizedlist mark='bullet'>
+	      <listitem><emphasis role="bold">function blocks</emphasis> - the main function bodies</listitem>
+	      <listitem><emphasis role="bold">if/else blocks</emphasis> - blocks delineated by the <code>if</code> and <code>else</code> keywords</listitem>
+	      <listitem><emphasis role="bold">loop blocks</emphasis> - blocks delineated by the <code>for</code>, <code>do</code>, and <code>while</code> keywords</listitem>
+	      <listitem><emphasis role="bold">switch blocks</emphasis> - blocks delineated by the <code>switch</code> keyword</listitem>
+            </itemizedlist>
+          </informalexample>
+          The different formatting options primarily control how the opening brace is displayed relative to the line containing
+          the declaration or keyword starting the block.  The formatting options are:
+          <informalexample>
+            <itemizedlist mark='bullet'>
+	      <listitem><emphasis role="bold">Same line</emphasis> - opening brace placed on same line</listitem>
+	      <listitem><emphasis role="bold">Next line</emphasis> - opening brace placed on the next line</listitem>
+	      <listitem><emphasis role="bold">Skip one line</emphasis> - opening brace placed on line after a blank line</listitem>
+            </itemizedlist>
+          </informalexample>
+	</para>
+        <para>
+          The "Same line" option is consistent with K &amp; R code formatting style.  The "Next line" option is consistent with
+          the Allman formatting style.
+        </para>
+      </listitem>
+    </varlistentry>
     <varlistentry id="DisplayColorDefault">
       <term><emphasis role="bold">Color Default</emphasis></term>
       <listitem>
@@ -3289,6 +3399,14 @@
 	</para>
       </listitem>
     </varlistentry>
+    <varlistentry id="MiddleMouseColor">
+      <term><emphasis role="bold">Color for Highlighting Middle-mouse Matches</emphasis></term>
+      <listitem>
+	<para>
+	  Assign the background color used to highlight characters when highlighting using the middle-mouse button.
+	</para>
+      </listitem>
+    </varlistentry>    
     <varlistentry id="DisplayCommentIndent">
       <term><emphasis role="bold">Comment line indent level</emphasis></term>
       <listitem>
@@ -3891,7 +4009,7 @@
     tokens (see <xref linkend="MouseActions"/>).
   </para>
 
-  <sect2 id="CrossHighlighting">
+  	<sect2 id="CrossHighlighting">
     <title>Cross-Highlighting</title>
     <para>
       The main window maintains a map between the individual variable and operator tokens displayed in
@@ -3925,6 +4043,25 @@
       with or may represent the effect of multiple instructions.
     </warning>
   </sect2>
+</section>
+
+<section id="LockDisplay">
+  <title>Disabling Auto Refresh</title>
+  <para>
+  	For very large functions, the decompile window can take a significant amount of time to re-decompile
+  	and update the display as changes are made to the program. This makes some actions frustrating,
+  	such as renaming or retyping variables.
+  </para>
+  <para>
+  	As a work around, you may use the lock toggle action
+  	<imageobject>
+	  <imagedata condition="noscaling" fileref="images/lock.gif" contentwidth="16px" contentdepth="16px"/>
+	  <imagedata condition="withscaling" fileref="images/lock.gif" contentwidth="0.15in" contentdepth="0.15in"/>
+	</imageobject>&nbsp;.
+	When selected, this action will prevent the decompiler from auto refreshing for each change.
+	This may make the display appear to be broken since any changes will not appear to
+	take effect until the display is manually refreshed.
+	</para>
 </section>
 
 <section id="Snapshot">
@@ -3967,6 +4104,18 @@
     Double-clicking on specific tokens within the Snapshot window may also cause it to navigate
     to a new location (see <xref linkend="MouseDouble"/>).
   </para>
+  <anchor id="EventsOut"/>
+  <para>
+  	Normally, snapshot windows are completely disconnected from the location and selection 
+  	events that synchronize the main components in the tool. To allow the snapshot window
+  	to export its location and selection, select the 
+  	<imageobject>
+	  <imagedata condition="noscaling" fileref="images/locationOut.gif" contentwidth="16px" contentdepth="16px"/>
+	  <imagedata condition="withscaling" fileref="images/locationOut.gif" contentwidth="0.15in" contentdepth="0.15in"/>
+	</imageobject>&nbsp;
+	toolbar action.
+  </para>
+  	
 </section>
 
 <section id="UndefinedFunction">
@@ -4083,6 +4232,40 @@
     always available to the user without this action. This action is primarily a debugging
     aid for plug-in developers.
   </tip>
+</sect2>
+
+<sect2 id="ToolBarEliminateUnreachableCode">
+  <title>Eliminate Unreachable Code</title>
+  <para>
+    <guiicon>
+      <inlinemediaobject>
+	<imageobject>
+	  <imagedata condition="noscaling" fileref="icon.decompiler.action.provider.unreachable" contentwidth="16px" contentdepth="16px"/>
+	  <imagedata condition="withscaling" fileref="icon.decompiler.action.provider.unreachable" contentwidth="0.15in" contentdepth="0.15in"/>
+	</imageobject>
+      </inlinemediaobject>
+      </guiicon>&nbsp;- toggle button
+  </para>
+  <para>
+	Quickly turn off the <xref linkend="AnalysisUnreachable"/> decompiler setting.
+  </para>
+</sect2>
+
+<sect2 id="ToolBarRespectReadOnly">
+  <title>Respect Read-only Flags</title>
+  <para>
+    <guiicon>
+      <inlinemediaobject>
+	<imageobject>
+	  <imagedata condition="noscaling" fileref="icon.decompiler.action.provider.readonly" contentwidth="16px" contentdepth="16px"/>
+	  <imagedata condition="withscaling" fileref="icon.decompiler.action.provider.readonly" contentwidth="0.15in" contentdepth="0.15in"/>
+	</imageobject>
+      </inlinemediaobject>
+      </guiicon>&nbsp;- toggle button
+  </para>
+  <para>
+	Quickly turn off the <xref linkend="AnalysisReadOnly"/> decompiler setting.
+  </para>
 </sect2>
 
 <sect2 id="ToolBarCopy">
@@ -4277,7 +4460,8 @@
   <title>Middle-Click</title>
   <para>
     Highlights every occurrence of a variable, constant, or operator represented by the selected
-    token, within the Decompiler window.
+    token, within the Decompiler window.   There are actions available from the popup menu and from
+    the keyboard to navigate to each highlighted token.
   </para>
 </sect2>
 
@@ -4293,7 +4477,7 @@
     variable or operation affected.
   </para>
   <para>
-    Many of the actions have have a key binding, which, if it exists, will be listed in the pop-up menu.
+    Many of the actions have a key binding, which, if it exists, will be listed in the pop-up menu.
     If the key binding is used to activate the action, local context is determined by the current cursor
     position.  Key bindings can be reassigned from the
     <link xlink:href="help/topics/Tool/ToolOptions_Dialog.htm#KeyBindings_Option">Key Bindings</link>
@@ -4677,6 +4861,17 @@
   </para>
 </sect2>
 
+<sect2 id="GoToMiddleMouseHighlight">
+  <title>Go To Next/Previous Highlight</title>
+  <para>
+    These actions are available from the popup menu and keyboard.   Only tokens highlighted from the
+    middle-mouse will be navigated.  <emphasis role="bold">Shift-Comma</emphasis> will go to the 
+    previous highlighted token.   <emphasis role="bold">Shift-Period</emphasis> will go to the
+    next highlighted token.   These key bindings can be changed via the
+    <link xlink:href="help/topics/Tool/ToolOptions_Dialog.htm#KeyBindings_Option">Tool Options Dialog</link>.
+  </para>
+</sect2>
+
 <sect2 id="ActionHighlight">
   <title>Highlight</title>
   <para>
@@ -4843,6 +5038,19 @@
     parameter information by setting the function's prototype directly (see the
     <xref linkend="ActionCommitParams"/> command).  In this situation, the "Override Signature"
     command is still possible, but it will bring up a confirmation dialog.
+  </para>
+</sect2>
+
+<sect2 id="ActionEditOverride">
+  <title>Edit Signature Override</title>
+  <para>
+    Edit the overriding function prototype applied previously to the called function under the cursor.
+  </para>
+  <para>
+	This action can only be triggered at call sites with an existing signature override. As with the Override 
+	Signature command, users must select either the token representing the called function's name or the 
+	tokens representing the function pointer at the call site. The action brings up a dialog where the user 
+  	can edit the current overriding function prototype. 
   </para>
 </sect2>
 
@@ -5056,7 +5264,7 @@
   <para>
     Decompilation is triggered again to incorporate the
     new name, causing local variable declarations to be reordered and line breaks to
-    change, but otherwise the the output is unaffected.
+    change, but otherwise the output is unaffected.
   </para>
   <para>
     Local variables and parameters presented by the Decompiler may be invented on-the-fly

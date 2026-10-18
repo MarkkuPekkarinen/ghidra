@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,10 +17,10 @@ package ghidra.app.cmd.disassemble;
 
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.framework.cmd.BackgroundCommand;
-import ghidra.framework.model.DomainObject;
 import ghidra.program.disassemble.*;
 import ghidra.program.model.address.*;
-import ghidra.program.model.lang.*;
+import ghidra.program.model.lang.Register;
+import ghidra.program.model.lang.RegisterValue;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
@@ -30,7 +30,7 @@ import ghidra.util.task.TaskMonitor;
 /**
  * Command object for performing disassembly
  */
-public class DisassembleCommand extends BackgroundCommand {
+public class DisassembleCommand extends BackgroundCommand<Program> {
 
 	protected AddressSetView startSet;
 	protected boolean useDefaultRepeatPatternBehavior = false;
@@ -78,6 +78,8 @@ public class DisassembleCommand extends BackgroundCommand {
 	 * @param startSet set of addresses to be the start of a disassembly. The Command object will
 	 *            attempt to start a disassembly at each address in this set.
 	 * @param restrictedSet addresses that can be disassembled. a null set implies no restrictions
+	 * @param followFlow follow all flows within restricted set if true, otherwise limit to using 
+	 * startSet for flows.
 	 */
 	public DisassembleCommand(AddressSetView startSet, AddressSetView restrictedSet,
 			boolean followFlow) {
@@ -125,7 +127,7 @@ public class DisassembleCommand extends BackgroundCommand {
 	 * Set code analysis enablement. By default new instructions will be submitted for
 	 * auto-analysis.
 	 * 
-	 * @param enable
+	 * @param enable true if incremental code analysis should be done, else false to prevent this.
 	 */
 	public void enableCodeAnalysis(boolean enable) {
 		this.enableAnalysis = enable;
@@ -150,8 +152,7 @@ public class DisassembleCommand extends BackgroundCommand {
 	}
 
 	@Override
-	synchronized public boolean applyTo(DomainObject obj, TaskMonitor monitor) {
-		Program program = (Program) obj;
+	synchronized public boolean applyTo(Program program, TaskMonitor monitor) {
 		return doDisassembly(monitor, program, program.getLanguage().getInstructionAlignment());
 	}
 
@@ -309,7 +310,7 @@ public class DisassembleCommand extends BackgroundCommand {
 			doDisassemblySeeds(disassembler, seedSet, mgr);
 		}
 
-		return disassemblyPerformed || (!nonExecutableStart & !unalignedStart);
+		return disassemblyPerformed || (!nonExecutableStart && !unalignedStart);
 	}
 
 	/**
@@ -317,7 +318,7 @@ public class DisassembleCommand extends BackgroundCommand {
 	 * 
 	 * @param disassembler disassembler to use
 	 * @param seedSet set of addresses to be disassembled
-	 * @param mgr
+	 * @param mgr auto analysis manager
 	 * 
 	 * @return addresses actually disassembled
 	 */
@@ -342,7 +343,7 @@ public class DisassembleCommand extends BackgroundCommand {
 	/**
 	 * Determine if intermediate analysis is required to reduce the risk of disassembling data
 	 * regions when performing static disassembly over a contiguous range if addresses. This method
-	 * attemps to identify this situation by checking the first range of disassembledSet against the
+	 * attempts to identify this situation by checking the first range of disassembledSet against the
 	 * startSet. Analysis will be triggered if startSet contains both the max address of the first
 	 * range of disassembledSet (M where M=disassembledSet.firstRange().getMaxAddress()) and the
 	 * next address (M.next()) which will be the next seed point.

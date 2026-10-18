@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -54,8 +54,7 @@ import ghidra.framework.options.SaveState;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.program.model.listing.Program;
 import ghidra.util.*;
-import ghidra.util.datastruct.WeakDataStructureFactory;
-import ghidra.util.datastruct.WeakSet;
+import ghidra.util.datastruct.*;
 import ghidra.util.table.GhidraTableFilterPanel;
 import ghidra.util.task.*;
 import util.CollectionUtils;
@@ -67,13 +66,15 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 	private static final double TOP_PREFERRED_RESIZE_WEIGHT = .80;
 	private static final String DESCRIPTION_DIVIDER_LOCATION = "DESCRIPTION_DIVIDER_LOCATION";
 	private static final String FILTER_TEXT = "FILTER_TEXT";
+	private static final String RECENT_SCRIPTS = "RECENT_SCRIPTS";
+	private static final int MAX_RECENT_SCRIPTS = 10;
 
 	private Map<ResourceFile, GhidraScriptEditorComponentProvider> editorMap = new HashMap<>();
 	private final GhidraScriptMgrPlugin plugin;
 	private JPanel component;
 	private RootNode scriptRoot;
 	private GTree scriptCategoryTree;
-	private DraggableScriptTable scriptTable;
+	private GTable scriptTable;
 	private final GhidraScriptInfoManager infoManager;
 	private GhidraScriptTableModel tableModel;
 	private BundleStatusComponentProvider bundleStatusComponentProvider;
@@ -88,17 +89,18 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 	private String[] previousCategory;
 
 	private ResourceFile lastRunScript;
+	private LRUSet<String> recentScripts = new LRUSet<String>(MAX_RECENT_SCRIPTS);
 	private WeakSet<RunScriptTask> runningScriptTaskSet =
 		WeakDataStructureFactory.createCopyOnReadWeakSet();
 	private TaskListener cleanupTaskSetListener = new TaskListener() {
 		@Override
 		public void taskCompleted(Task task) {
-			runningScriptTaskSet.remove((RunScriptTask) task);
+			runningScriptTaskSet.remove(task);
 		}
 
 		@Override
 		public void taskCancelled(Task task) {
-			runningScriptTaskSet.remove((RunScriptTask) task);
+			runningScriptTaskSet.remove(task);
 		}
 	};
 
@@ -148,7 +150,6 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		scriptRoot = new RootNode();
 
 		scriptCategoryTree = new GTree(scriptRoot);
-		scriptCategoryTree.setName("CATEGORY_TREE");
 		scriptCategoryTree.addMouseListener(new MouseAdapter() {
 			@Override
 			public void mousePressed(MouseEvent e) {
@@ -176,7 +177,9 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		});
 
 		scriptCategoryTree.getSelectionModel()
-			.setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+				.setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+
+		scriptCategoryTree.setAccessibleNamePrefix("Script Category");
 	}
 
 	private void build() {
@@ -184,8 +187,7 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 
 		tableModel = new GhidraScriptTableModel(this, infoManager);
 
-		scriptTable = new DraggableScriptTable(this, tableModel);
-		scriptTable.setName("SCRIPT_TABLE");
+		scriptTable = new GTable(tableModel);
 		scriptTable.setAutoLookupColumn(tableModel.getNameColumnIndex());
 		scriptTable.setRowSelectionAllowed(true);
 		scriptTable.setAutoCreateColumnsFromModel(false);
@@ -214,20 +216,9 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 			}
 		});
 
-		TableColumnModel columnModel = scriptTable.getColumnModel();
-		// Set default column sizes
-		for (int i = 0; i < columnModel.getColumnCount(); i++) {
-			TableColumn column = columnModel.getColumn(i);
-			String name = (String) column.getHeaderValue();
-			switch (name) {
-				case GhidraScriptTableModel.SCRIPT_ACTION_COLUMN_NAME:
-					initializeUnresizableColumn(column, 50);
-					break;
-				case GhidraScriptTableModel.SCRIPT_STATUS_COLUMN_NAME:
-					initializeUnresizableColumn(column, 50);
-					break;
-			}
-		}
+		scriptTable.setAccessibleNamePrefix("Scripts");
+
+		updateColumnSizes();
 
 		JScrollPane scriptTableScroll = new JScrollPane(scriptTable);
 		buildFilter();
@@ -251,6 +242,48 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 
 		component = new JPanel(new BorderLayout());
 		component.add(dataDescriptionSplit, BorderLayout.CENTER);
+	}
+
+	private void updateColumnSizes() {
+
+		// 
+		// Table column resize behavior is tough to control.  When setting the column size here, we
+		// use the max width to keep the columns from being resizable.  The effect of this is that
+		// the table will layout the columns by giving all extra space to the resizable columns.  
+		// Any columns not marked resizable will be the exact requested size.  This allows us to 
+		// force small columns to take up the minimum amount of space.  The downside of locking the
+		// columns is that users cannot change the size.  So, we will set the size for the initial 
+		// layout to get the size we desire, and then we will set the size again to make the columns
+		// resizable after the layout has taken place. 
+		// 
+		forceSmallColumns(true);
+
+		// call again after the sizes have been updated from the previous call
+		forceSmallColumns(false);
+	}
+
+	private void forceSmallColumns(boolean lock) {
+		int width = 50;
+		TableColumnModel columnModel = scriptTable.getColumnModel();
+		for (int i = 0; i < columnModel.getColumnCount(); i++) {
+			TableColumn column = columnModel.getColumn(i);
+			String name = (String) column.getHeaderValue();
+			switch (name) {
+
+				case GhidraScriptTableModel.SCRIPT_ACTION_COLUMN_NAME:
+					setColumnWidth(column, width, !lock);
+					break;
+				case GhidraScriptTableModel.SCRIPT_STATUS_COLUMN_NAME:
+					setColumnWidth(column, width, !lock);
+					break;
+			}
+		}
+	}
+
+	private void setColumnWidth(TableColumn column, int width, boolean resizable) {
+		column.setPreferredWidth(width);
+		column.setMinWidth(width);
+		column.setMaxWidth(resizable ? Integer.MAX_VALUE : width);
 	}
 
 	/**
@@ -280,6 +313,12 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 
 		String filterText = saveState.getString(FILTER_TEXT, "");
 		tableFilterPanel.setFilterText(filterText);
+
+		String[] scripts = saveState.getStrings(RECENT_SCRIPTS, new String[0]);
+		recentScripts.clear();
+		for (String script : scripts) {
+			recentScripts.add(script);
+		}
 	}
 
 	/**
@@ -301,6 +340,9 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 
 		String filterText = tableFilterPanel.getFilterText();
 		saveState.putString(FILTER_TEXT, filterText);
+
+		String[] scripts = recentScripts.toList().toArray(new String[0]);
+		saveState.putStrings(RECENT_SCRIPTS, scripts);
 	}
 
 	void dispose() {
@@ -333,6 +375,10 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		return editorMap;
 	}
 
+	List<String> getRecentScripts() {
+		return recentScripts.toList();
+	}
+
 	void assignKeyBinding() {
 		ResourceFile script = getSelectedScript();
 		ScriptAction action = actionManager.createAction(script);
@@ -343,7 +389,8 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 			plugin.getTool().setStatusInfo("User cancelled keybinding.");
 			return;
 		}
-		action.setKeyBindingData(new KeyBindingData(dialog.getKeyStroke()));
+		KeyStroke newKs = dialog.getKeyStroke();
+		action.setKeyBindingData(newKs == null ? null : new KeyBindingData(newKs));
 		scriptTable.repaint();
 	}
 
@@ -367,7 +414,7 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		}
 
 		GhidraScriptProvider provider = GhidraScriptUtil.getProvider(script);
-		SaveDialog dialog = new SaveDialog(getComponent(), "Rename Script", this, script,
+		SaveDialog dialog = new SaveDialog(getComponent(), "Rename Script", this, script, provider,
 			actionManager.getRenameHelpLocation());
 		if (dialog.isCancelled()) {
 			plugin.getTool().setStatusInfo("User cancelled rename.");
@@ -458,8 +505,12 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		setSelectedScript(renameFile);
 	}
 
-	JTable getTable() {
+	public GTable getTable() {
 		return scriptTable;
+	}
+
+	public GTree getTree() {
+		return scriptCategoryTree;
 	}
 
 	int getScriptIndex(ResourceFile scriptFile) {
@@ -475,11 +526,11 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 	 */
 	public List<ResourceFile> getScriptDirectories() {
 		return bundleHost.getGhidraBundles()
-			.stream()
-			.filter(GhidraSourceBundle.class::isInstance)
-			.filter(GhidraBundle::isEnabled)
-			.map(GhidraBundle::getFile)
-			.collect(Collectors.toList());
+				.stream()
+				.filter(GhidraSourceBundle.class::isInstance)
+				.filter(GhidraBundle::isEnabled)
+				.map(GhidraBundle::getFile)
+				.collect(Collectors.toList());
 	}
 
 	/**
@@ -487,12 +538,12 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 	 */
 	public List<ResourceFile> getWritableScriptDirectories() {
 		return bundleHost.getGhidraBundles()
-			.stream()
-			.filter(GhidraSourceBundle.class::isInstance)
-			.filter(Predicate.not(GhidraBundle::isSystemBundle))
-			.filter(GhidraBundle::isEnabled)
-			.map(GhidraBundle::getFile)
-			.collect(Collectors.toList());
+				.stream()
+				.filter(GhidraSourceBundle.class::isInstance)
+				.filter(Predicate.not(GhidraBundle::isSystemBundle))
+				.filter(GhidraBundle::isEnabled)
+				.map(GhidraBundle::getFile)
+				.collect(Collectors.toList());
 	}
 
 	boolean isEditorOpen(ResourceFile script) {
@@ -573,7 +624,7 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 			ResourceFile newFile = GhidraScriptUtil.createNewScript(provider,
 				new ResourceFile(userScriptsDir), getScriptDirectories());
 			SaveDialog dialog = new SaveNewScriptDialog(getComponent(), "New Script", this, newFile,
-				actionManager.getNewHelpLocation());
+				provider, actionManager.getNewHelpLocation());
 			if (dialog.isCancelled()) {
 				plugin.getTool().setStatusInfo("User cancelled creating a new script.");
 				return;
@@ -605,7 +656,8 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 			}
 		}
 		catch (IOException e) {
-			Msg.showError(this, getComponent(), getName(), e.getMessage(), e);
+			Msg.showError(this, getComponent(), getName(), "Unexpected exception loading script",
+				e);
 		}
 	}
 
@@ -628,6 +680,11 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 
 	void runScript(ResourceFile scriptFile, TaskListener listener) {
 		lastRunScript = scriptFile;
+
+		// Update recent scripts list
+		String scriptName = scriptFile.getName();
+		recentScripts.add(scriptName);
+
 		GhidraScript script = doGetScriptInstance(scriptFile);
 		if (script != null) {
 			doRunScript(script, listener);
@@ -647,9 +704,9 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 
 		AtomicReference<GhidraScript> ref = new AtomicReference<>();
 		TaskBuilder.withRunnable(monitor -> ref.set(scriptSupplier.get()))
-			.setTitle("Compiling Script Directory")
-			.setLaunchDelay(1000)
-			.launchModal();
+				.setTitle("Compiling Script Directory")
+				.setLaunchDelay(1000)
+				.launchModal();
 
 		return ref.get();
 	}
@@ -669,6 +726,11 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 	private GhidraScript getScriptInstance(ResourceFile scriptFile, ConsoleService console) {
 		String scriptName = scriptFile.getName();
 		GhidraScriptProvider provider = GhidraScriptUtil.getProvider(scriptFile);
+		if (provider == null) {
+			console.addErrorMessage("",
+				"Could not find a compatible script provider for: " + scriptName);
+			return null;
+		}
 		try {
 			return provider.getScriptInstance(scriptFile, console.getStdErr());
 		}
@@ -886,6 +948,20 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		plugin.tryToEditFileInEclipse(script);
 	}
 
+	void editScriptVSCode() {
+		ResourceFile script = getSelectedScript();
+		if (script == null) {
+			plugin.getTool().setStatusInfo("Script is null.");
+			return;
+		}
+		if (!script.exists()) {
+			plugin.getTool().setStatusInfo("Script " + script.getName() + " does not exist.");
+			return;
+		}
+
+		plugin.tryToEditFileInVSCode(script);
+	}
+
 	GhidraScriptEditorComponentProvider editScriptInGhidra(ResourceFile script) {
 		GhidraScriptEditorComponentProvider editor = editorMap.get(script);
 		if (editor == null) {
@@ -956,13 +1032,6 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 		return true;
 	}
 
-	private void initializeUnresizableColumn(TableColumn column, int width) {
-		column.setPreferredWidth(width);
-		column.setMinWidth(width);
-		column.setMaxWidth(width);
-		column.setResizable(false);
-	}
-
 	private void updateTitle() {
 		StringBuilder buffy = new StringBuilder();
 		int currentRowCount = tableFilterPanel.getRowCount();
@@ -1012,15 +1081,19 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 				return list;
 			}
 		});
-		tableFilterPanel.setToolTipText("<HTML>Include scripts with <b>Names</b> or " +
+		tableFilterPanel.setToolTipText("<html>Include scripts with <b>Names</b> or " +
 			"<b>Descriptions</b> containing this text.");
 		tableFilterPanel.setFocusComponent(scriptCategoryTree);
+
+		tableFilterPanel.setAccessibleNamePrefix("Script");
+
 	}
 
 	private JComponent buildDescriptionComponent() {
 		descriptionTextPane = new JTextPane();
 		descriptionTextPane.setEditable(false);
 		descriptionTextPane.setEditorKit(new HTMLEditorKit());
+		descriptionTextPane.setName("Script Description");
 		JPanel descriptionPanel = new JPanel(new BorderLayout());
 		descriptionPanel.add(descriptionTextPane);
 		JScrollPane scrollPane = new JScrollPane(descriptionPanel);
@@ -1038,9 +1111,9 @@ public class GhidraScriptComponentProvider extends ComponentProviderAdapter {
 	private void updateDescriptionPanel() {
 		ResourceFile script = getSelectedScript();
 		ScriptInfo info = infoManager.getExistingScriptInfo(script); // null script is ok
-		String text = script != null
-				? (info != null ? info.getToolTipText() : "Error! no script info!")
-				: null; // no selected script
+		String text =
+			script != null ? (info != null ? info.getToolTipText() : "Error! no script info!")
+					: null; // no selected script
 
 		// have to do an invokeLater here, since the DefaultCaret class runs in an invokeLater,
 		// which will overwrite our location setting

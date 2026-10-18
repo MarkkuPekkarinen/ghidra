@@ -17,25 +17,23 @@ package ghidra.app.plugin.core.datamgr.actions;
 
 import java.awt.datatransfer.*;
 import java.awt.dnd.DnDConstants;
-import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 import javax.swing.KeyStroke;
 import javax.swing.tree.TreePath;
 
-import docking.ActionContext;
-import docking.KeyBindingPrecedence;
+import docking.*;
 import docking.action.*;
 import docking.widgets.tree.GTree;
 import docking.widgets.tree.GTreeNode;
 import docking.widgets.tree.support.GTreeNodeTransferable;
 import ghidra.app.plugin.core.datamgr.*;
 import ghidra.app.plugin.core.datamgr.tree.*;
-import ghidra.app.plugin.core.datamgr.util.DataTypeTreeCopyMoveTask;
-import ghidra.app.plugin.core.datamgr.util.DataTypeTreeCopyMoveTask.ActionType;
+import ghidra.app.plugin.core.datamgr.util.DataTypesCopyMoveTask;
+import ghidra.app.plugin.core.datamgr.util.DataTypesCopyMoveTask.ActionType;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.program.model.data.Category;
 
 public class PasteAction extends DockingAction {
 	private PluginTool tool;
@@ -49,7 +47,8 @@ public class PasteAction extends DockingAction {
 		this.tool = plugin.getTool();
 		setPopupMenuData(new MenuData(new String[] { "Paste" }, "Edit"));
 		setKeyBindingData(
-			new KeyBindingData(KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK),
+			new KeyBindingData(
+				KeyStroke.getKeyStroke(KeyEvent.VK_V, DockingUtils.CONTROL_KEY_MODIFIER_MASK),
 				KeyBindingPrecedence.ActionMapLevel));
 	}
 
@@ -120,11 +119,11 @@ public class PasteAction extends DockingAction {
 		}
 
 		// can't cut nodes from one archive and paste into another
-		ArchiveNode destinationArchiveNode = destinationNode.getArchiveNode();
+		DataTypeStoreNode destinationArchiveNode = destinationNode.getArchiveNode();
 		for (GTreeNode cutNode : nodeList) {
 			DataTypeTreeNode dataTypeTreeNode = (DataTypeTreeNode) cutNode;
-			ArchiveNode archiveNode = dataTypeTreeNode.getArchiveNode();
-			if (archiveNode != destinationArchiveNode) {
+			DataTypeStoreNode archiveNode = dataTypeTreeNode.getArchiveNode();
+			if (!Objects.equals(archiveNode, destinationArchiveNode)) {
 				return true; // is invalid
 			}
 		}
@@ -157,9 +156,11 @@ public class PasteAction extends DockingAction {
 			clipboard.setContents(null, null);
 		}
 
+		Category destination = destinationNode.getCategory();
 		ActionType actionType = getActionType(dataTypeTreeNode);
-		DataTypeTreeCopyMoveTask task = new DataTypeTreeCopyMoveTask(destinationNode, nodeList,
-			actionType, (DataTypeArchiveGTree) gTree, plugin.getConflictHandler());
+		DataTypesCopyMoveTask task =
+			DataTypesCopyMoveTask.forNodes(plugin, gTree, destination, nodeList, actionType);
+
 		tool.execute(task, 250);
 	}
 

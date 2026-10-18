@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,10 +15,11 @@
  */
 package docking.widgets.tree;
 
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.*;
 
-import javax.swing.JTree;
+import javax.swing.*;
 import javax.swing.tree.TreePath;
 
 import util.CollectionUtils;
@@ -51,9 +52,10 @@ public class GTreeState {
 
 	private List<TreePath> expandedPaths;
 	private List<TreePath> selectionPaths;
-	private LinkedHashSet<TreePath> viewPaths;
 
 	private GTree tree;
+
+	private Point viewPosition;
 
 	public GTreeState(GTree tree) {
 		this(tree, tree.getViewRoot());
@@ -63,17 +65,15 @@ public class GTreeState {
 		this.tree = tree;
 		expandedPaths = tree.getExpandedPaths(node);
 		selectionPaths = getSelectionPaths(node);
-		viewPaths = getSomeViewPaths();
+
+		JScrollPane sp = tree.getScrollPane();
+		JViewport viewport = sp.getViewport();
+		viewPosition = viewport.getViewPosition();
 
 		adjustPathsForSizeConstraint();
 	}
 
 	private void adjustPathsForSizeConstraint() {
-
-		doAdjustPathsForSizeConstraint();
-	}
-
-	private void doAdjustPathsForSizeConstraint() {
 
 		int maxSize = getMaxItemCount();
 		int combinedSize = selectionPaths.size() + expandedPaths.size();
@@ -136,13 +136,8 @@ public class GTreeState {
 		return Collections.unmodifiableList(selectionPaths);
 	}
 
-	/**
-	 * Returns the top few paths that are visible in the view.
-	 * @return the top few paths that are visible in the view.
-	 */
-	public TreePath[] getViewPaths() {
-		TreePath[] arrrr = viewPaths.toArray(new TreePath[viewPaths.size()]);
-		return arrrr;
+	public Point getViewPosition() {
+		return viewPosition;
 	}
 
 	public void updateStateForMovedNodes() {
@@ -175,16 +170,10 @@ public class GTreeState {
 		List<TreePath> pathList = new ArrayList<>();
 		for (TreePath path : allSelectionPaths) {
 			if (nodeTreePath.isDescendant(path)) {
-				pathList.add(nodeTreePath);
+				pathList.add(path);
 			}
 		}
 		return pathList;
-	}
-
-	private LinkedHashSet<TreePath> getSomeViewPaths() {
-
-		int arbitrarySize = 5; // grab a few paths in case some are removed
-		return getViewPaths(arbitrarySize);
 	}
 
 	private LinkedHashSet<TreePath> getViewPaths(int limit) {

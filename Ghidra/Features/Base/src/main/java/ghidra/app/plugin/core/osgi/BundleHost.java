@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,12 +31,14 @@ import org.jgrapht.traverse.TopologicalOrderIterator;
 import org.osgi.framework.*;
 import org.osgi.framework.launch.Framework;
 import org.osgi.framework.wiring.*;
+import org.osgi.service.url.URLStreamHandlerService;
 
 import generic.io.NullPrintWriter;
 import generic.jar.ResourceFile;
 import ghidra.framework.Application;
 import ghidra.framework.options.SaveState;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.framework.protocol.ghidra.*;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskLauncher;
 import ghidra.util.task.TaskMonitor;
@@ -49,11 +51,11 @@ import utilities.util.FileUtilities;
  * Note: {@link GhidraBundle}, its implementations, and this class constitute a bridge between 
  * OSGi's {@link Bundle} and Ghidra.
  * <ul>
- * <li> unqualified, "bundle" will mean {@link GhidraBundle}
+ * <li> unqualified, "bundle" will mean {@link GhidraBundle}</li>
  * <li> use of OSGi types, including {@link Bundle} and {@link Framework}, should be package scoped 
- * (not public)  
+ * (not public) </li>
  * <li> bundle lifecycle is simplified to "active"(same as OSGi "active" state) and "inactive" 
- * (OSGi "uninstalled" state)
+ * (OSGi "uninstalled" state)</li>
  * </ul>
  */
 public class BundleHost {
@@ -72,7 +74,7 @@ public class BundleHost {
 	private List<BundleHostListener> listeners = new CopyOnWriteArrayList<>();
 
 	/**
-	 * If a {@link GhidraBundle} hasn't already been added for {@bundleFile}, add it now as a 
+	 * If a {@link GhidraBundle} hasn't already been added for {@code bundleFile}, add it now as a 
 	 * non-system bundle.
 	 * 
 	 * <p>Enable the bundle.
@@ -303,6 +305,22 @@ public class BundleHost {
 	}
 
 	/**
+	 * Return the list of currently managed enabled bundle files.
+	 * 
+	 * @return all the enabled bundle files
+	 */
+	public Collection<ResourceFile> getEnabledBundleFiles() {
+		List<ResourceFile> enabledList = new ArrayList<>();
+		for (ResourceFile bundleFile : bundleMap.getBundleFiles()) {
+			GhidraBundle bundle = bundleMap.get(bundleFile);
+			if (bundle.isEnabled()) {
+				enabledList.add(bundleFile);
+			}
+		}
+		return enabledList;
+	}
+
+	/**
 	 * Attempt to resolve a list of BundleRequirements with active Bundle capabilities.
 	 * 
 	 * @param requirements list of requirements -- satisfied requirements are removed as 
@@ -461,6 +479,8 @@ public class BundleHost {
 			throw new OSGiException("Felix OSGi framework has no bundle context");
 		}
 
+		registerGhidraProtocolHandler(frameworkBundleContext);
+
 		addDebuggingListeners();
 
 		Bundle bundle = frameworkBundleContext.getBundle();
@@ -499,6 +519,23 @@ public class BundleHost {
 		catch (BundleException | InterruptedException e) {
 			Msg.error(this, "Failed to stop OSGi framework.", e);
 		}
+	}
+
+	/**
+	 * Install Ghidra URL stream handler service to force standard use of {@code ghidra} protocol 
+	 * {@link Handler}.  This bypasses the improper IOException propagation caused by 
+	 * {@code URLHandlersStreamHandlerProxy.openConnection(URL)} which forces itself to
+	 * act as a proxy for all normal protocol handlers.
+	 *
+	 * @param context OSGI Bundle context
+	 */
+	private void registerGhidraProtocolHandler(BundleContext context) {
+		Hashtable<String, Object> properties = new Hashtable<>();
+		properties.put("url.handler.protocol", new String[] { GhidraURL.PROTOCOL });
+		context.registerService(
+			URLStreamHandlerService.class.getName(),
+			new GhidraOSGIStreamHandler(),
+			properties);
 	}
 
 	/**
@@ -875,7 +912,7 @@ public class BundleHost {
 		}
 
 		if (!bundlesToActivate.isEmpty()) {
-			TaskLauncher.launchNonModal("Restoring bundle state",
+			TaskLauncher.launchModal("Restoring Bundle State",
 				(monitor) -> activateInStages(bundlesToActivate, monitor, new NullPrintWriter()));
 		}
 	}

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,11 +16,19 @@
 package ghidra.app.plugin.core.cparser;
 
 import java.io.File;
+import java.io.IOException;
+import java.util.Objects;
 
+import javax.help.UnsupportedOperationException;
 import javax.swing.SwingUtilities;
 
 import docking.widgets.dialogs.MultiLineMessageDialog;
-import ghidra.program.model.data.*;
+import ghidra.app.util.cparser.C.CParserUtils.CParseResults;
+import ghidra.program.database.dtarchive.DataTypeArchiveFactory;
+import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.dtarchive.DataTypeStore;
+import ghidra.program.model.dtarchive.FileDataTypeArchive;
+import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 import ghidra.util.exception.DuplicateFileException;
 import ghidra.util.task.Task;
@@ -34,18 +42,19 @@ import ghidra.util.task.TaskMonitor;
 class CParserTask extends Task {
 
 	private CParserPlugin plugin;
-	private String dataFileName;
-	
+
 	private String[] filenames;
 	private String[] includePaths;
-	
-	private String options;
-	
-	private String languageString;
-	private String compilerString;
-	
-	private DataTypeManager dtMgr;
 
+	private String options;
+
+	// Language and Compiler Spec IDs valid only for new dataFileName use
+	private String languageId;
+	private String compilerSpecId;
+
+	// Either dataTypeManager or dataFileName must be set, but not both
+	private final DataTypeManager dataTypeManager; // specified for an existing DataTypeManager
+	private final File dataFile; // specified for a new file
 
 	/**
 	 * Create task to parse to a dataFile
@@ -55,57 +64,79 @@ class CParserTask extends Task {
 	 */
 	CParserTask(CParserPlugin plugin, String dataFileName) {
 		super("Parsing C Files", true, false, false);
-
+		Objects.requireNonNull(dataFileName, "Target datatype archive filename required");
+		dataTypeManager = null;
 		this.plugin = plugin;
-		this.dataFileName = dataFileName;
+		this.dataFile = new File(dataFileName);
 	}
 
 	/**
 	 * Create task to parse to a dataTypeManager
 	 * 
-	 * @param plugin
-	 * @param dataTypeManager
+	 * NOTE: The Language ID and Compiler Spec ID must not be set since the dataTypeManager's
+	 * current architecture will be used.
+	 * 
+	 * @param plugin CParserPlugin that will do the work
+	 * @param dataTypeManager target data type manager
 	 */
 	public CParserTask(CParserPlugin plugin, DataTypeManager dataTypeManager) {
 		super("Parsing C Files", true, false, false);
-
+		Objects.requireNonNull(dataTypeManager, "Target datatype manager required");
+		dataFile = null;
 		this.plugin = plugin;
-		this.dtMgr = dataTypeManager;
+		this.dataTypeManager = dataTypeManager;
 	}
 
 	/**
-	 * Create task to parse to a ProgramDataTypeManager
+	 * Set the language ID to be used.
 	 * 
-	 * @param plugin
-	 * @param dataTypeManager
+	 * NOTE: The compiler spec ID must also be set, see {@code #setCompilerID(String)}.
+	 * See language *.ldefs file for defined compiler spec IDs or existing Program info.
+	 * 
+	 * @param languageId language ID
+	 * @return this task
+	 * @throws UnsupportedOperationException if task was constructed with a DataTypeManager whose
+	 * existing architecture will be used.
 	 */
-	public CParserTask(CParserPlugin plugin, ProgramBasedDataTypeManager dataTypeManager) {
-		super("Parsing C Files", true, false, false);
-		
-		this.plugin = plugin;
-		this.dtMgr = dataTypeManager;
-	}
-	
-	public CParserTask setLanguageID(String languageID) {
-		this.languageString = languageID;
+	public CParserTask setLanguageID(String languageId) {
+		if (dataTypeManager != null) {
+			throw new UnsupportedOperationException(
+				"setLanguageID not supported when constructed with DataTypeManager");
+		}
+		this.languageId = languageId;
 		return this;
 	}
-	
-	public CParserTask setCompilerID(String compilerID) {
-		this.compilerString = compilerID;
+
+	/**
+	 * Set the compiler spec ID to be used.  This ID must be defined for the specified language.
+	 * 
+	 * NOTE: The language ID must also be set, see {@code #setLanguageID(String)}.
+	 * See language *.ldefs file for defined compiler spec IDs or existing Program info.
+	 * 
+	 * @param compilerSpecId compiler spec ID
+	 * @return this task
+	 * @throws UnsupportedOperationException if task was constructed with a DataTypeManager whose
+	 * existing architecture will be used.
+	 */
+	public CParserTask setCompilerID(String compilerSpecId) {
+		if (dataTypeManager != null) {
+			throw new UnsupportedOperationException(
+				"setLanguageID not supported when constructed with DataTypeManager");
+		}
+		this.compilerSpecId = compilerSpecId;
 		return this;
 	}
-	
+
 	public CParserTask setIncludePaths(String includePaths[]) {
 		this.includePaths = includePaths.clone();
 		return this;
 	}
-	
+
 	public CParserTask setFileNames(String names[]) {
 		this.filenames = names.clone();
 		return this;
 	}
-	
+
 	public CParserTask setOptions(String options) {
 		this.options = options;
 		return this;
@@ -120,96 +151,145 @@ class CParserTask extends Task {
 		return msg;
 	}
 
+	private String getResultMessage(DataTypeManager dtMgr, int initialDtCount) {
+
+		int finalDtCount = dtMgr.getDataTypeCount(true) - initialDtCount;
+
+		String msg = (finalDtCount == 0 ? "No" : Integer.toString(finalDtCount)) +
+			" Data Types added.";
+		if (finalDtCount != 0 && plugin.isOpenInTool(dtMgr)) {
+			msg += "\nCheck the Data Type Manager window for added data types.";
+		}
+		return msg;
+	}
+
+	private String getParseDestination(DataTypeStore archive) {
+		String parseDest = "";
+		if (archive instanceof Program) {
+			parseDest = "Program " + archive.getName();
+		}
+		else if (archive instanceof FileDataTypeArchive fileArchive) {
+			parseDest = "Archive File: " + fileArchive.getPath();
+		}
+		else {
+			parseDest = archive.getName();
+		}
+		return parseDest;
+	}
+
 	@Override
 	public void run(TaskMonitor monitor) {
-		DataTypeManager fileDtMgr = null;
-		try {
-			if (dtMgr == null) {
-				File file = new File(dataFileName);
-				dtMgr = FileDataTypeManager.createFileArchive(file);
-				fileDtMgr = dtMgr;
-			}
 
-			plugin.parse(filenames, includePaths, options, languageString, compilerString, dtMgr, monitor);
-			if (dataFileName != null) {
-				// TODO: does not consider existing datatypes
-				if (dtMgr.getDataTypeCount(true) != 0) {
-					try {
-						((FileDataTypeManager) dtMgr).save();
-						dtMgr.close();
-					}
-					catch (DuplicateFileException e) {
-						Msg.showError(this, plugin.getDialog().getComponent(), "Error During Save",
-							e.getMessage());
-					}
-					catch (Exception e) {
-						Msg.showError(this, plugin.getDialog().getComponent(), "Error During Save",
-							"Could not save to file " + dataFileName, e);
-					}
-					finally {
-						if (dtMgr instanceof FileDataTypeManager) {
-							dtMgr.close();
-						}
-					}
+		FileDataTypeArchive dataFileArchive = null;
+		if (dataFile != null) {
+			try {
+				if ((languageId != null) != (compilerSpecId != null)) {
+					Msg.showError(this, plugin.getDialog().getComponent(), "Archive Failure",
+						"Language/CompilerSpec improperly specified: " + languageId + "/" +
+							compilerSpecId);
+					return;
 				}
-				else {
-					SwingUtilities.invokeLater(new Runnable() {
-						@Override
-						public void run() {
-							// no results, was canceled
-							if (plugin.getParseResults() == null) {
-								return;
-							}
-							MultiLineMessageDialog.showModalMessageDialog(
-								plugin.getDialog().getComponent(), "Parse Errors",
-								"File was not created due to parse errors: " +
-									((FileDataTypeManager) dtMgr).getFilename(),
-								plugin.getFormattedParseMessage(null),
-								MultiLineMessageDialog.INFORMATION_MESSAGE);
-						}
-					});
-				}
+				dataFileArchive = DataTypeArchiveFactory.createFileArchive(dataFile, languageId,
+					compilerSpecId, this);
+			}
+			catch (IOException e) {
+				Msg.showError(this, plugin.getDialog().getComponent(), "Archive Failure",
+					"Failed to create archive datatype manager: " + e.getMessage());
+				return;
 			}
 		}
-		catch (ghidra.app.util.cparser.C.ParseException e) {
-			final String errMsg = e.getMessage();
-			System.err.println(errMsg);
-			SwingUtilities.invokeLater(new Runnable() {
-				@Override
-				public void run() {
-					String msg = getFirstMessageLine(errMsg);
-					MultiLineMessageDialog.showModalMessageDialog(plugin.getDialog().getComponent(),
-						"Parse Errors", msg, plugin.getFormattedParseMessage(errMsg),
-						MultiLineMessageDialog.ERROR_MESSAGE);
+
+		DataTypeManager dtMgr =
+			dataFileArchive != null ? dataFileArchive.getDataTypeManager() : dataTypeManager;
+
+		int initialDtCount = dtMgr.getDataTypeCount(true);
+
+		String archiveDetination = getParseDestination(dtMgr.getDataStore());
+		try {
+
+			CParseResults results = plugin.parse(filenames, includePaths, options, dtMgr, monitor);
+			if (results == null) {
+				return; // cancelled
+			}
+
+			if (dataFileArchive != null && dtMgr.getDataTypeCount(true) != 0) {
+				// If archive created - save to file
+				try {
+					dataFileArchive.save(null, monitor);
 				}
+				catch (DuplicateFileException e) {
+					Msg.showError(this, plugin.getDialog().getComponent(),
+						"C-Parse Error During Save",
+						e.getMessage());
+				}
+				catch (Exception e) {
+					Msg.showError(this, plugin.getDialog().getComponent(),
+						"C-Parse Error During Save",
+						"Could not save to file " + dataFile.getPath(), e);
+				}
+			}
+
+			String msg = getResultMessage(dtMgr, initialDtCount);
+
+			SwingUtilities.invokeLater(() -> {
+				if (!results.successful()) {
+					MultiLineMessageDialog.showModalMessageDialog(
+						plugin.getDialog().getComponent(), "C-Parse Failed",
+						"Failed to parse header file(s) to " + archiveDetination,
+						plugin.getFormattedParseMessage(msg),
+						MultiLineMessageDialog.INFORMATION_MESSAGE);
+				}
+				else {
+					MultiLineMessageDialog.showModalMessageDialog(
+						plugin.getDialog().getComponent(),
+						"C-Parse Completed",
+						"Successfully parsed header file(s) to " + archiveDetination,
+						plugin.getFormattedParseMessage(msg),
+						MultiLineMessageDialog.INFORMATION_MESSAGE);
+				}
+			});
+		}
+		catch (ghidra.app.util.cparser.C.ParseException e) {
+			final String errMsg = getResultMessage(dtMgr, initialDtCount) + "\n\n" + e.getMessage();
+			SwingUtilities.invokeLater(() -> {
+				MultiLineMessageDialog.showMessageDialog(plugin.getDialog().getComponent(),
+					"C-Parse Failed",
+					"Failed to parse header file(s) to " + archiveDetination,
+					plugin.getFormattedParseMessage(errMsg),
+					MultiLineMessageDialog.ERROR_MESSAGE);
 			});
 		}
 		catch (ghidra.app.util.cparser.CPP.ParseException e) {
-			final String errMsg = e.getMessage();
-			System.err.println(errMsg);
-			SwingUtilities.invokeLater(new Runnable() {
-				@Override
-				public void run() {
-					String msg = getFirstMessageLine(errMsg);
-					MultiLineMessageDialog.showModalMessageDialog(plugin.getDialog().getComponent(),
-						"PreProcessor Parse Errors", msg, plugin.getFormattedParseMessage(errMsg),
-						MultiLineMessageDialog.ERROR_MESSAGE);
-				}
+			final String errMsg = getResultMessage(dtMgr, initialDtCount) + "\n\n" + e.getMessage();
+			SwingUtilities.invokeLater(() -> {
+				MultiLineMessageDialog.showMessageDialog(plugin.getDialog().getComponent(),
+					"C-PreProcessor Parse Failed",
+					"Failed to parse header file(s) to " + archiveDetination,
+					plugin.getFormattedParseMessage(errMsg),
+					MultiLineMessageDialog.ERROR_MESSAGE);
 			});
 		}
 		catch (Exception e) {
-			final String errMsg = e.getMessage();
-			String msg = getFirstMessageLine(errMsg);
-			Msg.showError(this, plugin.getDialog().getComponent(), "Error During Parse",
+			final String errMsg = getResultMessage(dtMgr, initialDtCount) + "\n\n" + e.getMessage();
+			Msg.showError(this, plugin.getDialog().getComponent(), "Error During C-Parse",
 				"Parse header files failed" + "\n\nParser Messages:\n" + plugin.getParseMessage(),
 				e);
-			MultiLineMessageDialog.showModalMessageDialog(plugin.getDialog().getComponent(),
-				"Error During Parse", msg, plugin.getFormattedParseMessage(errMsg),
-				MultiLineMessageDialog.ERROR_MESSAGE);
+			SwingUtilities.invokeLater(() -> {
+				MultiLineMessageDialog.showMessageDialog(plugin.getDialog().getComponent(),
+					"Error During C-Parse",
+					"Failed to parse header file(s) to " + archiveDetination,
+					plugin.getFormattedParseMessage(errMsg),
+					MultiLineMessageDialog.ERROR_MESSAGE);
+			});
 		}
 		finally {
-			if (fileDtMgr != null) {
-				fileDtMgr.close();
+			if (dataFileArchive != null) {
+				boolean deleteFile =
+					dataFileArchive.getDataTypeManager().getDataTypeCount(true) == 0;
+				dataFileArchive.release(this);
+				if (deleteFile) {
+					dataFile.delete();
+				}
 			}
 		}
 	}

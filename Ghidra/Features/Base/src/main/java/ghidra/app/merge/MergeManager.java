@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,7 +25,7 @@ import javax.swing.SwingUtilities;
 import generic.util.WindowUtilities;
 import ghidra.framework.data.DomainObjectMergeManager;
 import ghidra.framework.model.DomainFile;
-import ghidra.framework.model.UndoableDomainObject;
+import ghidra.framework.model.DomainObject;
 import ghidra.framework.plugintool.*;
 import ghidra.framework.plugintool.util.PluginException;
 import ghidra.program.model.listing.DomainObjectChangeSet;
@@ -38,17 +38,20 @@ import help.HelpService;
 /** 
  * Top level object that manages each step of the merge/resolve conflicts
  * process.
+ * @param <T> domain object implementation class
+ * @param <C> domain object change set implementation class
  */
-public abstract class MergeManager implements DomainObjectMergeManager {
+public abstract class MergeManager<T extends DomainObject, C extends DomainObjectChangeSet>
+		implements DomainObjectMergeManager {
 
 	protected MergeResolver[] mergeResolvers;
 
-	protected UndoableDomainObject resultDomainObject; // where changes will be merged to
-	protected UndoableDomainObject myDomainObject; // source of changes to be applied
-	protected UndoableDomainObject originalDomainObject; // original version that was checked out
-	protected UndoableDomainObject latestDomainObject; // latest version of the program
-	protected DomainObjectChangeSet latestChangeSet;
-	protected DomainObjectChangeSet myChangeSet;
+	protected T resultDomainObject; // where changes will be merged to
+	protected T myDomainObject; // source of changes to be applied
+	protected T originalDomainObject; // original version that was checked out
+	protected T latestDomainObject; // latest version of the program
+	protected C latestChangeSet;
+	protected C myChangeSet;
 
 	protected MergeManagerPlugin mergePlugin;
 //	protected ListingMergePanelPlugin listingPlugin;
@@ -69,10 +72,9 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 
 //	protected boolean isShowingListingMergePanel = false;
 
-	public MergeManager(UndoableDomainObject resultDomainObject,
-			UndoableDomainObject myDomainObject, UndoableDomainObject originalDomainObject,
-			UndoableDomainObject latestDomainObject, DomainObjectChangeSet latestChangeSet,
-			DomainObjectChangeSet myChangeSet) {
+	public MergeManager(T resultDomainObject, T myDomainObject,
+			T originalDomainObject, T latestDomainObject,
+			C latestChangeSet, C myChangeSet) {
 		this.resultDomainObject = resultDomainObject;
 		this.myDomainObject = myDomainObject;
 		this.originalDomainObject = originalDomainObject;
@@ -96,7 +98,7 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 	 * @return the indicated program version or null if a valid version isn't specified.
 	 * @see MergeConstants
 	 */
-	public UndoableDomainObject getDomainObject(int version) {
+	public T getDomainObject(int version) {
 		switch (version) {
 			case MergeConstants.LATEST:
 				return latestDomainObject;
@@ -209,7 +211,7 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 	}
 
 	protected abstract MergeManagerPlugin createMergeManagerPlugin(ModalPluginTool mergePluginTool,
-			MergeManager multiUserMergeManager, UndoableDomainObject modifiableDomainObject);
+			MergeManager<T, C> multiUserMergeManager, T modifiableDomainObject);
 
 	protected abstract void initializeMerge();
 
@@ -228,26 +230,32 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 	}
 
 	/**
+	 * Display a blocking error popup.  When used from a {@link MergeResolver} task it will 
+	 * prevent that task from exiting/progressing until the error popup is dismissed.
+	 * @param title popup title
+	 * @param msg error message
+	 */
+	public static void showBlockingError(String title, String msg) {
+		Swing.runNow(() -> Msg.showError(MergeManager.class, null, title, msg));
+	}
+
+	/**
+	 * Display a blocking error popup.  When used from a {@link MergeResolver} task it will 
+	 * prevent that task from exiting/progressing until the error popup is dismissed.
+	 * @param title popup title
+	 * @param msg error message
+	 * @param e exception
+	 */
+	public static void showBlockingError(String title, String msg, Exception e) {
+		Swing.runNow(() -> Msg.showError(MergeManager.class, null, title, msg, e));
+	}
+
+	/**
 	 * Enable the apply button according to the "enabled" parameter.
 	 */
 	@Override
 	public void setApplyEnabled(final boolean enabled) {
-		Runnable r = () -> mergePlugin.setApplyEnabled(enabled);
-
-		if (SwingUtilities.isEventDispatchThread()) {
-			r.run();
-		}
-		else {
-			try {
-				SwingUtilities.invokeAndWait(r);
-			}
-			catch (InterruptedException e) {
-			}
-			catch (InvocationTargetException e) {
-				Msg.showError(this, null, "Error in Merge Dialog",
-					"Error setting enablement for Apply button", e);
-			}
-		}
+		Swing.runNow(() -> mergePlugin.setApplyEnabled(enabled));
 	}
 
 	/**
@@ -441,13 +449,8 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 
 			}
 			catch (final Exception e) {
-				SwingUtilities.invokeLater(new Runnable() {
-					@Override
-					public void run() {
-						Msg.showError(this, null, "Error During Merge",
-							"Error occurred in " + mergeResolvers[currentIndex].getName(), e);
-					}
-				});
+				MergeManager.showBlockingError("Error During Merge",
+					"Error occurred in " + mergeResolvers[currentIndex].getName(), e);
 				mergeStatus = false;
 				conflictsResolveCompleted();
 			}
@@ -456,16 +459,6 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 		if (currentIndex < mergeResolvers.length && !isCancelled) {
 			runManager.runLater(r, mergeResolvers[currentIndex].getName(), 250);
 		}
-	}
-
-	/**
-	 * Display error message dialog in a blocking fashion.
-	 * @param originator message originator
-	 * @param title dialog title
-	 * @param msg dialog message
-	 */
-	public static void displayErrorAndWait(Object originator, String title, String msg) {
-		Swing.runNow(() -> Msg.showError(originator, null, title, msg));
 	}
 
 	/**
@@ -559,7 +552,7 @@ public abstract class MergeManager implements DomainObjectMergeManager {
 	 * @param infoType the string indicating the type of resolve information
 	 * @param infoObject the object for the named string. This information is
 	 * determined by the merge manager that creates it.
-	 * @see getResolveInformation(String)
+	 * @see #getResolveInformation(String)
 	 */
 	@Override
 	public void setResolveInformation(String infoType, Object infoObject) {

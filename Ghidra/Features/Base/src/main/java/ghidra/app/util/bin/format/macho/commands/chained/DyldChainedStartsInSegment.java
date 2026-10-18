@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,8 +20,14 @@ import java.io.IOException;
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.StructConverter;
 import ghidra.app.util.bin.format.macho.MachConstants;
+import ghidra.app.util.bin.format.macho.MachHeader;
+import ghidra.app.util.importer.MessageLog;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
+import ghidra.program.model.listing.Program;
+import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
+import ghidra.util.task.TaskMonitor;
 
 /**
  * Represents a dyld_chained_starts_in_segment structure.
@@ -54,6 +60,27 @@ public class DyldChainedStartsInSegment implements StructConverter {
 		pageCount = reader.readNextShort();
 
 		pageStarts = reader.readNextShortArray(pageCount);
+	}
+
+	/**
+	 * Marks up this data structure with data structures and comments
+	 * 
+	 * @param program The {@link Program} to mark up
+	 * @param address The {@link Address} of this data structure
+	 * @param header The Mach-O header
+	 * @param monitor A cancellable task monitor
+	 * @param log The log
+	 * @throws CancelledException if the user cancelled the operation
+	 */
+	public void markup(Program program, Address address, MachHeader header, TaskMonitor monitor,
+			MessageLog log) throws CancelledException {
+		try {
+			// TODO?
+		}
+		catch (Exception e) {
+			log.appendMsg(DyldChainedStartsInSegment.class.getSimpleName(),
+				"Failed to markup dyld_chained_starts_in_segment");
+		}
 	}
 
 	@Override

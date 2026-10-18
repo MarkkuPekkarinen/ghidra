@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,12 +21,13 @@ import java.util.List;
 import db.*;
 import db.util.ErrorHandler;
 import ghidra.docking.settings.SettingsDefinition;
+import ghidra.framework.data.OpenMode;
 import ghidra.program.database.map.AddressMap;
-import ghidra.program.model.address.Address;
-import ghidra.program.model.address.KeyRange;
+import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Data;
 import ghidra.util.Lock;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.VersionException;
@@ -49,7 +50,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 	 * Constructor
 	 * @param handle open database  handle
 	 * @param addrMap the address map (instance settings not supported if null)
-	 * @param openMode the program open mode (see {@link DBConstants})
+	 * @param openMode the program open mode
 	 * @param tablePrefix DB table prefix to be applied to all associated table names.  This 
 	 *                    need only be specified when using multiple instances with the same
 	 *                    DB handle (null or empty string for no-prefix).
@@ -60,33 +61,29 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 	 * @throws VersionException if the database does not match the expected version.
 	 * @throws IOException if a database IO error occurs.
 	 */
-	protected ProgramBasedDataTypeManagerDB(DBHandle handle, AddressMap addrMap, int openMode,
+	protected ProgramBasedDataTypeManagerDB(DBHandle handle, AddressMap addrMap, OpenMode openMode,
 			String tablePrefix, ErrorHandler errHandler, Lock lock, TaskMonitor monitor)
 			throws CancelledException, VersionException, IOException {
-		super(handle, addrMap, openMode, tablePrefix, errHandler, lock, monitor);
+		super(handle, openMode, addrMap, tablePrefix, errHandler, lock, monitor);
 	}
 
-	protected void initializeOtherAdapters(int openMode, TaskMonitor monitor)
+	@Override
+	protected void initializeOtherAdapters(OpenMode openMode, TaskMonitor monitor)
 			throws CancelledException, IOException, VersionException {
 		if (addrMap != null) {
-			instanceSettingsAdapter =
-				SettingsDBAdapter.getAdapter(tablePrefix + INSTANCE_SETTINGS_TABLE_NAME, dbHandle,
-					openMode, addrMap, monitor);
+			instanceSettingsAdapter = SettingsDBAdapter.getAdapter(
+				tablePrefix + INSTANCE_SETTINGS_TABLE_NAME, dbHandle, openMode, addrMap, monitor);
 		}
 	}
 
 	@Override
 	public void invalidateCache() {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			super.invalidateCache();
 			if (instanceSettingsAdapter != null) {
 				instanceSettingsAdapter.invalidateNameCache();
 				instanceSettingsCache.clear();
 			}
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -97,8 +94,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 	abstract protected void dataSettingChanged(Address address);
 
 	@Override
-	public boolean isChangeAllowed(Data data,
-			SettingsDefinition settingsDefinition) {
+	public boolean isChangeAllowed(Data data, SettingsDefinition settingsDefinition) {
 		if (settingsDefinition instanceof TypeDefSettingsDefinition) {
 			return false;
 		}
@@ -180,8 +176,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		if (instanceSettingsAdapter == null) {
 			throw new UnsupportedOperationException();
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			Address dataAddr = getDataSettingsAddress(data);
 			instanceSettingsCache.remove(dataAddr, name);
 			long addr = addrMap.getKey(dataAddr, false);
@@ -194,10 +189,16 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 			errHandler.dbError(e);
 
 		}
-		finally {
-			lock.release();
-		}
 		return false;
+	}
+
+	/**
+	 * Returns the associated AddressMap used by this datatype manager.
+	 * @return the AddressMap used by this datatype manager or null if 
+	 * one has not be established.
+	 */
+	public AddressMap getAddressMap() {
+		return addrMap;
 	}
 
 	@Override
@@ -205,8 +206,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		if (instanceSettingsAdapter == null) {
 			throw new UnsupportedOperationException();
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			instanceSettingsCache.clear();
 			boolean changed = false;
 			Address dataAddr = getDataSettingsAddress(data);
@@ -223,9 +223,6 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 			errHandler.dbError(e);
 
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
@@ -236,8 +233,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		}
 
 		DBHandle scratchPad = null;
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			instanceSettingsCache.clear();
 			scratchPad = dbHandle.getScratchPad();
 			Table tmpTable = scratchPad.createTable(INSTANCE_SETTINGS_TABLE_NAME,
@@ -261,9 +257,8 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 				monitor.checkCancelled();
 				DBRecord rec = iter.next();
 				// update address key (i.e., settings association ID) and re-introduce into table
-				Address addr = addrMap
-						.decodeAddress(
-							rec.getLongValue(SettingsDBAdapter.SETTINGS_ASSOCIATION_ID_COL));
+				Address addr = addrMap.decodeAddress(
+					rec.getLongValue(SettingsDBAdapter.SETTINGS_ASSOCIATION_ID_COL));
 				long offset = addr.subtract(fromAddr);
 				addr = toAddr.add(offset);
 				rec.setLongValue(SettingsDBAdapter.SETTINGS_ASSOCIATION_ID_COL,
@@ -284,7 +279,6 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 					// ignore
 				}
 			}
-			lock.release();
 		}
 	}
 
@@ -293,16 +287,12 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		if (instanceSettingsAdapter == null) {
 			throw new UnsupportedOperationException();
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			Address dataAddr = getDataSettingsAddress(data);
 			return instanceSettingsAdapter.getSettingsNames(addrMap.getKey(dataAddr, false));
 		}
 		catch (IOException e) {
 			errHandler.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return new String[0];
 	}
@@ -312,7 +302,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		if (instanceSettingsAdapter == null) {
 			throw new UnsupportedOperationException();
 		}
-		try {
+		try (Closeable c = lock.read()) {
 			Address dataAddr = getDataSettingsAddress(data);
 			return instanceSettingsAdapter
 					.getSettingsKeys(addrMap.getKey(dataAddr, false)).length == 0;
@@ -328,8 +318,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 
 		boolean wasChanged = false;
 
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			if (instanceSettingsAdapter == null) {
 				throw new UnsupportedOperationException();
 			}
@@ -350,9 +339,6 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		}
 		catch (IOException e) {
 			errHandler.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 
 		return wasChanged;
@@ -377,8 +363,7 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 	}
 
 	private SettingDB getSettingDB(Data data, String name) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			if (instanceSettingsAdapter == null) {
 				throw new UnsupportedOperationException();
 			}
@@ -398,9 +383,6 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		catch (IOException e) {
 			errHandler.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return null;
 	}
 
@@ -410,8 +392,8 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		if (instanceSettingsAdapter == null) {
 			throw new UnsupportedOperationException();
 		}
-		lock.acquire();
-		try {
+		AddressRange.checkValidRange(startAddr, endAddr);
+		try (Closeable c = lock.write()) {
 			List<?> addrKeyRanges = addrMap.getKeyRanges(startAddr, endAddr, false);
 			int cnt = addrKeyRanges.size();
 			for (int i = 0; i < cnt; i++) {
@@ -424,18 +406,18 @@ public abstract class ProgramBasedDataTypeManagerDB extends DataTypeManagerDB
 		}
 		finally {
 			instanceSettingsCache.clear();
-			lock.release();
 		}
 	}
 
-	private static Address getDataSettingsAddress(Data data) {
-		Data parent = data.getParent();
-		if (parent != null) {
+	public static Address getDataSettingsAddress(Data data) {
+		Address addr = data.getAddress();
+		for (Data parent = data.getParent(); parent != null; parent = parent.getParent()) {
 			DataType dataType = parent.getDataType();
-			if (dataType instanceof Array) {
-				return getDataSettingsAddress(parent);
+			if (!(dataType instanceof Array)) {
+				break;
 			}
+			addr = parent.getAddress();
 		}
-		return data.getAddress();
+		return addr;
 	}
 }

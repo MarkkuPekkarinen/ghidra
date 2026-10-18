@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,8 +27,9 @@ import ghidra.app.services.DataTypeManagerService;
 import ghidra.framework.Application;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.database.ProgramDB;
-import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.dtarchive.FileDataTypeArchive;
 import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
+import ghidra.test.ToyProgramBuilder;
 import ghidra.util.task.TaskMonitor;
 import utilities.util.FileUtilities;
 
@@ -67,33 +68,33 @@ public class ArchiveRemappedHeadlessTest extends AbstractGhidraHeadlessIntegrati
 	}
 
 	private ProgramDB buildProgram() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("notepad", ProgramBuilder._TOY, this);
+		ProgramBuilder builder = new ToyProgramBuilder();
 		return builder.getProgram();
 	}
 
 	@Test
 	public void testGetRemappedArchive() throws Exception {
 
-		DataTypeManager vs9dtm = service.openDataTypeArchive("windows_VS9");
-		assertNotNull(vs9dtm);
+		FileDataTypeArchive vs9Archive = service.openFileArchive("windows_VS9", TaskMonitor.DUMMY);
+		assertNotNull(vs9Archive);
 		try {
-			assertEquals("windows_VS9", vs9dtm.getName());
+			assertEquals("windows_VS9", vs9Archive.getName());
 		}
 		finally {
-			vs9dtm.close();
+			service.closeArchive(vs9Archive);
 		}
 
 		// Remove archive to force use of remapping
 		vs9ArchiveFile.delete();
 		assertFalse("windows_VS9.gdt should not exist", vs9ArchiveFile.exists());
 
-		DataTypeManager vs12dtm = service.openDataTypeArchive("windows_VS9");
-		assertNotNull(vs12dtm);
+		FileDataTypeArchive vs12Archive = service.openFileArchive("windows_VS9", TaskMonitor.DUMMY);
+		assertNotNull(vs12Archive);
 		try {
-			assertEquals("windows_vs12_32", vs12dtm.getName());
+			assertEquals("windows_vs12_32", vs12Archive.getName());
 		}
 		finally {
-			vs12dtm.close();
+			service.closeArchive(vs12Archive);
 		}
 	}
 

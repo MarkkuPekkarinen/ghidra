@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,30 +18,40 @@
 
 namespace ghidra {
 
+/// \param tp is the specialized constant type: \b j_start, \b j_next, \b j_next2, \b j_flowdest, \b j_curspace, etc.
 ConstTpl::ConstTpl(const_type tp)
 
-{				// Constructor for relative jump constants and uniques
+{
   type = tp;
 }
 
+/// \param tp is constant type: either \b real or \b j_relative
+/// \param val is the constant value
 ConstTpl::ConstTpl(const_type tp,uintb val)
 
-{				// Constructor for real constants
+{
   type = tp;
   value_real = val;
   value.handle_index = 0;
   select = v_space;
 }
 
+/// \param tp is the constant type:  must be \b handle
+/// \param ht is the index of the sub-constructor computing the \b handle value
+/// \param vf is the part (space, offset, or size) of the computed value to encode as the constant
 ConstTpl::ConstTpl(const_type tp,int4 ht,v_field vf)
 
-{				// Constructor for handle constant
+{
   type = handle;
   value.handle_index = ht;
   select = vf;
   value_real = 0;
 }
 
+/// \param tp is the constant type: must be \b handle
+/// \param ht is the index of the sub-constructor computing the \b handle value
+/// \param vf is the part of the computed value to encode: must be \b v_offset_plus
+/// \param plus is the additional constant value to add to the \b handle offset
 ConstTpl::ConstTpl(const_type tp,int4 ht,v_field vf,uintb plus)
 
 {
@@ -51,6 +61,7 @@ ConstTpl::ConstTpl(const_type tp,int4 ht,v_field vf,uintb plus)
   value_real = plus;
 }
 
+/// \param sid is the address space to encode
 ConstTpl::ConstTpl(AddrSpace *sid)
 
 {
@@ -74,6 +85,9 @@ bool ConstTpl::isUniqueSpace(void) const
   return false;
 }
 
+/// The constants must be equal in both value and type.
+/// \param op2 is the constant to compare with \b this
+/// \return \b true if \b this is equal to \b op2, \b false otherwise
 bool ConstTpl::operator==(const ConstTpl &op2) const
 
 {
@@ -93,6 +107,8 @@ bool ConstTpl::operator==(const ConstTpl &op2) const
   return true;
 }
 
+/// \param op2 is the constant to compare with \b this
+/// \return \b true if \b this should be ordered before \b op2
 bool ConstTpl::operator<(const ConstTpl &op2) const
 
 {
@@ -113,11 +129,13 @@ bool ConstTpl::operator<(const ConstTpl &op2) const
   return false;
 }
 
+/// If this is a \b handle associated with a dynamically computed value, this method returns
+/// the properties of the temporary storage used to hold the computed value.
+/// \param walker is the context for the parse of a single instruction
+/// \return the computed constant value
 uintb ConstTpl::fix(const ParserWalker &walker) const
 
-{ // Get the value of the ConstTpl in context
-  // NOTE: if the property is dynamic this returns the property
-  // of the temporary storage
+{
   switch(type) {
   case j_start:
     return walker.getAddr().getOffset(); // Fill in starting address placeholder with real address
@@ -208,9 +226,13 @@ AddrSpace *ConstTpl::fixSpace(const ParserWalker &walker) const
   throw LowlevelError("ConstTpl is not a spaceid as expected");
 }
 
+/// If \b this represents an address space, including if \b this is the address space
+/// piece of a \b handle, replace the address space portion of the FixedHandle with \b this.
+/// \param hand is the FixedHandle to replace
+/// \param walker is the current context
 void ConstTpl::fillinSpace(FixedHandle &hand,const ParserWalker &walker) const
 
-{ // Fill in the space portion of a FixedHandle, base on this ConstTpl
+{
   switch(type) {
   case j_curspace:
     hand.space = walker.getCurSpace();
@@ -236,9 +258,14 @@ void ConstTpl::fillinSpace(FixedHandle &hand,const ParserWalker &walker) const
   throw LowlevelError("ConstTpl is not a spaceid as expected");
 }
 
+/// First, \b this is \e fixed, based on the current context.  Then the final fixed
+/// value is copied into the FixedHandle.  If \b this itself is a \b handle, the
+/// entire fixed handle is copied into the FixedHandle.
+/// \param hand is the FixedHandle to copy into
+/// \param walker is the context to fix against
 void ConstTpl::fillinOffset(FixedHandle &hand,const ParserWalker &walker) const
 
-{ // Fillin the offset portion of a FixedHandle, based on this ConstTpl
+{
   // If the offset value is dynamic, indicate this in the handle
   // we don't just fill in the temporary variable offset
   // we assume hand.space is already filled in
@@ -256,9 +283,12 @@ void ConstTpl::fillinOffset(FixedHandle &hand,const ParserWalker &walker) const
   }
 }
 
+/// If \b this is not a \b handle, do nothing. Otherwise, copy the details of the indexed HandleTpl into \b this.
+/// Copy the piece of the HandleTpl specified by \b select.
+/// \param params is the array of HandleTpl
 void ConstTpl::transfer(const vector<HandleTpl *> &params)
 
-{				// Replace old handles with new handles
+{
   if (type != handle) return;
   HandleTpl *newhandle = params[value.handle_index];
 
@@ -290,39 +320,9 @@ void ConstTpl::transfer(const vector<HandleTpl *> &params)
   }
 }
 
-void ConstTpl::printHandleSelector(ostream &s,v_field val)
-
-{
-  switch(val) {
-  case v_space:
-    s << "space";
-    break;
-  case v_offset:
-    s << "offset";
-    break;
-  case v_size:
-    s << "size";
-    break;
-  case v_offset_plus:
-    s << "offset_plus";
-    break;
-  }
-}
-
-ConstTpl::v_field ConstTpl::readHandleSelector(const string &name)
-
-{
-  if (name == "space")
-    return v_space;
-  if (name == "offset")
-    return v_offset;
-  if (name == "size")
-    return v_size;
-  if (name == "offset_plus")
-    return v_offset_plus;
-  throw LowlevelError("Bad handle selector");
-}
-
+/// This is used to help reorder sub-constructors.
+/// If \b this is a \b handle, its index is translated by looking up a new value in the given array of indices.
+/// \param handmap is the given array of new \b handle indices
 void ConstTpl::changeHandleIndex(const vector<int4> &handmap)
 
 {
@@ -330,131 +330,146 @@ void ConstTpl::changeHandleIndex(const vector<int4> &handmap)
     value.handle_index = handmap[value.handle_index];
 }
 
-void ConstTpl::saveXml(ostream &s) const
+/// \param encoder is the output stream
+void ConstTpl::encode(Encoder &encoder) const
 
 {
-  s << "<const_tpl type=\"";
   switch(type) {
   case real:
-    s << "real\" val=\"0x" << hex << value_real << "\"/>";
+    encoder.openElement(sla::ELEM_CONST_REAL);
+    encoder.writeUnsignedInteger(sla::ATTRIB_VAL, value_real);
+    encoder.closeElement(sla::ELEM_CONST_REAL);
     break;
   case handle:
-    s << "handle\" val=\"" << dec << value.handle_index << "\" ";
-    s << "s=\"";
-    printHandleSelector(s,select);
-    s << "\"";
+    encoder.openElement(sla::ELEM_CONST_HANDLE);
+    encoder.writeSignedInteger(sla::ATTRIB_VAL, value.handle_index);
+    encoder.writeSignedInteger(sla::ATTRIB_S, select);
     if (select == v_offset_plus)
-      s << " plus=\"0x" << hex << value_real << "\"";
-    s << "/>";
+      encoder.writeUnsignedInteger(sla::ATTRIB_PLUS, value_real);
+    encoder.closeElement(sla::ELEM_CONST_HANDLE);
     break;
   case j_start:
-    s << "start\"/>";
+    encoder.openElement(sla::ELEM_CONST_START);
+    encoder.closeElement(sla::ELEM_CONST_START);
     break;
   case j_next:
-    s << "next\"/>";
+    encoder.openElement(sla::ELEM_CONST_NEXT);
+    encoder.closeElement(sla::ELEM_CONST_NEXT);
     break;
   case j_next2:
-    s << "next2\"/>";
+    encoder.openElement(sla::ELEM_CONST_NEXT2);
+    encoder.closeElement(sla::ELEM_CONST_NEXT2);
     break;
   case j_curspace:
-    s << "curspace\"/>";
+    encoder.openElement(sla::ELEM_CONST_CURSPACE);
+    encoder.closeElement(sla::ELEM_CONST_CURSPACE);
     break;
   case j_curspace_size:
-    s << "curspace_size\"/>";
+    encoder.openElement(sla::ELEM_CONST_CURSPACE_SIZE);
+    encoder.closeElement(sla::ELEM_CONST_CURSPACE_SIZE);
     break;
   case spaceid:
-    s << "spaceid\" name=\"" << value.spaceid->getName() << "\"/>";
+    encoder.openElement(sla::ELEM_CONST_SPACEID);
+    encoder.writeSpace(sla::ATTRIB_SPACE, value.spaceid);
+    encoder.closeElement(sla::ELEM_CONST_SPACEID);
     break;
   case j_relative:
-    s << "relative\" val=\"0x" << hex << value_real << "\"/>";
+    encoder.openElement(sla::ELEM_CONST_RELATIVE);
+    encoder.writeUnsignedInteger(sla::ATTRIB_VAL, value_real);
+    encoder.closeElement(sla::ELEM_CONST_RELATIVE);
     break;
   case j_flowref:
-    s << "flowref\"/>";
+    encoder.openElement(sla::ELEM_CONST_FLOWREF);
+    encoder.closeElement(sla::ELEM_CONST_FLOWREF);
     break;
   case j_flowref_size:
-    s << "flowref_size\"/>";
+    encoder.openElement(sla::ELEM_CONST_FLOWREF_SIZE);
+    encoder.closeElement(sla::ELEM_CONST_FLOWREF_SIZE);
     break;
   case j_flowdest:
-    s << "flowdest\"/>";
+    encoder.openElement(sla::ELEM_CONST_FLOWDEST);
+    encoder.closeElement(sla::ELEM_CONST_FLOWDEST);
     break;
   case j_flowdest_size:
-    s << "flowdest_size\"/>";
+    encoder.openElement(sla::ELEM_CONST_FLOWDEST_SIZE);
+    encoder.closeElement(sla::ELEM_CONST_FLOWDEST_SIZE);
     break;
   }
 }
 
-void ConstTpl::restoreXml(const Element *el,const AddrSpaceManager *manage)
+/// \param decoder is the input stream
+void ConstTpl::decode(Decoder &decoder)
 
 {
-  const string &typestring(el->getAttributeValue("type"));
-  if (typestring == "real") {
+  uint4 el = decoder.openElement();
+  if (el == sla::ELEM_CONST_REAL) {
     type = real;
-    istringstream s(el->getAttributeValue("val"));
-    s.unsetf(ios::dec | ios::hex | ios::oct);
-    s >> value_real;
+    value_real = decoder.readUnsignedInteger(sla::ATTRIB_VAL);
   }
-  else if (typestring=="handle") {
+  else if (el == sla::ELEM_CONST_HANDLE) {
     type = handle;
-    istringstream s(el->getAttributeValue("val"));
-    s.unsetf(ios::dec | ios::hex | ios::oct);
-    s >> value.handle_index;
-    select = readHandleSelector(el->getAttributeValue("s"));
+    value.handle_index = decoder.readSignedInteger(sla::ATTRIB_VAL);
+    uint4 selectInt = decoder.readSignedInteger(sla::ATTRIB_S);
+    if (selectInt > v_offset_plus)
+      throw DecoderError("Bad handle selector encoding");
+    select = (v_field)selectInt;
     if (select == v_offset_plus) {
-      istringstream s2(el->getAttributeValue("plus"));
-      s2.unsetf(ios::dec | ios::hex | ios::oct);
-      s2 >> value_real;
+      value_real = decoder.readUnsignedInteger(sla::ATTRIB_PLUS);
     }
   }
-  else if (typestring=="start") {
+  else if (el == sla::ELEM_CONST_START) {
     type = j_start;
   }
-  else if (typestring=="next") {
+  else if (el == sla::ELEM_CONST_NEXT) {
     type = j_next;
   }
-  else if (typestring=="next2") {
+  else if (el == sla::ELEM_CONST_NEXT2) {
     type = j_next2;
   }
-  else if (typestring=="curspace") {
+  else if (el == sla::ELEM_CONST_CURSPACE) {
     type = j_curspace;
   }
-  else if (typestring=="curspace_size") {
+  else if (el == sla::ELEM_CONST_CURSPACE_SIZE) {
     type = j_curspace_size;
   }
-  else if (typestring=="spaceid") {
+  else if (el == sla::ELEM_CONST_SPACEID) {
     type = spaceid;
-    value.spaceid = manage->getSpaceByName(el->getAttributeValue("name"));
+    value.spaceid = decoder.readSpace(sla::ATTRIB_SPACE);
   }
-  else if (typestring=="relative") {
+  else if (el == sla::ELEM_CONST_RELATIVE) {
     type = j_relative;
-    istringstream s(el->getAttributeValue("val"));
-    s.unsetf(ios::dec | ios::hex | ios::oct);
-    s >> value_real;
+    value_real = decoder.readUnsignedInteger(sla::ATTRIB_VAL);
   }
-  else if (typestring == "flowref") {
+  else if (el == sla::ELEM_CONST_FLOWREF) {
     type = j_flowref;
   }
-  else if (typestring == "flowref_size") {
+  else if (el == sla::ELEM_CONST_FLOWREF_SIZE) {
     type = j_flowref_size;
   }
-  else if (typestring == "flowdest") {
+  else if (el == sla::ELEM_CONST_FLOWDEST) {
     type = j_flowdest;
   }
-  else if (typestring == "flowdest_size") {
+  else if (el == sla::ELEM_CONST_FLOWDEST_SIZE) {
     type = j_flowdest_size;
   }
   else
     throw LowlevelError("Bad constant type");
+  decoder.closeElement(el);
 }
 
+/// \param hand is the index of the sub-constructor computing the \b handle value
+/// \param zerosize is \b true if the size of \b this should be disassociated from the computed \b handle and forced to zero
 VarnodeTpl::VarnodeTpl(int4 hand,bool zerosize) :
   space(ConstTpl::handle,hand,ConstTpl::v_space), offset(ConstTpl::handle,hand,ConstTpl::v_offset), size(ConstTpl::handle,hand,ConstTpl::v_size)
-{				// Varnode built from a handle
-				// if zerosize is true, set the size constant to zero
+{
   if (zerosize)
-    size = ConstTpl(ConstTpl::real,0);
+    size = ConstTpl(ConstTpl::real,0);	// if zerosize is true, set the size constant to zero
   unnamed_flag = false;
 }
 
+/// \param sp represents the address space
+/// \param off represents the offset into the address space
+/// \param sz represents the number of bytes
 VarnodeTpl::VarnodeTpl(const ConstTpl &sp,const ConstTpl &off,const ConstTpl &sz) :
   space(sp), offset(off), size(sz)
 
@@ -462,9 +477,10 @@ VarnodeTpl::VarnodeTpl(const ConstTpl &sp,const ConstTpl &off,const ConstTpl &sz
   unnamed_flag = false;
 }
 
+/// \param vn is the VarnodeTpl to copy
 VarnodeTpl::VarnodeTpl(const VarnodeTpl &vn)
   : space(vn.space), offset(vn.offset), size(vn.size)
-{				// A clone of the VarnodeTpl
+{
   unnamed_flag = vn.unnamed_flag;
 }
 
@@ -476,6 +492,10 @@ bool VarnodeTpl::isLocalTemp(void) const
   return true;
 }
 
+/// If the offset is computed by a sub-constructor using a p-code LOAD into a temporary register,
+/// then return \b true.  If the sub-constructor does not use a LOAD, or \b this is not a \b handle, return \b false.
+/// \param walker is the instruction context (used to look-up the specific sub-constructor)
+/// \return \b true if \b this is a dynamic value computed by a sub-constructor
 bool VarnodeTpl::isDynamic(const ParserWalker &walker) const
 
 {
@@ -487,6 +507,10 @@ bool VarnodeTpl::isDynamic(const ParserWalker &walker) const
   return (hand.offset_space != (AddrSpace *)0);
 }
 
+/// For any piece of \b this (address space,offset,size) that is a handle, copy the HandleTpl with matching index.
+/// If \b this needs an additional constant added to its final offset piece, return that constant.
+/// \param params is the given array of HandleTpl to match against
+/// \return any additional constant that still needs to be added in, or -1 otherwise
 int4 VarnodeTpl::transfer(const vector<HandleTpl *> &params)
 
 {
@@ -510,6 +534,10 @@ int4 VarnodeTpl::transfer(const vector<HandleTpl *> &params)
   return -1;
 }
 
+/// This is used to help reorder sub-constructors.
+/// For each piece of \b this, if it is a \b handle, its index is translated by looking up a new value in the
+/// given array of indices.
+/// \param handmap is the given array of new \b handle indices
 void VarnodeTpl::changeHandleIndex(const vector<int4> &handmap)
 
 {
@@ -518,11 +546,15 @@ void VarnodeTpl::changeHandleIndex(const vector<int4> &handmap)
   size.changeHandleIndex(handmap);
 }
 
+/// The offset piece must be \b v_offset_plus, indicating \b this is truncated.
+/// Compute the final form of the truncation given the final size and endianness.
+/// Also check that the truncation is in bounds for the given final size.
+/// \param sz is the final size of the Varnode in bytes
+/// \param isbigendian is \b true if the address space is big endian.
+/// \return \b true if the truncation is in bounds
 bool VarnodeTpl::adjustTruncation(int4 sz,bool isbigendian)
 
-{ // We know this->offset is an offset_plus, check that the truncation is in bounds (given -sz-)
-  // adjust plus for endianness if necessary
-  // return true if truncation is in bounds
+{
   if (size.getType() != ConstTpl::real)
     return false;
   int4 numbytes = (int4) size.getReal();
@@ -544,29 +576,47 @@ bool VarnodeTpl::adjustTruncation(int4 sz,bool isbigendian)
   return true;
 }
 
-void VarnodeTpl::saveXml(ostream &s) const
+/// \param encoder is the output stream
+void VarnodeTpl::encode(Encoder &encoder) const
 
 {
-  s << "<varnode_tpl>";
-  space.saveXml(s);
-  offset.saveXml(s);
-  size.saveXml(s);
-  s << "</varnode_tpl>\n";
+  encoder.openElement(sla::ELEM_VARNODE_TPL);
+  space.encode(encoder);
+  offset.encode(encoder);
+  size.encode(encoder);
+  encoder.closeElement(sla::ELEM_VARNODE_TPL);
 }
 
-void VarnodeTpl::restoreXml(const Element *el,const AddrSpaceManager *manage)
+/// \param decoder is the input stream
+void VarnodeTpl::decode(Decoder &decoder)
 
 {
-  const List &list(el->getChildren());
-  List::const_iterator iter;
-  iter = list.begin();
-  space.restoreXml(*iter,manage);
-  ++iter;
-  offset.restoreXml(*iter,manage);
-  ++iter;
-  size.restoreXml(*iter,manage);
+  uint4 el = decoder.openElement(sla::ELEM_VARNODE_TPL);
+  space.decode(decoder);
+  offset.decode(decoder);
+  size.decode(decoder);
+  decoder.closeElement(el);
 }
 
+/// \param op2 is the VarnodeTpl to compare with \b this
+/// \return \b true if address space, offset, and size or all equal
+bool VarnodeTpl::operator==(const VarnodeTpl &op2) const
+
+{
+  return space==op2.space && offset==op2.offset && size==op2.size;
+}
+
+/// \param op2 is the VarnodeTpl to compare with \b this
+/// \return \b true if address space, offset, or size is not equal
+bool VarnodeTpl::operator!=(const VarnodeTpl &op2) const
+
+{
+  return !(*this == op2);
+}
+
+/// Order by address space, then offset, then size
+/// \param op2 is the VarnodeTpl to order with \b this
+/// \return \b true if \b this should come before \b op2
 bool VarnodeTpl::operator<(const VarnodeTpl &op2) const
 
 {
@@ -576,22 +626,32 @@ bool VarnodeTpl::operator<(const VarnodeTpl &op2) const
   return false;
 }
 
+/// The constructed HandleTpl is not dynamic and matches the given VarnodeTpl
+/// \param vn is the given VarnodeTpl
 HandleTpl::HandleTpl(const VarnodeTpl *vn)
 
-{				// Build handle which indicates given varnode
+{
   space = vn->getSpace();
   size = vn->getSize();
   ptrspace = ConstTpl(ConstTpl::real,0);
   ptroffset = vn->getOffset();
 }
 
+/// \param spc is the address space
+/// \param sz is the size
+/// \param vn is the varnode representing the dynamic pointer
+/// \param t_space is the address space of the temporary register
+/// \param t_offset is the offset of the temporary register
 HandleTpl::HandleTpl(const ConstTpl &spc,const ConstTpl &sz,const VarnodeTpl *vn,
 		       AddrSpace *t_space,uintb t_offset) :
   space(spc), size(sz), ptrspace(vn->getSpace()), ptroffset(vn->getOffset()), ptrsize(vn->getSize()),
   temp_space(t_space), temp_offset(ConstTpl::real,t_offset)
-{				// Build handle to thing being pointed at by -vn-
+{
 }
 
+/// The final constant values for \b this are computed in context and stored in the given FixedHandle object.
+/// \param hand is FixedHandle holding the final \b handle constants
+/// \param walker is the context used to fix constants
 void HandleTpl::fix(FixedHandle &hand,const ParserWalker &walker) const
 
 {
@@ -621,6 +681,10 @@ void HandleTpl::fix(FixedHandle &hand,const ParserWalker &walker) const
   }
 }
 
+/// This is used to help reorder sub-constructors.
+/// For each piece of \b this, if it is a \b handle, its index is translated by looking up a new value in the
+/// given array of indices.
+/// \param handmap is the given array of new \b handle indices
 void HandleTpl::changeHandleIndex(const vector<int4> &handmap)
 
 {
@@ -633,44 +697,40 @@ void HandleTpl::changeHandleIndex(const vector<int4> &handmap)
   temp_offset.changeHandleIndex(handmap);
 }
 
-void HandleTpl::saveXml(ostream &s) const
+/// \param encoder is the output stream
+void HandleTpl::encode(Encoder &encoder) const
 
 {
-  s << "<handle_tpl>";
-  space.saveXml(s);
-  size.saveXml(s);
-  ptrspace.saveXml(s);
-  ptroffset.saveXml(s);
-  ptrsize.saveXml(s);
-  temp_space.saveXml(s);
-  temp_offset.saveXml(s);
-  s << "</handle_tpl>\n";
+  encoder.openElement(sla::ELEM_HANDLE_TPL);
+  space.encode(encoder);
+  size.encode(encoder);
+  ptrspace.encode(encoder);
+  ptroffset.encode(encoder);
+  ptrsize.encode(encoder);
+  temp_space.encode(encoder);
+  temp_offset.encode(encoder);
+  encoder.closeElement(sla::ELEM_HANDLE_TPL);
 }
 
-void HandleTpl::restoreXml(const Element *el,const AddrSpaceManager *manage)
+/// \param decoder is the input stream
+void HandleTpl::decode(Decoder &decoder)
 
 {
-  const List &list(el->getChildren());
-  List::const_iterator iter;
-  iter = list.begin();
-  space.restoreXml(*iter,manage);
-  ++iter;
-  size.restoreXml(*iter,manage);
-  ++iter;
-  ptrspace.restoreXml(*iter,manage);
-  ++iter;
-  ptroffset.restoreXml(*iter,manage);
-  ++iter;
-  ptrsize.restoreXml(*iter,manage);
-  ++iter;
-  temp_space.restoreXml(*iter,manage);
-  ++iter;
-  temp_offset.restoreXml(*iter,manage);
+  uint4 el = decoder.openElement(sla::ELEM_HANDLE_TPL);
+  space.decode(decoder);
+  size.decode(decoder);
+  ptrspace.decode(decoder);
+  ptroffset.decode(decoder);
+  ptrsize.decode(decoder);
+  temp_space.decode(decoder);
+  temp_offset.decode(decoder);
+  decoder.closeElement(el);
 }
 
+/// An OpTpl owns its VarnodeTpl
 OpTpl::~OpTpl(void)
 
-{				// An OpTpl owns its varnode_tpls
+{
   if (output != (VarnodeTpl *)0)
     delete output;
   vector<VarnodeTpl *>::iterator iter;
@@ -680,7 +740,7 @@ OpTpl::~OpTpl(void)
 
 bool OpTpl::isZeroSize(void) const
 
-{				// Return if any input or output has zero size
+{
   vector<VarnodeTpl *>::const_iterator iter;
 
   if (output != (VarnodeTpl *)0)
@@ -690,15 +750,19 @@ bool OpTpl::isZeroSize(void) const
   return false;
 }
 
+/// \param index is the index of the input to remove
 void OpTpl::removeInput(int4 index)
 
-{ // Remove the indicated input
+{
   delete input[index];
   for(int4 i=index;i<input.size()-1;++i)
     input[i] = input[i+1];
   input.pop_back();
 }
 
+/// This is used to help reorder sub-constructors.
+/// Each input and output VarnodeTpl is remapped using the given array of \b handle indices
+/// \param handmap is the given array of new \b handle indices
 void OpTpl::changeHandleIndex(const vector<int4> &handmap)
 
 {
@@ -710,44 +774,51 @@ void OpTpl::changeHandleIndex(const vector<int4> &handmap)
     (*iter)->changeHandleIndex(handmap);
 }
 
-void OpTpl::saveXml(ostream &s) const
+/// \param encoder is the output stream
+void OpTpl::encode(Encoder &encoder) const
 
 {
-  s << "<op_tpl code=\"" << get_opname(opc) << "\">";
-  if (output == (VarnodeTpl *)0)
-    s << "<null/>\n";
+  encoder.openElement(sla::ELEM_OP_TPL);
+  encoder.writeOpcode(sla::ATTRIB_CODE, opc);
+  if (output == (VarnodeTpl *)0) {
+    encoder.openElement(sla::ELEM_NULL);
+    encoder.closeElement(sla::ELEM_NULL);
+  }
   else
-    output->saveXml(s);
+    output->encode(encoder);
   for(int4 i=0;i<input.size();++i)
-    input[i]->saveXml(s);
-  s << "</op_tpl>\n";
+    input[i]->encode(encoder);
+  encoder.closeElement(sla::ELEM_OP_TPL);
 }
 
-void OpTpl::restoreXml(const Element *el,const AddrSpaceManager *manage)
+/// \param decoder is the input stream
+void OpTpl::decode(Decoder &decoder)
 
 {
-  opc = get_opcode(el->getAttributeValue("code"));
-  const List &list(el->getChildren());
-  List::const_iterator iter;
-  iter = list.begin();
-  if ((*iter)->getName() == "null")
+  uint4 el = decoder.openElement(sla::ELEM_OP_TPL);
+  opc = decoder.readOpcode(sla::ATTRIB_CODE);
+  uint4 subel = decoder.peekElement();
+  if (subel == sla::ELEM_NULL) {
+    decoder.openElement();
+    decoder.closeElement(subel);
     output = (VarnodeTpl *)0;
+  }
   else {
     output = new VarnodeTpl();
-    output->restoreXml(*iter,manage);
+    output->decode(decoder);
   }
-  ++iter;
-  while(iter != list.end()) {
+  while(decoder.peekElement() != 0) {
     VarnodeTpl *vn = new VarnodeTpl();
-    vn->restoreXml(*iter,manage);
     input.push_back(vn);
-    ++iter;
+    vn->decode(decoder);
   }
+  decoder.closeElement(el);
 }
 
+/// ConstructTpl owns any OpTpl and HandleTpl
 ConstructTpl::~ConstructTpl(void)
 
-{				// Constructor owns its ops and handles
+{
   vector<OpTpl *>::iterator oiter;
   for(oiter=vec.begin();oiter!=vec.end();++oiter)
     delete *oiter;
@@ -755,6 +826,11 @@ ConstructTpl::~ConstructTpl(void)
     delete result;
 }
 
+/// The added OpTpl can be a normal operation, which will be executed directly, or it can be a directive, like a
+/// \b build or \b delayslot, which may ultimately decode to multiple operations.  Additionally, an OpTpl can represent
+/// a \e label, used to resolve internal p-code branches.
+/// \param ot is the OpTpl to add
+/// \return \b true if the operation was successfully added and did not violate a compile time rules
 bool ConstructTpl::addOp(OpTpl *ot)
 
 {
@@ -769,6 +845,8 @@ bool ConstructTpl::addOp(OpTpl *ot)
   return true;
 }
 
+/// \param oplist is the list of operations to add
+/// \return \b true if all operations were successfully added
 bool ConstructTpl::addOpList(const vector<OpTpl *> &oplist)
 
 {
@@ -778,10 +856,14 @@ bool ConstructTpl::addOpList(const vector<OpTpl *> &oplist)
   return true;
 }
 
+/// For any sub-constructor that does not already one, a new \b build directive is added to the front
+/// of the operation sequence.
+/// \param check is an array of integers, initialized to 0, used to mark sub-constructors with a directive.
+/// \param const_space is the \e constant address space
+/// \return 0 upon success, 1 if there is a duplicate \b build, 2 if there is a \b build for a non-subtable
 int4 ConstructTpl::fillinBuild(vector<int4> &check,AddrSpace *const_space)
 
-{ // Make sure there is a build statement for all subtable params
-  // Return 0 upon success, 1 if there is a duplicate BUILD, 2 if there is a build for a non-subtable
+{
   vector<OpTpl *>::iterator iter;
   OpTpl *op;
   VarnodeTpl *indvn;
@@ -808,6 +890,7 @@ int4 ConstructTpl::fillinBuild(vector<int4> &check,AddrSpace *const_space)
   return 0;
 }
 
+/// \return \b true if every operation is a \b build directive
 bool ConstructTpl::buildOnly(void) const
 
 {
@@ -821,6 +904,8 @@ bool ConstructTpl::buildOnly(void) const
   return true;
 }
 
+/// Each OpTpl operation is remapped using the given array of \b handle indices
+/// \param handmap is the given array of new \b handle indices
 void ConstructTpl::changeHandleIndex(const vector<int4> &handmap)
 
 {
@@ -841,10 +926,13 @@ void ConstructTpl::changeHandleIndex(const vector<int4> &handmap)
     result->changeHandleIndex(handmap);
 }
 
+/// For use with optimization routines.
+/// \param vn is the new input
+/// \param index is the position of the operation within the sequence
+/// \param slot is the input slot to replace with the new input
 void ConstructTpl::setInput(VarnodeTpl *vn,int4 index,int4 slot)
 
-{ // set the VarnodeTpl input for a particular op
-  // for use with optimization routines
+{
   OpTpl *op = vec[index];
   VarnodeTpl *oldvn = op->getIn(slot);
   op->setInput(vn,slot);
@@ -852,10 +940,12 @@ void ConstructTpl::setInput(VarnodeTpl *vn,int4 index,int4 slot)
     delete oldvn;
 }
 
+/// For use with optimization routines.
+/// \param vn is the new output
+/// \param index is the position of the operation within the sequence
 void ConstructTpl::setOutput(VarnodeTpl *vn,int4 index)
 
-{ // set the VarnodeTpl output for a particular op
-  // for use with optimization routines
+{
   OpTpl *op = vec[index];
   VarnodeTpl *oldvn = op->getOut();
   op->setOutput(vn);
@@ -863,9 +953,10 @@ void ConstructTpl::setOutput(VarnodeTpl *vn,int4 index)
     delete oldvn;
 }
 
+/// \param indices is an array of the indices indicating the positions of the OpTpl to be deleted
 void ConstructTpl::deleteOps(const vector<int4> &indices)
 
-{ // delete a particular set of ops
+{
   for(uint4 i=0;i<indices.size();++i) {
     delete vec[indices[i]];
     vec[indices[i]] = (OpTpl *)0;
@@ -882,66 +973,71 @@ void ConstructTpl::deleteOps(const vector<int4> &indices)
     vec.pop_back();
 }
 
-void ConstructTpl::saveXml(ostream &s,int4 sectionid) const
+/// \param encoder is the output stream
+/// \param sectionid is the id of the specific Constructor section to associate with \b this sequence
+void ConstructTpl::encode(Encoder &encoder,int4 sectionid) const
 
 {
-  s << "<construct_tpl";
+  encoder.openElement(sla::ELEM_CONSTRUCT_TPL);
   if (sectionid >=0 )
-    s << " section=\"" << dec << sectionid << "\"";
+    encoder.writeSignedInteger(sla::ATTRIB_SECTION, sectionid);
   if (delayslot != 0)
-    s << " delay=\"" << dec << delayslot << "\"";
+    encoder.writeSignedInteger(sla::ATTRIB_DELAY, delayslot);
   if (numlabels != 0)
-    s << " labels=\"" << dec << numlabels << "\"";
-  s << ">\n";
+    encoder.writeSignedInteger(sla::ATTRIB_LABELS, numlabels);
   if (result != (HandleTpl *)0)
-    result->saveXml(s);
-  else
-    s << "<null/>";
+    result->encode(encoder);
+  else {
+    encoder.openElement(sla::ELEM_NULL);
+    encoder.closeElement(sla::ELEM_NULL);
+  }
   for(int4 i=0;i<vec.size();++i)
-    vec[i]->saveXml(s);
-  s << "</construct_tpl>\n";
+    vec[i]->encode(encoder);
+  encoder.closeElement(sla::ELEM_CONSTRUCT_TPL);
 }
 
-int4 ConstructTpl::restoreXml(const Element *el,const AddrSpaceManager *manage)
+/// \param decoder is the stream to decode from
+/// \return the Constructor section id associated with the sequence
+int4 ConstructTpl::decode(Decoder &decoder)
 
 {
+  uint4 el = decoder.openElement(sla::ELEM_CONSTRUCT_TPL);
   int4 sectionid = -1;
-  for(int4 i=0;i<el->getNumAttributes();++i) {
-    if (el->getAttributeName(i)=="delay") {
-      istringstream s(el->getAttributeValue(i));
-      s.unsetf(ios::dec | ios::hex | ios::oct);
-      s >> delayslot;
+  uint4 attrib = decoder.getNextAttributeId();
+  while(attrib != 0) {
+    if (attrib == sla::ATTRIB_DELAY) {
+      delayslot = decoder.readSignedInteger();
     }
-    else if (el->getAttributeName(i)=="labels") {
-      istringstream s(el->getAttributeValue(i));
-      s.unsetf(ios::dec | ios::hex | ios::oct);
-      s >> numlabels;
+    else if (attrib == sla::ATTRIB_LABELS) {
+      numlabels = decoder.readSignedInteger();
     }
-    else if (el->getAttributeName(i)=="section") {
-      istringstream s(el->getAttributeValue(i));
-      s.unsetf(ios::dec | ios::hex | ios::oct);
-      s >> sectionid;
+    else if (attrib == sla::ATTRIB_SECTION) {
+      sectionid = decoder.readSignedInteger();
     }
+    attrib = decoder.getNextAttributeId();
   }
-  const List &list(el->getChildren());
-  List::const_iterator iter;
-  iter = list.begin();
-  if ((*iter)->getName() == "null")
+  uint4 subel = decoder.peekElement();
+  if (subel == sla::ELEM_NULL) {
+    decoder.openElement();
+    decoder.closeElement(subel);
     result = (HandleTpl *)0;
+  }
   else {
     result = new HandleTpl();
-    result->restoreXml(*iter,manage);
+    result->decode(decoder);
   }
-  ++iter;
-  while(iter != list.end()) {
+  while(decoder.peekElement() != 0) {
     OpTpl *op = new OpTpl();
-    op->restoreXml(*iter,manage);
     vec.push_back(op);
-    ++iter;
+    op->decode(decoder);
   }
+  decoder.closeElement(el);
   return sectionid;
 }
 
+/// Process all the semantic operations in the given ConstructTpl, handling directives and labels.
+/// \param construct is the given ConstructTpl sequence
+/// \param secnum is the section number associated with the sequence
 void PcodeBuilder::build(ConstructTpl *construct,int4 secnum)
 
 {

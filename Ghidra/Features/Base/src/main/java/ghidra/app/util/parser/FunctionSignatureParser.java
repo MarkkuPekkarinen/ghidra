@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,13 +21,17 @@ import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
 
 import ghidra.app.services.DataTypeQueryService;
+import ghidra.app.util.SymbolPath;
 import ghidra.app.util.cparser.C.ParseException;
 import ghidra.program.database.data.DataTypeUtilities;
 import ghidra.program.model.data.*;
+import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.listing.FunctionSignature;
 import ghidra.util.data.DataTypeParser;
 import ghidra.util.data.DataTypeParser.AllowedDataTypes;
 import ghidra.util.exception.CancelledException;
+import ghidra.util.exception.InvalidInputException;
+import ghidra.util.task.TaskMonitor;
 
 /**
  * Class for parsing function signatures. This class attempts to be much more
@@ -55,7 +59,8 @@ public class FunctionSignatureParser {
 	private DataTypeParser dataTypeParser;
 	private Map<String, DataType> dtMap = new HashMap<>();
 
-	private Map<String, String> nameMap = new HashMap<>();
+	/** Stores parameter names that required name fixup for parsing to work correctly */
+	private Map<String, String> replacedNameMap = new HashMap<>();
 	private DataTypeManager destDataTypeManager;
 	private ParserDataTypeManagerService dtmService;
 
@@ -63,18 +68,15 @@ public class FunctionSignatureParser {
 	 * Constructs a SignatureParser for a program.  The destDataTypeManager and/or
 	 * service must be specified.
 	 * 
-	 * @param destDataTypeManager the destination datatype maanger.
+	 * @param destDataTypeManager the destination datatype manager; cannot be null
 	 * @param service the DataTypeManagerService to use for resolving datatypes that
 	 *                can't be found in the given program. Can be null to utilize
 	 *                program based types only.
 	 */
 	public FunctionSignatureParser(DataTypeManager destDataTypeManager,
 			DataTypeQueryService service) {
-		this.destDataTypeManager = destDataTypeManager;
-		if (destDataTypeManager == null && service == null) {
-			throw new IllegalArgumentException(
-				"Destination DataTypeManager or DataTypeManagerService provider required");
-		}
+
+		this.destDataTypeManager = Objects.requireNonNull(destDataTypeManager);
 		if (service != null) {
 			dtmService = new ParserDataTypeManagerService(service);
 		}
@@ -95,26 +97,66 @@ public class FunctionSignatureParser {
 	 */
 	public FunctionDefinitionDataType parse(FunctionSignature originalSignature,
 			String signatureText) throws ParseException, CancelledException {
+
+		FsParseResult result = parseWithNamespace(originalSignature, signatureText);
+		return result.functionDefinition();
+	}
+
+	public FsParseResult parseWithNamespace(FunctionSignature originalSignature,
+			String signatureText) throws ParseException, CancelledException {
+
 		dtMap.clear();
-		nameMap.clear();
+		replacedNameMap.clear();
 		if (dtmService != null) {
 			dtmService.clearCache(); // clear datatype selection cache
 		}
 
+		String originalCallingConvention = null;
 		if (originalSignature != null) {
 			initDataTypeMap(originalSignature);
 			signatureText = cleanUpSignatureText(signatureText, originalSignature);
+			originalCallingConvention = originalSignature.getCallingConventionName();
 		}
 
 		String functionName = extractFunctionName(signatureText);
+		SymbolPath path = new SymbolPath(functionName);
+		SymbolPath nsPath = path.getParent();
+		String name = path.getName();
+
 		FunctionDefinitionDataType function =
-			new FunctionDefinitionDataType(functionName, destDataTypeManager);
+			new FunctionDefinitionDataType(name, destDataTypeManager);
 
-		function.setReturnType(extractReturnType(signatureText));
-		function.setArguments(extractArguments(signatureText));
-		function.setVarArgs(hasVarArgs(signatureText));
+		boolean hasParsedCallingConvention = false;
+		String callingConvention = extractCallingConvention(signatureText);
+		if (callingConvention != null) {
+			doSetCallingConvention(function, callingConvention);
+			hasParsedCallingConvention = true;
+		}
+		else {
+			doSetCallingConvention(function, originalCallingConvention);
+		}
 
-		return function;
+		DataType returnType = extractReturnType(signatureText, hasParsedCallingConvention);
+		function.setReturnType(returnType);
+
+		ParameterDefinition[] args = extractArguments(signatureText);
+		function.setArguments(args);
+
+		boolean hasVarArgs = hasVarArgs(signatureText);
+		function.setVarArgs(hasVarArgs);
+
+		return new FsParseResult(nsPath, function);
+	}
+
+	private void doSetCallingConvention(FunctionDefinitionDataType f, String callingConvention)
+			throws ParseException {
+		try {
+			f.setCallingConvention(callingConvention);
+		}
+		catch (InvalidInputException e) {
+			// should not happen since we validate the calling convention when we extract it
+			throw new ParseException("Invalid calling convention: " + callingConvention);
+		}
 	}
 
 	private void initDataTypeMap(FunctionSignature signature) {
@@ -246,26 +288,60 @@ public class FunctionSignatureParser {
 		if (canParseName(name)) {
 			return text;
 		}
-		nameMap.put(replacementName, name);
+		replacedNameMap.put(replacementName, name);
 		return substitute(text, name, replacementName);
 	}
 
-	DataType extractReturnType(String signatureText) throws ParseException, CancelledException {
+	DataType extractReturnType(String signatureText, boolean hasCallingConvention)
+			throws ParseException, CancelledException {
+
 		int parenIndex = signatureText.indexOf('(');
 		if (parenIndex < 0) {
 			throw new ParseException("Can't find return type");
 		}
-		String[] split = StringUtils.split(signatureText.substring(0, parenIndex));
-		if (split.length < 2) {
+
+		String beforeParens = signatureText.substring(0, parenIndex);
+		String[] parts = StringUtils.split(beforeParens);
+		if (parts.length < 2) {
 			throw new ParseException("Can't find return type");
 		}
-		String returnTypeName = StringUtils.join(split, " ", 0, split.length - 1);
 
+		// The function name is the last item.  If there is a calling convention, it will just 
+		// before the function name.
+		int len = parts.length;
+		int end = hasCallingConvention ? len - 2 : len - 1; // exclusive 
+
+		String returnTypeName = StringUtils.join(parts, " ", 0, end);
 		DataType dt = resolveDataType(returnTypeName);
 		if (dt == null) {
 			throw new ParseException("Can't resolve return type: " + returnTypeName);
 		}
 		return dt;
+	}
+
+	private String extractCallingConvention(String signatureText) throws ParseException {
+		int parenIndex = signatureText.indexOf('(');
+		if (parenIndex < 0) {
+			throw new ParseException("Can't find calling convention");
+		}
+
+		String beforeParens = signatureText.substring(0, parenIndex);
+		String[] parts = StringUtils.split(beforeParens);
+		if (parts.length < 3) {
+			return null;
+		}
+
+		// The function name is the last item.  If there is a calling convention, it will be just
+		// before the function name.
+		String candidate = parts[parts.length - 2];
+		Collection<String> dtmCcNames = destDataTypeManager.getKnownCallingConventionNames();
+		Set<String> allNames = new HashSet<>(dtmCcNames);
+		allNames.add(CompilerSpec.CALLING_CONVENTION_unknown);
+		allNames.add(CompilerSpec.CALLING_CONVENTION_default);
+		if (allNames.contains(candidate)) {
+			return candidate;
+		}
+		return null;
 	}
 
 	private DataType resolveDataType(String dataTypeName) throws CancelledException {
@@ -298,8 +374,8 @@ public class FunctionSignatureParser {
 	}
 
 	private String resolveName(String name) throws ParseException {
-		if (nameMap.containsKey(name)) {
-			return nameMap.get(name);
+		if (replacedNameMap.containsKey(name)) {
+			return replacedNameMap.get(name);
 		}
 		if (!canParseName(name)) {
 			throw new ParseException("Can't parse name: " + name);
@@ -318,6 +394,14 @@ public class FunctionSignatureParser {
 	private boolean canParseType(String text) {
 		return !StringUtils.containsAny(text, "()<>,");
 	}
+
+	/**
+	 * A simple object to hold data for the results of parsing the function signature text
+	 * @param namespace the namespace; may be null
+	 * @param functionDefinition the function definition; will not be null
+	 */
+	public record FsParseResult(SymbolPath namespace,
+			FunctionDefinitionDataType functionDefinition) {}
 
 	/**
 	 * Provides a simple caching datatype manager service wrapper.<br>
@@ -352,10 +436,20 @@ public class FunctionSignatureParser {
 		}
 
 		@Override
+		public List<CategoryPath> getSortedCategoryPathList() {
+			return service.getSortedCategoryPathList();
+		}
+
+		@Override
 		public DataType getDataType(String filterText) {
+			return promptForDataType(filterText);
+		}
+
+		@Override
+		public DataType promptForDataType(String filterText) {
 			DataType dt = dtCache.get(filterText);
 			if (dt == null) {
-				dt = service.getDataType(filterText);
+				dt = service.promptForDataType(filterText);
 				if (dt != null) {
 					dtCache.put(filterText, dt);
 				}
@@ -363,5 +457,19 @@ public class FunctionSignatureParser {
 			return dt;
 		}
 
+		@Override
+		public List<DataType> getDataTypesByPath(DataTypePath path) {
+			return service.getDataTypesByPath(path);
+		}
+
+		@Override
+		public DataType getProgramDataTypeByPath(DataTypePath path) {
+			return service.getProgramDataTypeByPath(path);
+		}
+
+		@Override
+		public List<DataType> findDataTypes(String name, TaskMonitor monitor) {
+			return service.findDataTypes(name, monitor);
+		}
 	}
 }

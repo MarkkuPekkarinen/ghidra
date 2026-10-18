@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,7 +17,6 @@ package generic.depends;
 
 import java.lang.reflect.*;
 import java.util.*;
-import java.util.Map.Entry;
 
 import generic.depends.err.*;
 
@@ -83,14 +82,14 @@ public class DependentServiceResolver<T> {
 					throw new IllegalArgumentException(
 						"Overridden constructor must return same or subclass of original");
 				}
-				depsByDependents.computeIfAbsent(override, o -> new HashSet<>()).add(rCls);
+				depsByDependents.computeIfAbsent(override, _ -> new HashSet<>()).add(rCls);
 				constructors.put(override, m);
 			}
 			constructors.put(rCls, m);
 			m.setAccessible(true);
 
 			for (Class<?> pType : m.getParameterTypes()) {
-				depsByDependents.computeIfAbsent(rCls, c -> new HashSet<>()).add(pType);
+				depsByDependents.computeIfAbsent(rCls, _ -> new HashSet<>()).add(pType);
 			}
 		}
 		for (Field f : cls.getDeclaredFields()) {
@@ -99,7 +98,7 @@ public class DependentServiceResolver<T> {
 				continue;
 			}
 			Class<?> fCls = f.getType();
-			fieldsByClass.computeIfAbsent(fCls, c -> new HashSet<>()).add(f);
+			fieldsByClass.computeIfAbsent(fCls, _ -> new HashSet<>()).add(f);
 			f.setAccessible(true);
 		}
 	}
@@ -137,23 +136,33 @@ public class DependentServiceResolver<T> {
 	public void injectServices(T obj) throws ServiceConstructionException {
 		Map<Class<?>, Object> instancesByClass = new HashMap<>();
 		Map<Method, Object> constructed = new HashMap<>();
+		Map<Class<?>, Set<Field>> fieldsByClass = new HashMap<>(this.fieldsByClass);
 		for (DependentServiceConstructor<?> cons : ordered) {
 			Object service = constructed.get(cons.method);
 			if (service == null) {
 				service = cons.construct(obj, instancesByClass);
+				if (service == null) {
+					throw new NullPointerException(
+						"ServiceConstructor %s returned null".formatted(cons.method));
+				}
 				constructed.put(cons.method, service);
 			}
 			instancesByClass.put(cons.cls, service);
-		}
-		for (Entry<Class<?>, Set<Field>> entry : fieldsByClass.entrySet()) {
-			for (Field f : entry.getValue()) {
-				try {
-					f.set(obj, instancesByClass.get(entry.getKey()));
-				}
-				catch (IllegalArgumentException | IllegalAccessException e) {
-					throw new AssertionError(e);
+			Set<Field> fields = fieldsByClass.remove(cons.cls);
+			if (fields != null) {
+				for (Field f : fields) {
+					try {
+						f.set(obj, service);
+					}
+					catch (IllegalArgumentException | IllegalAccessException e) {
+						throw new AssertionError(e);
+					}
 				}
 			}
+		}
+		if (!fieldsByClass.isEmpty()) {
+			throw new ServiceConstructionException(
+				"No service constructor for " + fieldsByClass.keySet(), null);
 		}
 	}
 }

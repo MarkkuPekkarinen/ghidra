@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,11 +22,12 @@ import java.util.Date;
 
 import javax.swing.KeyStroke;
 
-import org.jdom.*;
-import org.jdom.input.SAXBuilder;
-import org.jdom.output.XMLOutputter;
+import org.jdom2.*;
+import org.jdom2.input.SAXBuilder;
+import org.jdom2.output.XMLOutputter;
 
 import ghidra.util.Msg;
+import ghidra.util.classfinder.ClassSearcher;
 import ghidra.util.xml.GenericXMLOutputter;
 import ghidra.util.xml.XmlUtilities;
 
@@ -45,7 +46,8 @@ public enum OptionType {
 	FILE_TYPE(File.class, new FileStringAdapter()),
 	COLOR_TYPE(Color.class, new ColorStringAdapter()),
 	FONT_TYPE(Font.class, new FontStringAdapter()),
-	KEYSTROKE_TYPE(KeyStroke.class, new KeyStrokeStringAdapter());
+	KEYSTROKE_TYPE(KeyStroke.class, new KeyStrokeStringAdapter()),
+	ACTION_TRIGGER(ActionTrigger.class, new ActionTriggerStringAdapter());
 
 	private Class<?> clazz;
 	private StringAdapter stringAdapter;
@@ -193,7 +195,7 @@ public enum OptionType {
 	private static String saveToXmlString(SaveState saveState) {
 		Element element = saveState.saveToXml();
 		StringWriter stringWriter = new StringWriter();
-		XMLOutputter xmlout = new GenericXMLOutputter();
+		XMLOutputter xmlout = GenericXMLOutputter.getInstance();
 		try {
 			xmlout.output(element, stringWriter);
 		}
@@ -230,8 +232,9 @@ public enum OptionType {
 			String customOptionClassName =
 				saveState.getString(CustomOption.CUSTOM_OPTION_CLASS_NAME_KEY, null);
 			try {
-				Class<?> c = Class.forName(customOptionClassName);
-				CustomOption option = (CustomOption) c.getConstructor().newInstance();
+				Class<? extends CustomOption> c = ClassSearcher.forNameSafe(customOptionClassName,
+					CustomOption.class, OptionType.class.getClassLoader());
+				CustomOption option = c.getConstructor().newInstance();
 				option.readState(saveState);
 				return option;
 			}
@@ -241,8 +244,7 @@ public enum OptionType {
 			}
 			catch (Exception e) {
 				Msg.error(this,
-					"Can't create customOption instance for: " + customOptionClassName +
-						e);
+					"Can't create customOption instance for: " + customOptionClassName + e);
 			}
 			return null;
 		}
@@ -330,5 +332,12 @@ public enum OptionType {
 			return KeyStroke.getKeyStroke(string);
 		}
 
+	}
+
+	static class ActionTriggerStringAdapter extends StringAdapter {
+		@Override
+		Object stringToObject(String string) {
+			return ActionTrigger.getActionTrigger(string);
+		}
 	}
 }

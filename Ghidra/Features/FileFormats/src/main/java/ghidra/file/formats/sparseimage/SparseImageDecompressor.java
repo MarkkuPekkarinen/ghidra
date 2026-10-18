@@ -114,7 +114,7 @@ public class SparseImageDecompressor {
 	/**
 	 * Processes an embedded crc checkvalue, throwing an exception of the current crc
 	 * does not match the stored crc.
-	 * <p>
+	 * 
 	 * @throws IOException if crc bad
 	 */
 	private void processCrcChunk() throws IOException {
@@ -127,8 +127,8 @@ public class SparseImageDecompressor {
 	}
 
 	/**
-	 * Writes a chunk of blocks are are zero filled.
-	 * <p>
+	 * Writes a chunk of blocks that are zero filled.
+	 * 
 	 * @param blocks number of blocks to write
 	 * @param monitor {@link TaskMonitor} to watch
 	 * @throws IOException if error writing
@@ -137,16 +137,14 @@ public class SparseImageDecompressor {
 	private void processSkipChunk(int blocks, TaskMonitor monitor)
 			throws IOException, CancelledException {
 		long length = (long) blocks * blockSize;
-		if (length > bufferSize) {
-			byte[] bytes = new byte[bufferSize];
-			for (int i = 0; i < length / bufferSize; i++) {
-				monitor.checkCancelled();
-				tempFos.write(bytes);
-			}
+		byte[] bytes = new byte[(int) Math.min(length, bufferSize)];
+		while (length > 0) {
+			monitor.checkCancelled();
+			int bytesToWrite = (int) Math.min(length, bytes.length);
+			crc.update(bytes, 0, bytesToWrite);
+			tempFos.write(bytes, 0, bytesToWrite);
+			length -= bytesToWrite;
 		}
-		int size = (int) length % bufferSize;
-		byte[] bytes = new byte[size];
-		tempFos.write(bytes);
 	}
 
 	/**
@@ -154,7 +152,7 @@ public class SparseImageDecompressor {
 	 * <p>
 	 * The values in srcPattern are copied into destArray, repeating from the beginning
 	 * of srcPattern as many times as necessary to fill destArray.
-	 * <p>
+	 * 
 	 * @param srcPattern byte array with source pattern
 	 * @param destArray byte array destination
 	 */
@@ -170,7 +168,7 @@ public class SparseImageDecompressor {
 
 	/**
 	 * Writes a chunk of blocks that are defined by a repeated pattern of 4 bytes.
-	 * <p>
+	 * 
 	 * @param blocks number of blocks to write
 	 * @param monitor {@link TaskMonitor} to monitor
 	 * @throws IOException if error when writing or reading
@@ -185,8 +183,8 @@ public class SparseImageDecompressor {
 		int fillBufferSize = (int) Math.min(length, bufferSize);
 		byte[] fillBuffer = new byte[fillBufferSize];
 
-		byte[] srcPattern = { (byte) (fillInt >> 24), (byte) (fillInt >> 16), (byte) (fillInt >> 8),
-			(byte) (fillInt & 0xff) };
+		byte[] srcPattern = { (byte) fillInt, (byte) (fillInt >> 8), (byte) (fillInt >> 16),
+			(byte) (fillInt >> 24) };
 		fillArray(srcPattern, fillBuffer);
 
 		while (length > 0) {
@@ -199,8 +197,8 @@ public class SparseImageDecompressor {
 	}
 
 	/**
-	 * Writes a chunk of blocks are are read from the source file.
-	 * <p>
+	 * Writes a chunk of blocks that are read from the source file.
+	 * 
 	 * @param blocks number of blocks to copy
 	 * @param monitor {@link TaskMonitor} to monitor
 	 * @throws IOException if error when reading or writing

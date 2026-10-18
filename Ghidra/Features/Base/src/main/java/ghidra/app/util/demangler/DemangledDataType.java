@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -47,6 +47,7 @@ public class DemangledDataType extends DemangledType {
 
 	public static final String ARR_NOTATION = "[]";
 	public static final String REF_NOTATION = "&";
+	public static final String RIGHT_REF_NOTATION = "&&";
 	public static final String PTR_NOTATION = "*";
 
 	public static final String VOLATILE = "volatile";
@@ -66,12 +67,14 @@ public class DemangledDataType extends DemangledType {
 	public final static String WCHAR_T = "wchar_t";
 	public final static String WCHAR16 = "char16_t";
 	public final static String WCHAR32 = "char32_t";
+	public final static String CHAR8_T = "char8_t";
 	public final static String SHORT = "short";
 	public final static String INT = "int";
 	public final static String INT0_T = "int0_t";
 	public final static String LONG = "long";
 	public final static String LONG_LONG = "long long";
 	public final static String FLOAT = "float";
+	public final static String FLOAT2 = "float2";
 	public final static String DOUBLE = "double";
 	public final static String INT8 = "__int8";
 	public final static String INT16 = "__int16";
@@ -92,15 +95,18 @@ public class DemangledDataType extends DemangledType {
 	private static final String UNSIGNED_LONG = "unsigned long";
 
 	public final static String[] PRIMITIVES =
-		{ VOID, BOOL, CHAR, WCHAR_T, WCHAR16, WCHAR32, SHORT, INT, INT0_T, LONG,
-			LONG_LONG, FLOAT, DOUBLE, INT128, FLOAT128, LONG_DOUBLE, };
+		{ VOID, BOOL, CHAR, WCHAR_T, WCHAR16, WCHAR32, CHAR8_T, SHORT, INT, INT0_T, LONG, LONG_LONG,
+			FLOAT, FLOAT2, DOUBLE, INT128, FLOAT128, LONG_DOUBLE, };
 
 	private int arrayDimensions = 0;
 	private boolean isClass;
 	private boolean isComplex;
 	private boolean isEnum;
 	private boolean isPointer64;
-	private boolean isReference;
+	// Cannot be both lref and rref.  Prior to C++11, we only had reference (& operator).
+	// This is now distinguished as left-value reference (l-value reference or lref), and there
+	// is now an additional right-value reference (r-value reference or rref) with the && operator.
+	private boolean isLValueReference;
 	private boolean isRValueReference;
 	private boolean isSigned;
 	private boolean isStruct;
@@ -127,7 +133,7 @@ public class DemangledDataType extends DemangledType {
 	 * @return the Ghidra datatype corresponding to the demangled datatype
 	 */
 	public DataType getDataType(DataTypeManager dataTypeManager) {
-		String name = getName();
+		String name = getDataTypeName();
 		if (name == null) {
 			return DataType.DEFAULT;
 		}
@@ -194,10 +200,10 @@ public class DemangledDataType extends DemangledType {
 			else if (dt == null) {
 
 				// I don't know what this is
-				// If it isn't pointed to, or isn't a referent, then assume typedef.
+				// If it isn't pointed to, or isn't a referent, then assume undefined typedef.
 				if (!(isReference() || isPointer())) { // Unknown type
 					dt = new TypedefDataType(getDemanglerCategoryPath(getNamespace()), name,
-						new DWordDataType());
+						DataType.DEFAULT);
 				}
 				else {
 					// try creating empty structures for unknown types instead.
@@ -208,14 +214,36 @@ public class DemangledDataType extends DemangledType {
 		}
 
 		int numPointers = getPointerLevels();
-		if (isReference()) {
-			numPointers++;
-		}
 
 		for (int i = 0; i < numPointers; ++i) {
 			dt = PointerDataType.getPointer(dt, dataTypeManager);
 		}
+
+		if (isLValueReference()) {
+			// Placeholder in prep for more lref work
+			dt = PointerDataType.getPointer(dt, dataTypeManager);
+		}
+		else if (isRValueReference()) {
+			// Placeholder in prep for more rref work
+			dt = PointerDataType.getPointer(dt, dataTypeManager);
+		}
+
 		return dt;
+	}
+
+	/**
+	 * Returns the name to use for the Ghidra datatype.  Templates are held separately from the
+	 * name, so they are added back here.  The result is made safe in the same way as the name
+	 * of a templated namespace, so that the datatype matches the class structure of that
+	 * namespace.
+	 * @return the datatype name, including any template arguments
+	 */
+	private String getDataTypeName() {
+		if (template == null) {
+			return getName();
+		}
+		String templatedName = getDemangledName() + template.toTemplate();
+		return DemanglerUtil.stripSuperfluousSignatureSpaces(templatedName).replace(' ', '_');
 	}
 
 	private DataType getBuiltInType(DataTypeManager dataTypeManager) {
@@ -243,6 +271,9 @@ public class DemangledDataType extends DemangledType {
 		}
 		else if (WCHAR32.equals(name)) {
 			dt = WideChar32DataType.dataType;
+		}
+		else if (CHAR8_T.equals(name)) {
+			dt = UnsignedCharDataType.dataType;
 		}
 		else if (SHORT.equals(name)) {
 			if (isUnsigned()) {
@@ -282,6 +313,9 @@ public class DemangledDataType extends DemangledType {
 		else if (FLOAT.equals(name)) {
 			dt = FloatDataType.dataType;
 		}
+		else if (FLOAT2.equals(name)) {
+			dt = Float2DataType.dataType;
+		}
 		else if (FLOAT128.equals(name)) {
 			dt = new TypedefDataType(FLOAT128, Float16DataType.dataType);
 		}
@@ -293,52 +327,50 @@ public class DemangledDataType extends DemangledType {
 		}
 		else if (INT8.equals(name)) {
 			if (isUnsigned()) {
-				dt = new TypedefDataType("__uint8",
-					AbstractIntegerDataType.getUnsignedDataType(1, dataTypeManager));
+				dt = new TypedefDataType("__uint8", UInt8TDataType.dataType.clone(dataTypeManager));
 			}
 			else {
-				dt = new TypedefDataType(INT8,
-					AbstractIntegerDataType.getSignedDataType(1, dataTypeManager));
+				dt = new TypedefDataType(INT8, Int8TDataType.dataType.clone(dataTypeManager));
 			}
 		}
 		else if (INT16.equals(name)) {
 			if (isUnsigned()) {
 				dt = new TypedefDataType("__uint16",
-					AbstractIntegerDataType.getUnsignedDataType(2, dataTypeManager));
+					UInt16TDataType.dataType.clone(dataTypeManager));
 			}
 			else {
 				dt = new TypedefDataType(INT16,
-					AbstractIntegerDataType.getSignedDataType(2, dataTypeManager));
+					Int16TDataType.dataType.clone(dataTypeManager));
 			}
 		}
 		else if (INT32.equals(name)) {
 			if (isUnsigned()) {
 				dt = new TypedefDataType("__uint32",
-					AbstractIntegerDataType.getUnsignedDataType(4, dataTypeManager));
+					UInt32TDataType.dataType.clone(dataTypeManager));
 			}
 			else {
 				dt = new TypedefDataType(INT32,
-					AbstractIntegerDataType.getSignedDataType(4, dataTypeManager));
+					Int32TDataType.dataType.clone(dataTypeManager));
 			}
 		}
 		else if (INT64.equals(name)) {
 			if (isUnsigned()) {
 				dt = new TypedefDataType("__uint64",
-					AbstractIntegerDataType.getUnsignedDataType(8, dataTypeManager));
+					UInt64TDataType.dataType.clone(dataTypeManager));
 			}
 			else {
 				dt = new TypedefDataType(INT64,
-					AbstractIntegerDataType.getSignedDataType(8, dataTypeManager));
+					Int64TDataType.dataType.clone(dataTypeManager));
 			}
 		}
 		else if (INT128.equals(name)) {
 			if (isUnsigned()) {
 				dt = new TypedefDataType("__uint128",
-					AbstractIntegerDataType.getUnsignedDataType(16, dataTypeManager));
+					UnsignedInteger16DataType.dataType.clone(dataTypeManager));
 			}
 			else {
 				dt = new TypedefDataType(INT128,
-					AbstractIntegerDataType.getSignedDataType(16, dataTypeManager));
+					Integer16DataType.dataType.clone(dataTypeManager));
 			}
 		}
 		else if (UNDEFINED.equals(name)) {
@@ -360,17 +392,13 @@ public class DemangledDataType extends DemangledType {
 	static DataType findDataType(DataTypeManager dataTypeManager, Demangled namespace,
 			String dtName) {
 
-		// TODO: add support for use of Program.getPreferredRootNamespaceCategoryPath when
-		// searching for datatypes
-
 		List<DataType> list = new ArrayList<>();
 		dataTypeManager.findDataTypes(dtName, list);
 		if (list.isEmpty()) {
 			return null;
 		}
 
-		//use the datatype that exists in the root category,
-		//otherwise just pick the first one...
+		// use the datatype that exists in the root category, otherwise just pick the first one
 		DataType anyDt = null;
 		DataType preferredDataType = null;
 		for (DataType existingDT : list) {
@@ -463,7 +491,13 @@ public class DemangledDataType extends DemangledType {
 	}
 
 	public void setReference() {
-		isReference = true;
+		setLValueReference();
+	}
+
+	public void setLValueReference() {
+		isLValueReference = true;
+		// Cannot be both
+		isRValueReference = false;
 	}
 
 	/**
@@ -471,6 +505,8 @@ public class DemangledDataType extends DemangledType {
 	 */
 	public void setRValueReference() {
 		isRValueReference = true;
+		// Cannot be both
+		isLValueReference = false;
 	}
 
 	public void setSigned() {
@@ -550,7 +586,15 @@ public class DemangledDataType extends DemangledType {
 	}
 
 	public boolean isReference() {
-		return isReference;
+		return isLValueReference() || isRValueReference();
+	}
+
+	public boolean isLValueReference() {
+		return isLValueReference;
+	}
+
+	public boolean isRValueReference() {
+		return isRValueReference;
 	}
 
 	public boolean isSigned() {
@@ -697,11 +741,11 @@ public class DemangledDataType extends DemangledType {
 			buffer.append(SPACE + PTR_NOTATION);
 		}
 
-		if (isReference) {
+		if (isLValueReference) {
 			buffer.append(SPACE + REF_NOTATION);
-			if (isRValueReference) {
-				buffer.append(REF_NOTATION); // &&
-			}
+		}
+		else if (isRValueReference) {
+			buffer.append(SPACE + RIGHT_REF_NOTATION);
 		}
 
 		// the order of __ptr64 and __restrict can vary--with fuzzing...

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,10 +37,10 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.model.data.*;
-import ghidra.program.model.data.StandAloneDataTypeManager.LanguageUpdateOption;
+import ghidra.program.model.dtarchive.PersistentDataTypeArchive;
+import ghidra.program.model.dtarchive.DataTypeArchive.LanguageUpdateOption;
 import ghidra.program.model.lang.*;
-import ghidra.test.AbstractGhidraHeadedIntegrationTest;
-import ghidra.test.TestEnv;
+import ghidra.test.*;
 import ghidra.util.InvalidNameException;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
@@ -57,7 +57,7 @@ public abstract class AbstractCreateArchiveTest extends AbstractGhidraHeadedInte
 	protected TreeModelModCounter treeModelModListener;
 
 	protected ProgramDB buildProgram() throws Exception {
-		ProgramBuilder builder = new ProgramBuilder("notepad", ProgramBuilder._TOY, this);
+		ProgramBuilder builder = new ToyProgramBuilder();
 
 		builder.createMemory(".text", "0x1001000", 0x6600);
 		builder.createMemory(".data", "0x1008000", 0x600);
@@ -96,7 +96,7 @@ public abstract class AbstractCreateArchiveTest extends AbstractGhidraHeadedInte
 		waitForTree();
 	}
 
-	protected DataType resolveDataType(StandAloneDataTypeManager archiveDtm, DataType dt)
+	protected DataType resolveDataType(DataTypeManager archiveDtm, DataType dt)
 			throws Exception {
 		int id = archiveDtm.startTransaction("resolve datatype");
 		try {
@@ -108,29 +108,29 @@ public abstract class AbstractCreateArchiveTest extends AbstractGhidraHeadedInte
 		}
 	}
 
-	protected void setArchitecture(StandAloneDataTypeManager archiveDtm, String languageId,
+	protected void setArchitecture(PersistentDataTypeArchive archive, String languageId,
 			String compilerSpecId) throws Exception {
 		LanguageService languageService = getLanguageService();
 		Language language = languageService.getLanguage(new LanguageID(languageId));
 
-		int id = archiveDtm.startTransaction("set architecture");
+		int id = archive.startTransaction("set architecture");
 		try {
-			archiveDtm.setProgramArchitecture(language, new CompilerSpecID(compilerSpecId),
+			archive.setProgramArchitecture(language, new CompilerSpecID(compilerSpecId),
 				LanguageUpdateOption.CLEAR, TaskMonitor.DUMMY);
 		}
 		finally {
-			archiveDtm.endTransaction(id, true);
+			archive.endTransaction(id, true);
 		}
 		waitForTree();
 	}
 
-	protected void removeArchitecture(StandAloneDataTypeManager archiveDtm) throws Exception {
-		int id = archiveDtm.startTransaction("remove architecture");
+	protected void removeArchitecture(PersistentDataTypeArchive archive) throws Exception {
+		int id = archive.startTransaction("remove architecture");
 		try {
-			archiveDtm.clearProgramArchitecture(TaskMonitor.DUMMY);
+			archive.clearProgramArchitecture(TaskMonitor.DUMMY);
 		}
 		finally {
-			archiveDtm.endTransaction(id, true);
+			archive.endTransaction(id, true);
 		}
 		waitForTree();
 	}
@@ -242,7 +242,6 @@ public abstract class AbstractCreateArchiveTest extends AbstractGhidraHeadedInte
 
 		// this handles the save changes dialog and potential analysis dialogs
 		closeAllWindows();
-		env.release(program);
 		env.dispose();
 	}
 

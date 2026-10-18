@@ -5,9 +5,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -38,6 +38,7 @@ import ghidra.program.model.listing.*;
 import ghidra.program.model.pcode.*;
 import ghidra.util.Msg;
 import ghidra.util.SystemUtilities;
+import ghidra.util.classfinder.ClassSearcher;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.xml.SpecXmlUtils;
 import ghidra.xml.*;
@@ -121,36 +122,41 @@ public class BasicCompilerSpec implements CompilerSpec {
 		Exception parseException = null;
 
 		ErrorHandler errHandler = getErrorHandler(cspecFile.toString());
-		InputStream stream;
+		XmlPullParser parser = null;
 		try {
 			SleighLanguageValidator.validateCspecFile(cspecFile);
 
-			stream = cspecFile.getInputStream();
-			XmlPullParser parser =
-				XmlPullParserFactory.create(stream, cspecFile.getAbsolutePath(), errHandler, false);
-			initialize(cspecFile.getAbsolutePath(), parser);
-			stream.close();
+			try (InputStream stream = cspecFile.getInputStream()) {
+				parser = XmlPullParserFactory.create(stream, cspecFile.getAbsolutePath(),
+					errHandler, false);
+				initialize(cspecFile.getAbsolutePath(), parser);
+			}
 
 			if (models == null || models.length == 0) {
 				throw new SAXException("No prototype models defined");
 			}
 		}
-		catch (SleighException e) {
+		catch (Exception e) {
 			parseException = e;
-			Throwable cause = e.getCause();		// Recover the cause (from the validator exception)
-			if (cause != null) {
-				if (cause instanceof SAXException || cause instanceof IOException) {
-					parseException = (Exception) cause;
+			if (e instanceof SleighException) {
+				Throwable cause = e.getCause();		// Recover the cause (from the validator exception)
+				if (cause != null) {
+					if (cause instanceof SAXException || cause instanceof IOException) {
+						parseException = (Exception) cause;
+					}
 				}
 			}
-		}
-		catch (IOException | SAXException | XmlParseException | DuplicateNameException e) {
-			parseException = e;
-		}
-
-		if (parseException != null) {
+			String lineInfo = "";
+			if (parser != null) {
+				lineInfo = ":" + parser.getLineNumber();
+			}
 			throw new CompilerSpecNotFoundException(language.getLanguageID(),
-				description.getCompilerSpecID(), cspecFile.getName(), parseException);
+				description.getCompilerSpecID(), cspecFile.getName() + lineInfo, parseException);
+		}
+		finally {
+			if (parser != null) {
+				parser.dispose();
+			}
 		}
 	}
 
@@ -244,7 +250,6 @@ public class BasicCompilerSpec implements CompilerSpec {
 		restoreXml(parser);
 	}
 
-	@SuppressWarnings("unchecked")
 	private void buildInjectLibrary() {
 		String classname =
 			language.getProperty(GhidraLanguagePropertyKeys.PCODE_INJECT_LIBRARY_CLASS);
@@ -253,18 +258,10 @@ public class BasicCompilerSpec implements CompilerSpec {
 		}
 		else {
 			try {
-				Class<?> c = Class.forName(classname);
-				if (!PcodeInjectLibrary.class.isAssignableFrom(c)) {
-					Msg.error(this,
-						"Language " + language.getLanguageID() + " does not specify a valid " +
-							GhidraLanguagePropertyKeys.PCODE_INJECT_LIBRARY_CLASS);
-					throw new RuntimeException(classname + " does not implement interface " +
-						PcodeInjectLibrary.class.getName());
-				}
-				Class<? extends PcodeInjectLibrary> injectLibraryClass =
-					(Class<? extends PcodeInjectLibrary>) c;
+				Class<? extends PcodeInjectLibrary> c = ClassSearcher.forNameSafe(classname,
+					PcodeInjectLibrary.class, getClass().getClassLoader());
 				Constructor<? extends PcodeInjectLibrary> constructor =
-					injectLibraryClass.getConstructor(SleighLanguage.class);
+					c.getConstructor(SleighLanguage.class);
 				pcodeInject = constructor.newInstance(language);
 			}
 			catch (Exception e) {
@@ -577,7 +574,7 @@ public class BasicCompilerSpec implements CompilerSpec {
 	}
 
 	/**
-	 * Initialize this object from an XML stream.  A single \<compiler_spec> tag is expected.
+	 * Initialize this object from an XML stream.  A single {@code <compiler_spec>} tag is expected.
 	 * @param parser is the XML stream
 	 * @throws XmlParseException for badly formed XML
 	 * @throws DuplicateNameException if we parse more than one PrototypeModel with the same name
@@ -1084,8 +1081,7 @@ public class BasicCompilerSpec implements CompilerSpec {
 
 	@Override
 	public PrototypeModel matchConvention(String conventionName) {
-		if (conventionName == null ||
-			CALLING_CONVENTION_unknown.equals(conventionName) ||
+		if (CompilerSpec.isUnknownCallingConvention(conventionName) ||
 			CALLING_CONVENTION_default.equals(conventionName)) {
 			return defaultModel;
 		}

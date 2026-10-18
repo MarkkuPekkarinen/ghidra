@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,18 +15,17 @@
  */
 package ghidra.app.plugin.processors.sleigh;
 
-import static ghidra.program.model.pcode.AttributeId.*;
-import static ghidra.program.model.pcode.ElementId.*;
+import static ghidra.pcode.utils.SlaFormat.*;
 
 import java.io.*;
 import java.math.BigInteger;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.antlr.runtime.RecognitionException;
-import org.jdom.JDOMException;
 import org.xml.sax.*;
 
 import generic.jar.ResourceFile;
@@ -36,19 +35,20 @@ import ghidra.app.plugin.processors.sleigh.expression.ContextField;
 import ghidra.app.plugin.processors.sleigh.expression.PatternValue;
 import ghidra.app.plugin.processors.sleigh.symbol.*;
 import ghidra.framework.Application;
-import ghidra.pcodeCPort.sleighbase.SleighBase;
-import ghidra.pcodeCPort.slgh_compile.SleighCompileLauncher;
+import ghidra.pcode.utils.SlaFormat;
 import ghidra.program.model.address.*;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.DefaultProgramContext;
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.program.model.mem.MemoryAccessException;
-import ghidra.program.model.pcode.ElementId;
-import ghidra.program.model.pcode.Encoder;
+import ghidra.program.model.pcode.*;
 import ghidra.program.model.util.ProcessorSymbolType;
-import ghidra.sleigh.grammar.SleighPreprocessor;
 import ghidra.sleigh.grammar.SourceFileIndexer;
 import ghidra.util.*;
+import ghidra.util.classfinder.ClassSearcher;
+import ghidra.util.exception.InvalidInputException;
+import ghidra.util.exception.TimeoutException;
+import ghidra.util.task.PreserveStateWrappingTaskMonitor;
 import ghidra.util.task.TaskMonitor;
 import ghidra.util.xml.SpecXmlUtils;
 import ghidra.xml.*;
@@ -57,15 +57,6 @@ import utilities.util.FileUtilities;
 
 public class SleighLanguage implements Language {
 
-	/**
-	 * SLA_FORMAT_VERSION will be incremented whenever the format of the .sla
-	 * files change.
-	 * <p>
-	 * Version 3: January 2021: added source file information for each constructor. <br>
-	 * Version 2: April 2019: Changed numbering of Overlay spaces.<br>
-	 * Version 1: Initial version.<br>
-	 */
-	public static final int SLA_FORMAT_VERSION = SleighBase.SLA_FORMAT_VERSION;
 	private Map<CompilerSpecID, SleighCompilerSpecDescription> compilerSpecDescriptions;
 	private HashMap<CompilerSpecID, BasicCompilerSpec> compilerSpecs;
 	private List<InjectPayloadSleigh> additionalInject = null;
@@ -80,7 +71,8 @@ public class SleighLanguage implements Language {
 	private int numSections = 0;					// Number of named sections for this language
 	private int alignment = 1;
 	private int defaultPointerWordSize = 1;		// Default wordsize to send down with pointer data-types
-	private SleighLanguageDescription description;
+	private OptionalInt maxInstructionLength = OptionalInt.empty();
+	private final SleighLanguageDescription description;
 	private ParallelInstructionLanguageHelper parallelHelper;
 	private SourceFileIndexer indexer;  //used to provide source file info for constructors
 
@@ -93,14 +85,14 @@ public class SleighLanguage implements Language {
 	 */
 	private String segmentedspace = "";
 	private String segmentType = "";
-	private AddressSet volatileAddresses;
+	private AddressSet volatileAddresses = new AddressSet();
 	private AddressSet volatileSymbolAddresses;
 	private AddressSet nonVolatileSymbolAddresses;
 	private ContextCache contextcache = null;
 	/**
 	 * Cached instruction prototypes
 	 */
-	private LinkedHashMap<Integer, SleighInstructionPrototype> instructProtoMap;
+	private ConcurrentHashMap<Integer, SleighInstructionPrototype> instructProtoMap;
 	private DecisionNode root = null;
 	/**
 	 * table of AddressSpaces
@@ -109,11 +101,16 @@ public class SleighLanguage implements Language {
 	private AddressSpace default_space;
 	private List<ContextSetting> ctxsetting = new ArrayList<>();
 	private LinkedHashMap<String, String> properties = new LinkedHashMap<>();
-	SortedMap<String, ManualEntry> manual = null;
+	private SortedMap<String, ManualEntry> manual = null;
 
-	SleighLanguage(SleighLanguageDescription description)
-			throws SAXException, IOException, UnknownInstructionException {
-		initialize(description);
+	SleighLanguage(SleighLanguageDescription description) throws SleighException {
+		this(description, TaskMonitor.DUMMY);
+	}
+	
+	SleighLanguage(SleighLanguageDescription description, TaskMonitor monitor)
+			throws SleighException {
+		this.description = description;
+		initialize(false, monitor);
 	}
 
 	private void addAdditionInject(InjectPayloadSleigh payload) {
@@ -123,35 +120,69 @@ public class SleighLanguage implements Language {
 		additionalInject.add(payload);
 	}
 
-	private void initialize(SleighLanguageDescription langDescription)
-			throws SAXException, IOException, UnknownInstructionException {
+	private void initialize(boolean forceCompile, TaskMonitor monitor) throws SleighException {
+		long startTS = System.currentTimeMillis();
+
 		this.defaultSymbols = new ArrayList<>();
+		this.defaultMemoryBlocks = new MemoryBlockDefinition[0];
 		this.compilerSpecDescriptions = new LinkedHashMap<>();
-		for (CompilerSpecDescription compilerSpecDescription : langDescription
+		for (CompilerSpecDescription compilerSpecDescription : description
 				.getCompatibleCompilerSpecDescriptions()) {
 			this.compilerSpecDescriptions.put(compilerSpecDescription.getCompilerSpecID(),
 				(SleighCompilerSpecDescription) compilerSpecDescription);
 		}
 		compilerSpecs = new HashMap<>();
-		this.description = langDescription;
 		additionalInject = null;
 
-		SleighLanguageValidator.validatePspecFile(langDescription.getSpecFile());
+		SleighLanguageValidator.validatePspecFile(description.getSpecFile());
 
-		readInitialDescription();
-		// should addressFactory and registers initialization be done at
-		// construction time?
-		// for now we'll assume yes.
+		readInitialDescription(); // process pspec file
+
+		// Should addressFactory and registers initialization be done at construction time?
+		// For now we'll assume yes.
 		contextcache = new ContextCache();
-
-		ResourceFile slaFile = langDescription.getSlaFile();
-		if (!slaFile.exists() ||
-			(slaFile.canWrite() && (isSLAWrongVersion(slaFile) || isSLAStale(slaFile)))) {
-			reloadLanguage(TaskMonitor.DUMMY, true);
+		
+		SleighLanguageFile langFile = description.getLanguageFile();
+		if (!langFile.getSlaSpecFile().exists()) {
+			throw new SleighFileException("Missing slaspec: " + langFile.getSlaSpecFile());
 		}
 
+		// check .sla file freshness inside lock, and recompile if necessary before releasing lock.
+		// if can't lock, it's single jar mode and we can't recompile anyways
+		AtomicLong lockElapsed = new AtomicLong();
+		if (langFile.canLock()) {
+			try (PreserveStateWrappingTaskMonitor tm =
+				new PreserveStateWrappingTaskMonitor(monitor)) {
+				tm.setCancelEnabled(true);
+				tm.setShowProgressValue(true);
+				langFile.withLock(SleighLanguageProvider.LANGUAGE_LOCK_TIMEOUT, tm, () -> {
+					tm.setCancelEnabled(false);
+					long lockStartTS = System.currentTimeMillis();
+					if (forceCompile || langFile.needsCompilation(SlaFormat.FORMAT_VERSION)) {
+						langFile.compileSlaFile(monitor);
+					}
+					lockElapsed.set(System.currentTimeMillis() - lockStartTS);
+				});
+			}
+			catch (TimeoutException e) {
+				throw new SleighFileLockException(
+					"Timeout waiting for Sleigh language file lock: %s"
+							.formatted(langFile.getSlaFile()),
+					e);
+			}
+			catch (IOException e) {
+				throw new SleighFileException(
+					"Error locking Sleigh language file %s".formatted(langFile.getSlaFile()), e);
+			}
+		}
+		
 		// Read in the sleigh specification
-		readSpecification(slaFile);
+		try (PackedDecode decoder = SlaFormat.buildDecoder(langFile.getSlaFile())) {
+			decode(decoder);
+		}
+		catch (IOException | DecoderException e) {
+			throw new SleighException("Error decoding", e);
+		}
 
 		registerBuilder = new RegisterBuilder();
 		loadRegisters(registerBuilder);
@@ -159,82 +190,28 @@ public class SleighLanguage implements Language {
 		buildVolatileSymbolAddresses();
 		xrefRegisters();
 
-		instructProtoMap = new LinkedHashMap<>();
+		instructProtoMap = new ConcurrentHashMap<>();
 
 		initParallelHelper();
+
+		int maxLength =
+			getPropertyAsInt(GhidraLanguagePropertyKeys.MAXIMUM_INSTRUCTION_LENGTH, -1);
+		if (maxLength > 0) {
+			maxInstructionLength = OptionalInt.of(maxLength);
+		}
+
+		long initElapsed = System.currentTimeMillis() - startTS;
+		Msg.debug(this, "Took %dms (%dms inside lock) to initialize language %s"
+				.formatted(initElapsed, lockElapsed.get(), langFile));
 	}
 
 	private void buildVolatileSymbolAddresses() {
-		if (volatileAddresses == null) {
-			volatileAddresses = new AddressSet();
-		}
 		if (volatileSymbolAddresses != null) {
 			volatileAddresses.add(volatileSymbolAddresses);
 		}
 		if (nonVolatileSymbolAddresses != null) {
 			volatileAddresses.delete(nonVolatileSymbolAddresses);
 		}
-	}
-
-	private boolean isSLAWrongVersion(ResourceFile slaFile) {
-		XmlPullParser parser = null;
-		try {
-			parser = XmlPullParserFactory.create(slaFile, new ErrorHandler() {
-
-				@Override
-				public void warning(SAXParseException exception) throws SAXException {
-					// ignore
-				}
-
-				@Override
-				public void fatalError(SAXParseException exception) throws SAXException {
-					throw exception;
-				}
-
-				@Override
-				public void error(SAXParseException exception) throws SAXException {
-					throw exception;
-				}
-			}, false);
-
-			XmlElement e = parser.peek();
-			if (!"sleigh".equals(e.getName())) {
-				return true;
-			}
-
-			int version = SpecXmlUtils.decodeInt(e.getAttribute("version"));
-			return (version != SLA_FORMAT_VERSION);
-		}
-		catch (SAXException | IOException e) {
-			return true;
-		}
-		finally {
-			if (parser != null) {
-				parser.dispose();
-			}
-		}
-	}
-
-	private boolean isSLAStale(ResourceFile slaFile) {
-		String slafilename = slaFile.getName();
-		int index = slafilename.lastIndexOf('.');
-		String slabase = slafilename.substring(0, index);
-		String slaspecfilename = slabase + ".slaspec";
-		ResourceFile slaspecFile = new ResourceFile(slaFile.getParentFile(), slaspecfilename);
-
-		File resourceAsFile = slaspecFile.getFile(true);
-		SleighPreprocessor preprocessor =
-			new SleighPreprocessor(new ModuleDefinitionsAdapter(), resourceAsFile);
-		long sourceTimestamp = Long.MAX_VALUE;
-		try {
-			sourceTimestamp = preprocessor.scanForTimestamp();
-		}
-		catch (Exception e) {
-			// squash the error because we will force recompilation and errors
-			// will propagate elsewhere
-		}
-		long compiledTimestamp = slaFile.lastModified();
-		return (sourceTimestamp > compiledTimestamp);
 	}
 
 	/**
@@ -415,20 +392,15 @@ public class SleighLanguage implements Language {
 				new SleighInstructionPrototype(this, buf, context, contextcache, inDelaySlot, null);
 			Integer hashcode = newProto.hashCode();
 
-			if (!instructProtoMap.containsKey(hashcode)) {
+			// get existing proto and use it
+			// if doesn't exist in map, cache info and store new proto
+			res = instructProtoMap.computeIfAbsent(hashcode, h -> {
 				newProto.cacheInfo(buf, context, true);
-			}
+				return newProto;
+			});
 
-			synchronized (instructProtoMap) {
-				res = instructProtoMap.get(hashcode);
-				if (res == null) { // We have a prototype we have never seen
-					// before, build it fully
-					instructProtoMap.put(hashcode, newProto);
-					res = newProto;
-				}
-				if (inDelaySlot && res.hasDelaySlots()) {
-					throw new NestedDelaySlotException();
-				}
+			if (inDelaySlot && res.hasDelaySlots()) {
+				throw new NestedDelaySlotException();
 			}
 		}
 		catch (MemoryAccessException e) {
@@ -463,82 +435,11 @@ public class SleighLanguage implements Language {
 
 	@Override
 	public void reloadLanguage(TaskMonitor monitor) throws IOException {
-		reloadLanguage(monitor, false);
-	}
-
-	private void reloadLanguage(TaskMonitor monitor, boolean calledFromInitialize)
-			throws IOException {
-		if (monitor == null) {
-			monitor = TaskMonitor.DUMMY;
-		}
-		monitor.setMessage("Compiling Language File...");
-
-		ResourceFile slaFile = description.getSlaFile();
-		String slaName = slaFile.getName();
-		int index = slaName.lastIndexOf('.');
-		String specName = slaName.substring(0, index);
-		String languageName = specName + ".slaspec";
-		ResourceFile languageFile = new ResourceFile(slaFile.getParentFile(), languageName);
-
-		// see gradle/processorUtils.gradle for sleighArgs.txt generation
-		ResourceFile sleighArgsFile = null;
-		ResourceFile languageModule = Application.getModuleContainingResourceFile(languageFile);
-		if (languageModule != null) {
-			if (SystemUtilities.isInReleaseMode()) {
-				sleighArgsFile = new ResourceFile(languageModule, "data/sleighArgs.txt");
-			}
-			else {
-				sleighArgsFile = new ResourceFile(languageModule, "build/tmp/sleighArgs.txt");
-			}
-		}
-
-		String[] args;
-		if (sleighArgsFile != null && sleighArgsFile.isFile()) {
-			String baseDir = Application.getInstallationDirectory()
-					.getAbsolutePath()
-					.replace(File.separatorChar, '/');
-			if (!baseDir.endsWith("/")) {
-				baseDir += "/";
-			}
-			args = new String[] { "-DBaseDir=" + baseDir, "-i", sleighArgsFile.getAbsolutePath(),
-				languageFile.getAbsolutePath(), description.getSlaFile().getAbsolutePath() };
-		}
-		else {
-			args = new String[] { languageFile.getAbsolutePath(),
-				description.getSlaFile().getAbsolutePath() };
-		}
-
 		try {
-			StringBuilder buf = new StringBuilder();
-			for (String str : args) {
-				buf.append(str);
-				buf.append(" ");
-			}
-			Msg.debug(this, "Sleigh compile: " + buf);
-			int returnCode = SleighCompileLauncher.runMain(args);
-			if (returnCode != 0) {
-				throw new SleighException("Errors compiling " + languageFile.getAbsolutePath() +
-					" -- please check log messages for details");
-			}
+			initialize(true, TaskMonitor.dummyIfNull(monitor));
 		}
-		catch (JDOMException e) {
-			throw new IOException("JDOMException error recompiling: " + e.getMessage());
-		}
-		catch (RecognitionException e) {
-			throw new IOException("RecognitionException error recompiling: " + e.getMessage());
-		}
-
-		if (!calledFromInitialize) {
-			monitor.setMessage("Reloading Language...");
-			try {
-				initialize(description);
-			}
-			catch (SAXException e) {
-				throw new IOException(e.getMessage());
-			}
-			catch (UnknownInstructionException e) {
-				throw new IOException(e.getMessage());
-			}
+		catch (SleighException e) {
+			throw new IOException("Failed to reload Sleigh language", e);
 		}
 	}
 
@@ -566,26 +467,33 @@ public class SleighLanguage implements Language {
 		}
 	};
 
-	private void readInitialDescription() throws SAXException, IOException {
-		ResourceFile specFile = description.getSpecFile();
-		XmlPullParser parser = XmlPullParserFactory.create(specFile, SPEC_ERR_HANDLER, false);
+	private void readInitialDescription() throws SleighException {
 		try {
-			XmlElement nextElement = parser.peek();
-			while (nextElement != null && !nextElement.getName().equals("segmented_address")) {
-				parser.next(); // skip element
-				nextElement = parser.peek();
-			}
-			if (nextElement != null) {
-				XmlElement element = parser.start(); // segmented_address element
-				segmentedspace = element.getAttribute("space");
-				segmentType = element.getAttribute("type");
-				if (segmentType == null) {
-					segmentType = "";
+			ResourceFile specFile = description.getSpecFile();
+			XmlPullParser parser = XmlPullParserFactory.create(specFile, SPEC_ERR_HANDLER, false);
+			try {
+				XmlElement nextElement = parser.peek();
+				while (nextElement != null && !nextElement.getName().equals("segmented_address")) {
+					parser.next(); // skip element
+					nextElement = parser.peek();
+				}
+				if (nextElement != null) {
+					XmlElement element = parser.start(); // segmented_address element
+					segmentedspace = element.getAttribute("space");
+					segmentType = element.getAttribute("type");
+					if (segmentType == null) {
+						segmentType = "";
+					}
 				}
 			}
+			finally {
+				parser.dispose();
+			}
 		}
-		finally {
-			parser.dispose();
+		catch (SAXException | IOException e) {
+			throw new SleighException(
+				"Error reading initial description - language probably did not compile properly",
+				e);
 		}
 	}
 
@@ -728,9 +636,6 @@ public class SleighLanguage implements Language {
 						throw new SleighException("no support for volatile registers yet");
 					}
 					Pair<Address, Address> range = parseRange(next);
-					if (volatileAddresses == null) {
-						volatileAddresses = new AddressSet();
-					}
 					volatileAddresses.addRange(range.first, range.second);
 					// skip the end tag
 					parser.end(next);
@@ -757,6 +662,7 @@ public class SleighLanguage implements Language {
 					String registerAlias = reg.getAttribute("alias");
 					String groupName = reg.getAttribute("group");
 					boolean isHidden = SpecXmlUtils.decodeBoolean(reg.getAttribute("hidden"));
+					boolean isVolatile = SpecXmlUtils.decodeBoolean(reg.getAttribute("volatile"));
 					if (registerRename != null) {
 						if (!registerBuilder.renameRegister(registerName, registerRename)) {
 							throw new SleighException(
@@ -780,6 +686,11 @@ public class SleighLanguage implements Language {
 						if (isHidden) {
 							registerBuilder.setFlag(registerName, Register.TYPE_HIDDEN);
 						}
+						if (isVolatile) {
+							Address first = register.getAddress();
+							Address second = first.add(register.getNumBytes() - 1);
+							volatileAddresses.addRange(first, second);
+						}
 						String sizes = reg.getAttribute("vector_lane_sizes");
 						if (sizes != null) {
 							String[] lanes = sizes.split(",");
@@ -800,14 +711,30 @@ public class SleighLanguage implements Language {
 			}
 			else if (elName.equals("default_symbols")) {
 				XmlElement subel = parser.start();
+				Address previousAddr = null;
+				int previousSize = 1;
 				while (parser.peek().getName().equals("symbol")) {
 					XmlElement symbol = parser.start();
 					String labelName = symbol.getAttribute("name");
 					String addressString = symbol.getAttribute("address");
 					String typeString = symbol.getAttribute("type");
+					String comment = symbol.getAttribute("description");
 					ProcessorSymbolType type = ProcessorSymbolType.getType(typeString);
 					boolean isEntry = SpecXmlUtils.decodeBoolean(symbol.getAttribute("entry"));
-					Address startAddress = addressFactory.getAddress(addressString);
+					Address startAddress = null;
+					if (addressString.equalsIgnoreCase("next")) {
+						if (previousAddr == null) {
+							Msg.error(this,
+								"use of addr=\"next\" tag with no previous address for " +
+									labelName + " : " + description.getSpecFile());
+						}
+						else {
+							startAddress = previousAddr.add(previousSize);
+						}
+					}
+					else {
+						startAddress = addressFactory.getAddress(addressString);
+					}
 					int rangeSize = SpecXmlUtils.decodeInt(symbol.getAttribute("size"));
 					Boolean isVolatile =
 						SpecXmlUtils.decodeNullableBoolean(symbol.getAttribute("volatile"));
@@ -818,10 +745,10 @@ public class SleighLanguage implements Language {
 					else {
 						AddressLabelInfo info;
 						try {
-							info = new AddressLabelInfo(startAddress, rangeSize, labelName, false,
-								isEntry, type, isVolatile);
+							info = new AddressLabelInfo(startAddress, rangeSize, labelName, comment,
+								false, isEntry, type, isVolatile);
 						}
-						catch (AddressOverflowException e) {
+						catch (AddressOverflowException | InvalidInputException e) {
 							throw new XmlParseException("invalid symbol definition: " + labelName,
 								e);
 						}
@@ -845,6 +772,8 @@ public class SleighLanguage implements Language {
 					}
 					// skip the end tag
 					parser.end(symbol);
+					previousAddr = startAddress;
+					previousSize = rangeSize;
 				}
 				parser.end(subel);
 			}
@@ -892,111 +821,126 @@ public class SleighLanguage implements Language {
 		parser.end(el);
 	}
 
-	private void readRemainingSpecification() throws SAXException, IOException {
-		ResourceFile specFile = description.getSpecFile();
-		XmlPullParser parser = XmlPullParserFactory.create(specFile, SPEC_ERR_HANDLER, false);
+	private void readRemainingSpecification() throws SleighException {
 		try {
-			read(parser);
+			ResourceFile specFile = description.getSpecFile();
+			XmlPullParser parser = XmlPullParserFactory.create(specFile, SPEC_ERR_HANDLER, false);
+			try {
+				read(parser);
+			}
+			catch (XmlParseException e) {
+				Msg.error(this, "Failed to parse Sleigh Specification (" + specFile.getName() +
+					"): " + e.getMessage());
+			}
+			finally {
+				parser.dispose();
+			}
 		}
-		catch (XmlParseException e) {
-			Msg.error(this, "Failed to parse Sleigh Specification (" + specFile.getName() + "): " +
-				e.getMessage());
+		catch (SAXException | IOException e) {
+			throw new SleighException(
+				"Error reading remaining spec - language probably did not compile properly", e);
 		}
-		finally {
-			parser.dispose();
-		}
+		
 	}
 
-	private void readSpecification(final ResourceFile sleighfile)
-			throws SAXException, IOException, UnknownInstructionException {
-		ErrorHandler errHandler = new ErrorHandler() {
-			@Override
-			public void error(SAXParseException exception) throws SAXException {
-				Msg.error(SleighLanguage.this, "Error parsing " + sleighfile, exception);
+	private void decode(Decoder decoder) throws DecoderException {
+		int el = decoder.openElement(ELEM_SLEIGH);
+		int version = 0;
+		uniqueBase = 0;
+		alignment = 1;
+		uniqueAllocateMask = 0;		// Default mask is 0
+		numSections = 0;
+		boolean isBigEndian = false;
+		int attrib = decoder.getNextAttributeId();
+		while (attrib != 0) {
+			if (attrib == ATTRIB_VERSION.id()) {
+				version = (int) decoder.readSignedInteger();
 			}
-
-			@Override
-			public void fatalError(SAXParseException exception) throws SAXException {
-				Msg.error(SleighLanguage.this, "Fatal error parsing " + sleighfile, exception);
+			else if (attrib == ATTRIB_BIGENDIAN.id()) {
+				isBigEndian = decoder.readBool();
 			}
-
-			@Override
-			public void warning(SAXParseException exception) throws SAXException {
-				Msg.warn(SleighLanguage.this, "Warning parsing " + sleighfile, exception);
+			else if (attrib == ATTRIB_UNIQBASE.id()) {
+				uniqueBase = decoder.readUnsignedInteger();
 			}
-		};
-		XmlPullParser parser = XmlPullParserFactory.create(sleighfile, errHandler, false);
-		try {
-			restoreXml(parser);
+			else if (attrib == ATTRIB_ALIGN.id()) {
+				alignment = (int) decoder.readSignedInteger();
+			}
+			else if (attrib == ATTRIB_UNIQMASK.id()) {
+				uniqueAllocateMask = (int) decoder.readUnsignedInteger();
+			}
+			else if (attrib == ATTRIB_NUMSECTIONS.id()) {
+				numSections = (int) decoder.readUnsignedInteger();
+			}
+			attrib = decoder.getNextAttributeId();
 		}
-		finally {
-			parser.dispose();
-		}
-	}
-
-	private void restoreXml(XmlPullParser parser) throws UnknownInstructionException {
-		XmlElement el = parser.start("sleigh");
-		int version = SpecXmlUtils.decodeInt(el.getAttribute("version"));
-		if (version != SLA_FORMAT_VERSION) {
+		if (version != FORMAT_VERSION) {
 			throw new SleighException(".sla file for " + getLanguageID() + " has the wrong format");
 		}
-		String endianAttr = el.getAttribute("bigendian");
-		Endian slaEndian = SpecXmlUtils.decodeBoolean(endianAttr) ? Endian.BIG : Endian.LITTLE;
+		Endian slaEndian = isBigEndian ? Endian.BIG : Endian.LITTLE;
 		Endian ldefEndian = description.getEndian();
 		Endian instEndian = description.getInstructionEndian();
 		if (slaEndian != ldefEndian && instEndian == ldefEndian) {
 			throw new SleighException(".ldefs says " + getLanguageID() + " is " + ldefEndian +
 				" but .sla says " + slaEndian);
 		}
-		uniqueBase = SpecXmlUtils.decodeLong(el.getAttribute("uniqbase"));
-		alignment = SpecXmlUtils.decodeInt(el.getAttribute("align"));
-		uniqueAllocateMask = 0;		// Default mask is 0
-		String uniqmaskstr = el.getAttribute("uniqmask");
-		if (uniqmaskstr != null) {
-			uniqueAllocateMask = SpecXmlUtils.decodeInt(uniqmaskstr);
-		}
-		String numsecstr = el.getAttribute("numsections");
-		if (numsecstr != null) {
-			numSections = SpecXmlUtils.decodeInt(numsecstr);
-		}
 		indexer = new SourceFileIndexer();
-		indexer.restoreXml(parser);
-		parseSpaces(parser);
+		indexer.decode(decoder);
+		parseSpaces(decoder);
 		symtab = new SymbolTable();
-		symtab.restoreXml(parser, this);
+		symtab.decode(decoder, this);
 		root =
 			((SubtableSymbol) symtab.getGlobalScope().findSymbol("instruction")).getDecisionNode();
-		parser.end(el);
+		decoder.closeElement(el);
 	}
 
-	private void parseSpaces(XmlPullParser parser) {
+	private void parseSpaces(Decoder decoder) throws DecoderException {
 		Set<String> truncatedSpaceNames = description.getTruncatedSpaceNames();
 		int truncatedSpaceCnt = truncatedSpaceNames.size();
-		XmlElement el = parser.start("spaces");
-		String defname = el.getAttribute("defaultspace");
+		int el = decoder.openElement(ELEM_SPACES);
+		String defname = decoder.readString(ATTRIB_DEFAULTSPACE);
 		spacetable = new LinkedHashMap<>();
 		// Slot zero is always the constant space
 		AddressSpace constspc = new GenericAddressSpace(SpaceNames.CONSTANT_SPACE_NAME, 64,
 			AddressSpace.TYPE_CONSTANT, SpaceNames.CONSTANT_SPACE_INDEX);
 		spacetable.put(SpaceNames.CONSTANT_SPACE_NAME, constspc);
 		default_space = null;
-		XmlElement subel = parser.peek();
-		if (subel.getName().equals("space_other")) {	// tag must be present
-			parser.discardSubTree();	// We don't process it
+		int subel = decoder.peekElement();
+		if (subel == ELEM_SPACE_OTHER.id()) {		// tag must be present
+			decoder.openElement();
+			decoder.closeElementSkipping(subel);	// We don't process it
 			// Instead the ProgramAddressFactory maps in the static OTHER_SPACE automatically 
 		}
 		else {
 			throw new SleighException(".sla file missing required OTHER space tag");
 		}
-		while ((subel = parser.softStart("space", "space_unique")) != null) {
-			String name = subel.getAttribute("name");
-			int index = SpecXmlUtils.decodeInt(subel.getAttribute("index"));
-			String typename = subel.getName();
-			int delay = SpecXmlUtils.decodeInt(subel.getAttribute("delay"));
-			int size = SpecXmlUtils.decodeInt(subel.getAttribute("size"));
-
-			int type = AddressSpace.TYPE_UNKNOWN;
-			if (typename.equals("space")) {
+		while (decoder.peekElement() != 0) {
+			int wordsize = 1;
+			String name = null;
+			int index = 0;
+			int delay = -1;
+			int size = 0;
+			subel = decoder.openElement();
+			int attrib = decoder.getNextAttributeId();
+			while (attrib != 0) {
+				if (attrib == ATTRIB_NAME.id()) {
+					name = decoder.readString();
+				}
+				else if (attrib == ATTRIB_INDEX.id()) {
+					index = (int) decoder.readSignedInteger();
+				}
+				else if (attrib == ATTRIB_DELAY.id()) {
+					delay = (int) decoder.readSignedInteger();
+				}
+				else if (attrib == ATTRIB_SIZE.id()) {
+					size = (int) decoder.readSignedInteger();
+				}
+				else if (attrib == ATTRIB_WORDSIZE.id()) {
+					wordsize = (int) decoder.readSignedInteger();
+				}
+				attrib = decoder.getNextAttributeId();
+			}
+			int type;
+			if (subel == ELEM_SPACE.id()) {
 				if (delay > 0) {
 					type = AddressSpace.TYPE_RAM;
 				}
@@ -1004,17 +948,11 @@ public class SleighLanguage implements Language {
 					type = AddressSpace.TYPE_REGISTER;
 				}
 			}
-			else if (typename.equals("space_unique")) {
+			else if (subel == ELEM_SPACE_UNIQUE.id()) {
 				type = AddressSpace.TYPE_UNIQUE;
 			}
-			if (type == AddressSpace.TYPE_UNKNOWN) {
+			else {
 				throw new SleighException("Sleigh cannot match new space definition to old type");
-			}
-
-			String wSizeString = subel.getAttribute("wordsize");
-			int wordsize = 1;
-			if (wSizeString != null) {
-				wordsize = SpecXmlUtils.decodeInt(wSizeString);
 			}
 
 			boolean truncateSpace = truncatedSpaceNames.contains(name);
@@ -1048,7 +986,7 @@ public class SleighLanguage implements Language {
 				spc = new GenericAddressSpace(name, 8 * size, wordsize, type, index);
 			}
 			spacetable.put(name, spc);
-			parser.end(subel);
+			decoder.closeElement(subel);
 		}
 		if (truncatedSpaceCnt > 0) {
 			throw new SleighException(
@@ -1058,7 +996,8 @@ public class SleighLanguage implements Language {
 		defaultDataSpace = default_space;
 		defaultPointerWordSize = defaultDataSpace.getAddressableUnitSize();
 		buildAddressSpaceFactory();
-		parser.end(el);
+		decoder.closeElement(el);
+		decoder.setAddressFactory(addressFactory);
 	}
 
 	void buildAddressSpaceFactory() {
@@ -1160,7 +1099,7 @@ public class SleighLanguage implements Language {
 	 * @deprecated Will be removed once we have better way to attach address spaces to pointer data-types
 	 * @return the default wordsize to use when analyzing pointer offsets
 	 */
-	@Deprecated
+	@Deprecated(since = "9.0")
 	public int getDefaultPointerWordSize() {
 		return defaultPointerWordSize;
 	}
@@ -1188,7 +1127,7 @@ public class SleighLanguage implements Language {
 	}
 
 	@Override
-	public LanguageDescription getLanguageDescription() {
+	public SleighLanguageDescription getLanguageDescription() {
 		return description;
 	}
 
@@ -1204,6 +1143,11 @@ public class SleighLanguage implements Language {
 		catch (CompilerSpecNotFoundException e) {
 			throw new IllegalStateException(e);
 		}
+	}
+
+	@Override
+	public OptionalInt getMaximumInstructionLength() {
+		return maxInstructionLength;
 	}
 
 	@Override
@@ -1268,9 +1212,7 @@ public class SleighLanguage implements Language {
 		ManualEntry manualEntry = null;
 		int maxInCommon = -1;
 
-		Iterator<Entry<String, ManualEntry>> ii = subMap.entrySet().iterator();
-		while (ii.hasNext()) {
-			Entry<String, ManualEntry> mapEntry = ii.next();
+		for (Entry<String, ManualEntry> mapEntry : subMap.entrySet()) {
 			String key = mapEntry.getKey();
 			if (instruction.startsWith(key) && key.length() > maxInCommon) {
 				manualEntry = mapEntry.getValue();
@@ -1454,11 +1396,16 @@ public class SleighLanguage implements Language {
 			throws IOException {
 		AddressSpace[] spclist = factory.getAllAddressSpaces();
 
-		encoder.openElement(ELEM_SLEIGH);
-		encoder.writeBool(ATTRIB_BIGENDIAN, isBigEndian());
-		encoder.writeUnsignedInteger(ATTRIB_UNIQBASE, uniqueOffset);
-		encoder.openElement(ELEM_SPACES);
-		encoder.writeString(ATTRIB_DEFAULTSPACE, factory.getDefaultAddressSpace().getName());
+		// WARNING
+		// ELEM_ and ATTRIB_ symbols in this method all come from the AttributeId and ElementId
+		// namespace, some of which conflict with other ELEM_ and ATTRIB_ symbols used in this file
+
+		encoder.openElement(ElementId.ELEM_SLEIGH);
+		encoder.writeBool(AttributeId.ATTRIB_BIGENDIAN, isBigEndian());
+		encoder.writeUnsignedInteger(AttributeId.ATTRIB_UNIQBASE, uniqueOffset);
+		encoder.openElement(ElementId.ELEM_SPACES);
+		encoder.writeString(AttributeId.ATTRIB_DEFAULTSPACE,
+			factory.getDefaultAddressSpace().getName());
 
 		ElementId tag;
 		int delay;
@@ -1467,31 +1414,31 @@ public class SleighLanguage implements Language {
 		for (AddressSpace element : spclist) {
 			if ((element instanceof OverlayAddressSpace)) {
 				OverlayAddressSpace ospace = (OverlayAddressSpace) element;
-				encoder.openElement(ELEM_SPACE_OVERLAY);
-				encoder.writeString(ATTRIB_NAME, ospace.getName());
-				encoder.writeSignedInteger(ATTRIB_INDEX, ospace.getUnique());
-				encoder.writeSpace(ATTRIB_BASE, ospace.getOverlayedSpace());
-				encoder.closeElement(ELEM_SPACE_OVERLAY);
+				encoder.openElement(ElementId.ELEM_SPACE_OVERLAY);
+				encoder.writeString(AttributeId.ATTRIB_NAME, ospace.getName());
+				encoder.writeSignedInteger(AttributeId.ATTRIB_INDEX, ospace.getUnique());
+				encoder.writeSpace(AttributeId.ATTRIB_BASE, ospace.getOverlayedSpace());
+				encoder.closeElement(ElementId.ELEM_SPACE_OVERLAY);
 				continue;
 			}
 			switch (element.getType()) {
 				case AddressSpace.TYPE_RAM:
-					tag = ELEM_SPACE;
+					tag = ElementId.ELEM_SPACE;
 					delay = 1;
 					physical = true;
 					break;
 				case AddressSpace.TYPE_REGISTER:
-					tag = ELEM_SPACE;
+					tag = ElementId.ELEM_SPACE;
 					delay = 0;
 					physical = true;
 					break;
 				case AddressSpace.TYPE_UNIQUE:
-					tag = ELEM_SPACE_UNIQUE;
+					tag = ElementId.ELEM_SPACE_UNIQUE;
 					delay = 0;
 					physical = true;
 					break;
 				case AddressSpace.TYPE_OTHER:
-					tag = ELEM_SPACE_OTHER;
+					tag = ElementId.ELEM_SPACE_OTHER;
 					delay = 0;
 					physical = true;
 					break;
@@ -1499,8 +1446,8 @@ public class SleighLanguage implements Language {
 					continue;
 			}
 			encoder.openElement(tag);
-			encoder.writeString(ATTRIB_NAME, element.getName());
-			encoder.writeSignedInteger(ATTRIB_INDEX, element.getUnique());
+			encoder.writeString(AttributeId.ATTRIB_NAME, element.getName());
+			encoder.writeSignedInteger(AttributeId.ATTRIB_INDEX, element.getUnique());
 
 			int size = element.getSize(); // Size in bits
 			if (element instanceof SegmentedAddressSpace) {
@@ -1511,32 +1458,32 @@ public class SleighLanguage implements Language {
 				size = 64;
 			}
 			int bytesize = (size + 7) / 8; // Convert bits to bytes
-			encoder.writeSignedInteger(ATTRIB_SIZE, bytesize);
+			encoder.writeSignedInteger(AttributeId.ATTRIB_SIZE, bytesize);
 
 			if (element.getAddressableUnitSize() > 1) {
-				encoder.writeUnsignedInteger(ATTRIB_WORDSIZE, element.getAddressableUnitSize());
+				encoder.writeUnsignedInteger(AttributeId.ATTRIB_WORDSIZE,
+					element.getAddressableUnitSize());
 			}
 
-			encoder.writeBool(ATTRIB_BIGENDIAN, isBigEndian());
-			encoder.writeSignedInteger(ATTRIB_DELAY, delay);
-			encoder.writeBool(ATTRIB_PHYSICAL, physical);
+			encoder.writeBool(AttributeId.ATTRIB_BIGENDIAN, isBigEndian());
+			encoder.writeSignedInteger(AttributeId.ATTRIB_DELAY, delay);
+			encoder.writeBool(AttributeId.ATTRIB_PHYSICAL, physical);
 			encoder.closeElement(tag);
 		}
-		encoder.closeElement(ELEM_SPACES);
+		encoder.closeElement(ElementId.ELEM_SPACES);
 
-		SleighLanguageDescription sleighDescription =
-			(SleighLanguageDescription) getLanguageDescription();
+		SleighLanguageDescription sleighDescription = getLanguageDescription();
 		Set<String> truncatedSpaceNames = sleighDescription.getTruncatedSpaceNames();
 		if (!truncatedSpaceNames.isEmpty()) {
 			for (String spaceName : truncatedSpaceNames) {
 				int sz = sleighDescription.getTruncatedSpaceSize(spaceName);
-				encoder.openElement(ELEM_TRUNCATE_SPACE);
-				encoder.writeString(ATTRIB_SPACE, spaceName);
-				encoder.writeSignedInteger(ATTRIB_SIZE, sz);
-				encoder.closeElement(ELEM_TRUNCATE_SPACE);
+				encoder.openElement(ElementId.ELEM_TRUNCATE_SPACE);
+				encoder.writeString(AttributeId.ATTRIB_SPACE, spaceName);
+				encoder.writeSignedInteger(AttributeId.ATTRIB_SIZE, sz);
+				encoder.closeElement(ElementId.ELEM_TRUNCATE_SPACE);
 			}
 		}
-		encoder.closeElement(ELEM_SLEIGH);
+		encoder.closeElement(ElementId.ELEM_SLEIGH);
 	}
 
 	private void initParallelHelper() {
@@ -1546,18 +1493,10 @@ public class SleighLanguage implements Language {
 			return;
 		}
 		try {
-			Class<?> helperClass = Class.forName(className);
-			if (!ParallelInstructionLanguageHelper.class.isAssignableFrom(helperClass)) {
-				Msg.error(this,
-					"Invalid Class specified for " +
-						GhidraLanguagePropertyKeys.PARALLEL_INSTRUCTION_HELPER_CLASS + " (" +
-						helperClass.getName() + "): " + description.getSpecFile());
-			}
-			else {
-				parallelHelper =
-					(ParallelInstructionLanguageHelper) helperClass.getDeclaredConstructor()
-							.newInstance();
-			}
+			Class<? extends ParallelInstructionLanguageHelper> helperClass =
+				ClassSearcher.forNameSafe(className, ParallelInstructionLanguageHelper.class,
+					getClass().getClassLoader());
+			parallelHelper = helperClass.getDeclaredConstructor().newInstance();
 		}
 		catch (Exception e) {
 			throw new SleighException("Failed to instantiate " +

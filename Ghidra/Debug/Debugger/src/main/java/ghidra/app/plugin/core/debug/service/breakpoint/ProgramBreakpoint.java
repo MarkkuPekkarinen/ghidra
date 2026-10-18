@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,17 +16,19 @@
 package ghidra.app.plugin.core.debug.service.breakpoint;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import com.google.gson.*;
 
 import db.Transaction;
-import ghidra.app.services.LogicalBreakpoint;
-import ghidra.app.services.LogicalBreakpoint.ProgramMode;
+import ghidra.debug.api.breakpoint.LogicalBreakpoint;
+import ghidra.debug.api.breakpoint.LogicalBreakpoint.ProgramMode;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.*;
 import ghidra.program.util.ProgramLocation;
 import ghidra.trace.model.breakpoint.TraceBreakpointKind;
+import ghidra.trace.model.breakpoint.TraceBreakpointKind.CommonSet;
 import ghidra.trace.model.breakpoint.TraceBreakpointKind.TraceBreakpointKindSet;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
@@ -46,7 +48,7 @@ public class ProgramBreakpoint {
 	private static final Gson GSON = new GsonBuilder().create();
 
 	/**
-	 * A class for (de)serializing breakoint properties in the bookmark's comments
+	 * A class for (de)serializing breakpoint properties in the bookmark's comments
 	 */
 	static class BreakpointProperties {
 		public String name;
@@ -69,8 +71,8 @@ public class ProgramBreakpoint {
 		Set<TraceBreakpointKind> result = TraceBreakpointKindSet.decode(parts[0], false);
 		if (result.isEmpty()) {
 			Msg.warn(TraceBreakpointKind.class,
-				"Decoded empty set of kinds from bookmark. Assuming SW_EXECUTE");
-			return Set.of(TraceBreakpointKind.SW_EXECUTE);
+				"Decoded empty set of kinds from bookmark. Assuming %s".formatted(CommonSet.SWX));
+			return CommonSet.SWX.kinds();
 		}
 		return result;
 	}
@@ -102,6 +104,25 @@ public class ProgramBreakpoint {
 				"Ill-formatted bookmark breakpoint length: " + e + ". Using 1.");
 			return 1;
 		}
+	}
+
+	/**
+	 * Produce a breakpoint from its bookmark (utility).
+	 * <p>
+	 * The breakpoint manager does not ordinarily use this, as the path to total construction spans
+	 * discovering and indexing of logical breakpoints, and then adding into them information
+	 * available from program bookmarks and trace breakpoints. This utility eases the processing of
+	 * program-specified bookmarks without depending on the breakpoint service.
+	 * 
+	 * @param program the program containing the bookmark
+	 * @param bm the bookmark describing the breakpoint
+	 * @return the breakpoint
+	 */
+	public static ProgramBreakpoint fromBookmark(Program program, Bookmark bm) {
+		ProgramBreakpoint brk = new ProgramBreakpoint(program,
+			bm.getAddress(), lengthFromBookmark(bm), kindsFromBookmark(bm));
+		brk.add(bm);
+		return brk;
 	}
 
 	private final Program program;
@@ -353,8 +374,7 @@ public class ProgramBreakpoint {
 	 * @return true if this changed the breakpoint state
 	 */
 	public boolean add(Bookmark bookmark) {
-		if (LogicalBreakpointInternal.BREAKPOINT_ENABLED_BOOKMARK_TYPE
-				.equals(bookmark.getTypeString())) {
+		if (LogicalBreakpoint.ENABLED_BOOKMARK_TYPE.equals(bookmark.getTypeString())) {
 			if (eBookmark == bookmark) {
 				return false;
 			}
@@ -362,8 +382,7 @@ public class ProgramBreakpoint {
 			syncProperties(bookmark);
 			return true;
 		}
-		if (LogicalBreakpointInternal.BREAKPOINT_DISABLED_BOOKMARK_TYPE
-				.equals(bookmark.getTypeString())) {
+		if (LogicalBreakpoint.DISABLED_BOOKMARK_TYPE.equals(bookmark.getTypeString())) {
 			if (dBookmark == bookmark) {
 				return false;
 			}
@@ -399,10 +418,27 @@ public class ProgramBreakpoint {
 	 */
 	public Bookmark getBookmark() {
 		Bookmark eBookmark = this.eBookmark;
-		if (eBookmark != null) {
+		if (eBookmark != null && !eBookmark.isDeleted()) {
 			return eBookmark;
 		}
-		return dBookmark;
+		Bookmark dBookmark = this.dBookmark;
+		if (dBookmark != null && !dBookmark.isDeleted()) {
+			return dBookmark;
+		}
+		return null;
+	}
+
+	public List<Bookmark> getBookmarksValidOrNot() {
+		Bookmark eBookmark = this.eBookmark;
+		Bookmark dBookmark = this.dBookmark;
+		List<Bookmark> result = new ArrayList<>();
+		if (eBookmark != null) {
+			result.add(eBookmark);
+		}
+		if (dBookmark != null) {
+			result.add(dBookmark);
+		}
+		return result;
 	}
 
 	protected String getComment() {
@@ -438,6 +474,21 @@ public class ProgramBreakpoint {
 	}
 
 	/**
+	 * In case a program database with pre-Ghidra-12.2 breakpoint bookmarks comes along (this will
+	 * happen for a while), we want to ensure the old encodings are deleted when the breakpoint is
+	 * toggled. While we'd normally strive for perfect backward compatibility, it's not as important
+	 * for breakpoints here. If this function is to be removed later (it probably should be), we can
+	 * either: 1) ensure there's some upgrade process, on import or via a script; or 2) just
+	 * instruct users on a case-by-case basis to delete the old breakpoints.
+	 * 
+	 * @return the bookmark category for encoding the breakpoint kinds in versions prior to 12.2.
+	 */
+	protected String computeCategory_Pre12Dot2() {
+		return kinds.stream().map(k -> k.name()).collect(Collectors.joining(",")) + ";" +
+			Long.toUnsignedString(length);
+	}
+
+	/**
 	 * Change the state of this breakpoint by manipulating bookmarks
 	 * 
 	 * <p>
@@ -452,16 +503,19 @@ public class ProgramBreakpoint {
 	 */
 	public void toggleWithComment(boolean enabled, String comment) {
 		String addType =
-			enabled ? LogicalBreakpoint.BREAKPOINT_ENABLED_BOOKMARK_TYPE
-					: LogicalBreakpoint.BREAKPOINT_DISABLED_BOOKMARK_TYPE;
+			enabled ? LogicalBreakpoint.ENABLED_BOOKMARK_TYPE
+					: LogicalBreakpoint.DISABLED_BOOKMARK_TYPE;
 		String delType =
-			enabled ? LogicalBreakpoint.BREAKPOINT_DISABLED_BOOKMARK_TYPE
-					: LogicalBreakpoint.BREAKPOINT_ENABLED_BOOKMARK_TYPE;
+			enabled ? LogicalBreakpoint.DISABLED_BOOKMARK_TYPE
+					: LogicalBreakpoint.ENABLED_BOOKMARK_TYPE;
 		try (Transaction tx = program.openTransaction("Toggle breakpoint")) {
 			BookmarkManager manager = program.getBookmarkManager();
 			String catStr = computeCategory();
+			String catStr_Pre12Dot2 = computeCategory_Pre12Dot2();
 			manager.setBookmark(address, addType, catStr, comment);
 			manager.removeBookmarks(new AddressSet(address), delType, catStr,
+				TaskMonitor.DUMMY);
+			manager.removeBookmarks(new AddressSet(address), delType, catStr_Pre12Dot2,
 				TaskMonitor.DUMMY);
 		}
 		catch (CancelledException e) {

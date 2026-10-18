@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -51,7 +51,7 @@ public class InputWithChoicesDialog extends DialogComponentProvider {
 	public InputWithChoicesDialog(String dialogTitle, String label, String[] optionValues,
 			String initialValue, Icon messageIcon) {
 
-		super(dialogTitle, true, false, true, false);
+		super(dialogTitle, true, true, true, false);
 
 		setTransient(true);
 		addOKButton();
@@ -80,7 +80,7 @@ public class InputWithChoicesDialog extends DialogComponentProvider {
 	public InputWithChoicesDialog(String dialogTitle, String label, String[] optionValues,
 			String initialValue, boolean allowEdits, Icon messageIcon) {
 
-		super(dialogTitle, true, false, true, false);
+		super(dialogTitle, true, true, true, false);
 
 		this.addOKButton();
 		this.addCancelButton();
@@ -110,11 +110,14 @@ public class InputWithChoicesDialog extends DialogComponentProvider {
 		// COMBO BOX PANEL
 		JLabel messageLabel = new GHtmlLabel(labelText);
 		messageLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 5, 0));
+		messageLabel.getAccessibleContext().setAccessibleName("Message");
 		combo = createComboBox(optionValues, initialValue);
+		combo.getAccessibleContext().setAccessibleName("Options");
 
 		JPanel dataPanel = new JPanel(new BorderLayout());
 		dataPanel.add(messageLabel, BorderLayout.NORTH);
 		dataPanel.add(combo, BorderLayout.SOUTH);
+		dataPanel.getAccessibleContext().setAccessibleName("Data");
 
 		workPanel.add(dataPanel, BorderLayout.CENTER);
 
@@ -123,17 +126,20 @@ public class InputWithChoicesDialog extends DialogComponentProvider {
 			JLabel iconLabel = new GDLabel();
 			iconLabel.setIcon(messageIcon);
 			iconLabel.setVerticalAlignment(SwingConstants.TOP);
+			iconLabel.getAccessibleContext().setAccessibleName("Icon");
 
 			JPanel separatorPanel = new JPanel();
 			separatorPanel.setPreferredSize(new Dimension(15, 1));
+			separatorPanel.getAccessibleContext().setAccessibleName("Separator");
 
 			JPanel iconPanel = new JPanel(new BorderLayout());
 			iconPanel.add(iconLabel, BorderLayout.CENTER);
 			iconPanel.add(separatorPanel, BorderLayout.EAST);
+			iconPanel.getAccessibleContext().setAccessibleName("Icon");
 
 			workPanel.add(iconPanel, BorderLayout.WEST);
 		}
-
+		workPanel.getAccessibleContext().setAccessibleName("Input With Choices");
 		addWorkPanel(workPanel);
 	}
 
@@ -145,7 +151,7 @@ public class InputWithChoicesDialog extends DialogComponentProvider {
 		if (initialValue != null) {
 			newComboBox.setSelectedItem(initialValue);
 		}
-
+		newComboBox.getAccessibleContext().setAccessibleName("Options");
 		return newComboBox;
 	}
 

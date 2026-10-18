@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,18 +15,26 @@
  */
 package ghidra.app.plugin.core.datamgr.tree;
 
+import java.util.Collections;
 import java.util.List;
 
+import javax.swing.Icon;
+
 import docking.widgets.tree.GTreeNode;
-import ghidra.app.plugin.core.datamgr.archive.Archive;
-import ghidra.app.plugin.core.datamgr.archive.InvalidFileArchive;
-import ghidra.program.model.data.ArchiveType;
+import generic.theme.GIcon;
+import ghidra.app.plugin.core.datamgr.archive.InvalidArchive;
 import ghidra.util.HTMLUtilities;
 
-public class InvalidArchiveNode extends ArchiveNode {
+/**
+ * Archive node for an invalid file data type archive.
+ */
+public class InvalidArchiveNode extends DataTypeTreeNode {
+	private static final Icon INVALID_ARCHIVE_ICON =
+		new GIcon("icon.plugin.datatypes.archive.invalid");
+	private InvalidArchive archive;
 
-	public InvalidArchiveNode(InvalidFileArchive archive) {
-		super(archive, new ArrayPointerFilterState());
+	public InvalidArchiveNode(InvalidArchive archive) {
+		this.archive = archive;
 	}
 
 	@Override
@@ -41,15 +49,13 @@ public class InvalidArchiveNode extends ArchiveNode {
 
 	@Override
 	public String getToolTip() {
-		ArchiveType archiveType = ((InvalidFileArchive) archive).getArchiveType();
-		String type = archiveType == ArchiveType.FILE ? "File" : "Project";
-		return "<html>Unable to locate " + type + " data type archive: " +
-			HTMLUtilities.escapeHTML(archive.getName());
+		return "<html>Unable to locate file data type archive: " +
+			HTMLUtilities.escapeHTML(archive.name());
 	}
 
 	@Override
 	public String getName() {
-		return archive.getName();
+		return archive.name();
 	}
 
 	@Override
@@ -63,7 +69,7 @@ public class InvalidArchiveNode extends ArchiveNode {
 	}
 
 	@Override
-	public ArchiveNode getArchiveNode() {
+	public FileArchiveNode getArchiveNode() {
 		return null;
 	}
 
@@ -79,11 +85,20 @@ public class InvalidArchiveNode extends ArchiveNode {
 
 	@Override
 	public void setNodeCut(boolean isCut) {
+		// do nothing
 	}
 
 	@Override
-	public Archive getArchive() {
+	public Icon getIcon(boolean expanded) {
+		return INVALID_ARCHIVE_ICON;
+	}
+
+	public InvalidArchive getInvalidArchive() {
 		return archive;
 	}
 
+	@Override
+	protected List<GTreeNode> generateChildren() {
+		return Collections.emptyList();
+	}
 }

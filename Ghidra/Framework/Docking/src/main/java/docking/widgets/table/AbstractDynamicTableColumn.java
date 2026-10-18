@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,8 @@
 package docking.widgets.table;
 
 import java.util.*;
+
+import javax.swing.table.TableCellEditor;
 
 import ghidra.docking.settings.*;
 import ghidra.framework.plugintool.ServiceProvider;
@@ -29,8 +31,6 @@ import utilities.util.reflection.ReflectionUtilities;
  * determines the appropriate cell object for use by the table column this field represents. It can
  * then return the appropriate object to display in the table cell for the indicated row object.
  *
- * Implementations of this interface must provide a public default constructor.
- * 
  * @param <ROW_TYPE> The row object class supported by this column
  * @param <COLUMN_TYPE> The column object class supported by this column
  * @param <DATA_SOURCE> The object class type that will be passed to see
@@ -50,10 +50,10 @@ public abstract class AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, DATA_SOU
 	protected static final FloatingPointPrecisionSettingsDefinition FLOATING_POINT_PRECISION_SETTING =
 		FloatingPointPrecisionSettingsDefinition.DEF;
 
-	protected static SettingsDefinition[] INTEGER_SETTINGS_DEFINITIONS =
+	protected static final SettingsDefinition[] INTEGER_SETTINGS_DEFINITIONS =
 		new SettingsDefinition[] { INTEGER_RADIX_SETTING, INTEGER_SIGNEDNESS_MODE_SETTING };
 
-	protected static SettingsDefinition[] FLOATING_POINT_SETTINGS_DEFINITIONS =
+	protected static final SettingsDefinition[] FLOATING_POINT_SETTINGS_DEFINITIONS =
 		new SettingsDefinition[] { FLOATING_POINT_PRECISION_SETTING };
 
 	private boolean hasConfiguredDefaultSettings = false;
@@ -76,7 +76,17 @@ public abstract class AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, DATA_SOU
 
 	@Override
 	public int getColumnPreferredWidth() {
-		return -1;
+		return AbstractGTableModel.WIDTH_UNDEFINED;
+	}
+
+	@Override
+	public int getColumnMaxWidth() {
+		return AbstractGTableModel.WIDTH_UNDEFINED;
+	}
+
+	@Override
+	public int getColumnMinWidth() {
+		return AbstractGTableModel.WIDTH_UNDEFINED;
 	}
 
 	public Comparator<COLUMN_TYPE> getComparator() {
@@ -95,8 +105,8 @@ public abstract class AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, DATA_SOU
 	public Class<COLUMN_TYPE> getColumnClass() {
 		@SuppressWarnings("rawtypes")
 		Class<? extends AbstractDynamicTableColumn> implementationClass = getClass();
-		List<Class<?>> typeArguments = ReflectionUtilities.getTypeArguments(
-			AbstractDynamicTableColumn.class, implementationClass);
+		List<Class<?>> typeArguments = ReflectionUtilities
+				.getTypeArguments(AbstractDynamicTableColumn.class, implementationClass);
 		return (Class<COLUMN_TYPE>) typeArguments.get(1);
 	}
 
@@ -106,8 +116,8 @@ public abstract class AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, DATA_SOU
 	public Class<ROW_TYPE> getSupportedRowType() {
 		@SuppressWarnings("rawtypes")
 		Class<? extends AbstractDynamicTableColumn> implementationClass = getClass();
-		List<Class<?>> typeArguments = ReflectionUtilities.getTypeArguments(
-			AbstractDynamicTableColumn.class, implementationClass);
+		List<Class<?>> typeArguments = ReflectionUtilities
+				.getTypeArguments(AbstractDynamicTableColumn.class, implementationClass);
 		return (Class<ROW_TYPE>) typeArguments.get(0);
 	}
 
@@ -117,6 +127,11 @@ public abstract class AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, DATA_SOU
 
 	@Override
 	public GColumnRenderer<COLUMN_TYPE> getColumnRenderer() {
+		return null;
+	}
+
+	@Override
+	public TableCellEditor getColumnEditor() {
 		return null;
 	}
 
@@ -193,7 +208,7 @@ public abstract class AbstractDynamicTableColumn<ROW_TYPE, COLUMN_TYPE, DATA_SOU
 		return getIdentifier().hashCode();
 	}
 
-	// Note: this method is here because the default 'identifier' must be lazy loaded, as 
+	// Note: this method is here because the default 'identifier' must be lazy loaded, as
 	//       at construction time not all the variables needed are available.
 	private String getIdentifier() {
 		/*

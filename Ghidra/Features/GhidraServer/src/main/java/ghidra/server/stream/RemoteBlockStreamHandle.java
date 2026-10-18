@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -51,9 +51,6 @@ public abstract class RemoteBlockStreamHandle<T extends BlockStream> implements 
 
 	public static final long serialVersionUID = 1L;
 
-	public static boolean enableCompressedSerializationOutput = Boolean.parseBoolean(
-		System.getProperty(DataBuffer.COMPRESSED_SERIAL_OUTPUT_PROPERTY, "false"));
-
 	public static final String HEADER_PREFIX = "@stream:";
 	public static final String HEADER_SUFFIX = "@";
 	public static final int HEADER_LENGTH =
@@ -70,7 +67,7 @@ public abstract class RemoteBlockStreamHandle<T extends BlockStream> implements 
 	private final int blockCount;
 	private final int blockSize;
 
-	protected final boolean compressed = enableCompressedSerializationOutput;
+	protected final boolean compressed = DataBuffer.isCompressedSerializationOutputEnabled();
 
 	private boolean connectionPending = true;
 
@@ -131,14 +128,6 @@ public abstract class RemoteBlockStreamHandle<T extends BlockStream> implements 
 	 */
 	int getBlockSize() {
 		return blockSize;
-	}
-
-	/**
-	 * Get the preferred socket send/receive buffer size to be used
-	 * @return preferred socket send/receive buffer size
-	 */
-	protected int getPreferredBufferSize() {
-		return (getBlockSize() + 4) * 12;
 	}
 
 	/**

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,23 +20,22 @@ import java.io.IOException;
 import db.DBHandle;
 import generic.depends.DependentServiceResolver;
 import generic.depends.err.*;
-import ghidra.util.database.DBOpenMode;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.VersionException;
 import ghidra.util.task.TaskMonitor;
 
 public abstract class DBDomainObjectSupport extends DomainObjectAdapterDB {
-	private DBOpenMode openMode;
+	private OpenMode openMode;
 	private TaskMonitor monitor;
 
 	private VersionException versionExc;
 
 	protected static interface ManagerSupplier<T> {
-		T create(DBOpenMode openMode, TaskMonitor monitor)
+		T create(OpenMode openMode, TaskMonitor monitor)
 				throws IOException, VersionException, CancelledException;
 	}
 
-	protected DBDomainObjectSupport(DBHandle dbh, DBOpenMode openMode, TaskMonitor monitor,
+	protected DBDomainObjectSupport(DBHandle dbh, OpenMode openMode, TaskMonitor monitor,
 			String name, int timeInterval, int bufSize, Object consumer) {
 		super(dbh, name, timeInterval, consumer);
 		this.openMode = openMode;
@@ -64,6 +63,12 @@ public abstract class DBDomainObjectSupport extends DomainObjectAdapterDB {
 		}
 		catch (UnsatisfiedParameterException | UnsatisfiedFieldsException e) {
 			throw new AssertionError(e);
+		}
+		catch (NullPointerException e) {
+			if (versionExc != null) {
+				throw versionExc;
+			}
+			throw e;
 		}
 		if (versionExc != null) {
 			throw versionExc;

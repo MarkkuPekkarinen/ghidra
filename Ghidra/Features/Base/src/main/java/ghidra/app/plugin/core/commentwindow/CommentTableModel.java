@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +21,7 @@ import ghidra.docking.settings.Settings;
 import ghidra.framework.plugintool.ServiceProvider;
 import ghidra.program.model.address.*;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.Memory;
 import ghidra.program.util.ProgramSelection;
 import ghidra.util.Msg;
 import ghidra.util.datastruct.Accumulator;
@@ -80,42 +81,24 @@ class CommentTableModel extends AddressBasedTableModel<CommentRowObject> {
 			return; // no active program
 		}
 
-		AddressIterator commentIterator =
-			listing.getCommentAddressIterator(getProgram().getMemory(), true);
-		while (commentIterator.hasNext()) {
-			Address commentAddr = commentIterator.next();
-			CodeUnit cu = listing.getCodeUnitContaining(commentAddr);
-			if (!(cu instanceof Data)) {
-				// avoid too many comments in the table by not showing offcut instruction comments
-				cu = listing.getCodeUnitAt(commentAddr);
-			}
-
-			if (cu == null) {
-				continue;
-			}
-
-			if (cu.getComment(CodeUnit.PRE_COMMENT) != null) {
-				accumulator.add(new CommentRowObject(commentAddr, CodeUnit.PRE_COMMENT));
-			}
-			if (cu.getComment(CodeUnit.POST_COMMENT) != null) {
-				accumulator.add(new CommentRowObject(commentAddr, CodeUnit.POST_COMMENT));
-			}
-			if (cu.getComment(CodeUnit.EOL_COMMENT) != null) {
-				accumulator.add(new CommentRowObject(commentAddr, CodeUnit.EOL_COMMENT));
-			}
-			if (cu.getComment(CodeUnit.PLATE_COMMENT) != null) {
-				accumulator.add(new CommentRowObject(commentAddr, CodeUnit.PLATE_COMMENT));
-			}
-			if (cu.getComment(CodeUnit.REPEATABLE_COMMENT) != null) {
-				accumulator.add(new CommentRowObject(commentAddr, CodeUnit.REPEATABLE_COMMENT));
+		Memory memory = getProgram().getMemory();
+		AddressIterator it = listing.getCommentAddressIterator(memory, true);
+		while (it.hasNext()) {
+			monitor.checkCancelled();
+			Address addr = it.next();
+			CodeUnitComments comments = listing.getAllComments(addr);
+			for (CommentType type : CommentType.values()) {
+				String comment = comments.getComment(type);
+				if (comment != null) {
+					accumulator.add(new CommentRowObject(addr, type));
+				}
 			}
 		}
 
 	}
 
-	void commentAdded(Address addr, int commentType) {
+	void commentAdded(Address addr, CommentType commentType) {
 		String comment = listing.getComment(commentType, addr);
-
 		if (comment == null) {
 			Msg.debug(this, "Received a commentAdded() with a null comment");
 			return;
@@ -125,7 +108,7 @@ class CommentTableModel extends AddressBasedTableModel<CommentRowObject> {
 
 	}
 
-	void commentRemoved(Address addr, int commentType) {
+	void commentRemoved(Address addr, CommentType commentType) {
 		removeObject(new CommentRowObject(addr, commentType));
 	}
 
@@ -161,23 +144,23 @@ class CommentTableModel extends AddressBasedTableModel<CommentRowObject> {
 		}
 
 		@Override
-		public String getValue(CommentRowObject rowObject, Settings settings, Program program,
+		public String getValue(CommentRowObject rowObject, Settings settings, Program p,
 				ServiceProvider provider) throws IllegalArgumentException {
 
 			String returnString = "";
-			if (rowObject.getCommentType() == CodeUnit.EOL_COMMENT) {
+			if (rowObject.getCommentType() == CommentType.EOL) {
 				return "EOL Comment";
 			}
-			if (rowObject.getCommentType() == CodeUnit.PLATE_COMMENT) {
+			if (rowObject.getCommentType() == CommentType.PLATE) {
 				return "Plate Comment";
 			}
-			if (rowObject.getCommentType() == CodeUnit.PRE_COMMENT) {
+			if (rowObject.getCommentType() == CommentType.PRE) {
 				return "Pre Comment";
 			}
-			if (rowObject.getCommentType() == CodeUnit.POST_COMMENT) {
+			if (rowObject.getCommentType() == CommentType.POST) {
 				return "Post Comment";
 			}
-			if (rowObject.getCommentType() == CodeUnit.REPEATABLE_COMMENT) {
+			if (rowObject.getCommentType() == CommentType.REPEATABLE) {
 				return "Repeatable Comment";
 			}
 			return returnString;
@@ -198,7 +181,7 @@ class CommentTableModel extends AddressBasedTableModel<CommentRowObject> {
 		}
 
 		@Override
-		public String getValue(CommentRowObject rowObject, Settings settings, Program program,
+		public String getValue(CommentRowObject rowObject, Settings settings, Program p,
 				ServiceProvider provider) throws IllegalArgumentException {
 			String comment = getCommentForRowObject(rowObject);
 			return comment;

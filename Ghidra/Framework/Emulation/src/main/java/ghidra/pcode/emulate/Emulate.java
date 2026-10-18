@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,29 +31,32 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.util.Msg;
+import ghidra.util.classfinder.ClassSearcher;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
-import ghidra.util.task.TaskMonitorAdapter;
-/// \brief A SLEIGH based implementation of the Emulate interface
-///
-/// This implementation uses a Translate object to translate machine instructions into
-/// pcode and caches pcode ops for later use by the emulator.  The pcode is cached as soon
-/// as the execution address is set, either explicitly, or via branches and fallthrus.  There
-/// are additional methods for inspecting the pcode ops in the current instruction as a sequence.
 
+/**
+ * A SLEIGH based implementation of the Emulate interface
+ * <p>
+ * This implementation uses a Translate object to translate machine instructions into pcode and
+ * caches pcode ops for later use by the emulator. The pcode is cached as soon as the execution
+ * address is set, either explicitly, or via branches and fallthrus. There are additional methods
+ * for inspecting the pcode ops in the current instruction as a sequence.
+ */
+@Deprecated(since = "12.1", forRemoval = true)
 public class Emulate {
 
 	private MemoryState memstate; // the memory state of the emulator.
 	private UniqueMemoryBank uniqueBank;
 
-	private BreakTable breaktable; ///< The table of breakpoints
-	private Address current_address; ///< Address of current instruction being executed
+	private BreakTable breaktable; // The table of breakpoints
+	private Address current_address; // Address of current instruction being executed
 	private Address last_execute_address;
 	private volatile EmulateExecutionState executionState = EmulateExecutionState.STOPPED;
 	private RuntimeException faultCause;
-	private int current_op; ///< Index of current pcode op within machine instruction
-	private int last_op; /// index of last pcode op executed
-	private int instruction_length; ///< Length of current instruction in bytes (must include any delay slots)
+	private int current_op; // Index of current pcode op within machine instruction
+	private int last_op; // index of last pcode op executed
+	private int instruction_length; // Length of current instruction in bytes (must include any delay slots)
 
 	private final SleighLanguage language;
 	private final AddressFactory addrFactory;
@@ -62,7 +65,7 @@ public class Emulate {
 	private InstructionBlock lastPseudoInstructionBlock;
 	private Disassembler pseudoDisassembler;
 	private Instruction pseudoInstruction;
-	private PcodeOp[] pcode; ///< The cache of current pcode ops
+	private PcodeOp[] pcode; // The cache of current pcode ops
 
 	private RegisterValue nextContextRegisterValue = null;
 
@@ -70,9 +73,13 @@ public class Emulate {
 
 	private EmulateInstructionStateModifier instructionStateModifier;
 
-	/// \param t is the SLEIGH translator
-	/// \param s is the MemoryState the emulator should manipulate
-	/// \param b is the table of breakpoints the emulator should invoke
+	/**
+	 * Creates a new {@link Emulate} object
+	 * 
+	 * @param lang is the SLEIGH language
+	 * @param s is the MemoryState the emulator should manipulate
+	 * @param b is the table of breakpoints the emulator should invoke
+	 */
 	public Emulate(SleighLanguage lang, MemoryState s, BreakTable b) {
 		memstate = s;
 		this.language = lang;
@@ -107,18 +114,10 @@ public class Emulate {
 			return;
 		}
 		try {
-			Class<?> c = Class.forName(classname);
-			if (!EmulateInstructionStateModifier.class.isAssignableFrom(c)) {
-				Msg.error(this,
-					"Language " + language.getLanguageID() + " does not specify a valid " +
-						GhidraLanguagePropertyKeys.EMULATE_INSTRUCTION_STATE_MODIFIER_CLASS);
-				throw new RuntimeException(classname + " does not implement interface " +
-					EmulateInstructionStateModifier.class.getName());
-			}
-			Class<? extends EmulateInstructionStateModifier> instructionStateModifierClass =
-				(Class<? extends EmulateInstructionStateModifier>) c;
+			Class<? extends EmulateInstructionStateModifier> c = ClassSearcher.forNameSafe(
+				classname, EmulateInstructionStateModifier.class, getClass().getClassLoader());
 			Constructor<? extends EmulateInstructionStateModifier> constructor =
-				instructionStateModifierClass.getConstructor(Emulate.class);
+				c.getConstructor(Emulate.class);
 			instructionStateModifier = constructor.newInstance(this);
 		}
 		catch (Exception e) {
@@ -134,29 +133,36 @@ public class Emulate {
 		return language;
 	}
 
-	/// Since the emulator can single step through individual pcode operations, the machine state
-	/// may be halted in the \e middle of a single machine instruction, unlike conventional debuggers.
-	/// This routine can be used to determine if execution is actually at the beginning of a machine
-	/// instruction.
-	/// \return \b true if the next pcode operation is at the start of the instruction translation
+	/**
+	 * Since the emulator can single step through individual pcode operations, the machine state may
+	 * be halted in the middle of a single machine instruction, unlike conventional debuggers. This
+	 * routine can be used to determine if execution is actually at the beginning of a machine
+	 * instruction.
+	 * 
+	 * @return true if the next pcode operation is at the start of the instruction translation
+	 */
 	public boolean isInstructionStart() {
 		return executionState == EmulateExecutionState.STOPPED ||
 			executionState == EmulateExecutionState.BREAKPOINT;
 	}
 
 	/**
-	 * @return the current emulator execution state
+	 * {@return the current emulator execution state}
 	 */
 	public EmulateExecutionState getExecutionState() {
 		return executionState;
 	}
 
-	/// \return the currently executing machine address
+	/**
+	 * {@return the currently executing machine address}
+	 */
 	public Address getExecuteAddress() {
 		return current_address;
 	}
 
-	/// \return the last address 
+	/**
+	 * {@return the last address}
+	 */
 	public Address getLastExecuteAddress() {
 		return last_execute_address;
 	}
@@ -166,8 +172,9 @@ public class Emulate {
 	}
 
 	/**
-	 * Get length of instruction including any delay-slotted instructions.
-	 * Must be called by emitPcode with lastPseudoInstructionBlock properly set.
+	 * Get length of instruction including any delay-slotted instructions. Must be called by
+	 * emitPcode with lastPseudoInstructionBlock properly set.
+	 * 
 	 * @param instr
 	 * @return length of instruction in bytes for use in computing fall-through location
 	 */
@@ -234,14 +241,12 @@ public class Emulate {
 	}
 
 	/**
-	 * Returns the current context register value.  The context value returned reflects
-	 * its state when the previously executed instruction was 
-	 * parsed/executed.  The context value returned will feed into the next 
-	 * instruction to be parsed with its non-flowing bits cleared and
-	 * any future context state merged in.  If no instruction has been executed,
-	 * the explicitly set context will be returned.  A null value is returned
-	 * if no context register is defined by the language or initial context has 
-	 * not been set.
+	 * Returns the current context register value. The context value returned reflects its state
+	 * when the previously executed instruction was parsed/executed. The context value returned will
+	 * feed into the next instruction to be parsed with its non-flowing bits cleared and any future
+	 * context state merged in. If no instruction has been executed, the explicitly set context will
+	 * be returned. A null value is returned if no context register is defined by the language or
+	 * initial context has not been set.
 	 */
 	public RegisterValue getContextRegisterValue() {
 		Register contextReg = language.getContextBaseRegister();
@@ -255,14 +260,12 @@ public class Emulate {
 	}
 
 	/**
-	 * Sets the context register value at the current execute address.
-	 * The Emulator should not be running when this method is invoked.
-	 * Only flowing context bits should be set, as non-flowing bits
-	 * will be cleared prior to parsing on instruction.  In addition,
-	 * any future context state set by the pcode emitter will
-	 * take precedence over context set using this method.  This method
-	 * is primarily intended to be used to establish the initial 
-	 * context state.
+	 * Sets the context register value at the current execute address. The Emulator should not be
+	 * running when this method is invoked. Only flowing context bits should be set, as non-flowing
+	 * bits will be cleared prior to parsing on instruction. In addition, any future context state
+	 * set by the pcode emitter will take precedence over context set using this method. This method
+	 * is primarily intended to be used to establish the initial context state.
+	 * 
 	 * @param regValue
 	 */
 	public void setContextRegisterValue(RegisterValue regValue) {
@@ -291,8 +294,10 @@ public class Emulate {
 		pseudoInstruction = null;
 	}
 
-	/// Update the iterator into the current pcode cache, and if necessary, generate
-	/// the pcode for the fallthru instruction and reset the iterator.
+	/**
+	 * Update the iterator into the current pcode cache, and if necessary, generate the pcode for
+	 * the fallthru instruction and reset the iterator.
+	 */
 	public void fallthruOp() {
 		current_op += 1;
 		if (current_op >= pcode.length) {
@@ -318,8 +323,11 @@ public class Emulate {
 		}
 	}
 
-	/// Since the full instruction is cached, we can do relative branches properly
-	/// \param op is the particular branch op being executed
+	/**
+	 * Since the full instruction is cached, we can do relative branches properly
+	 * 
+	 * @param op is the particular branch op being executed
+	 */
 	public void executeBranch(PcodeOpRaw op) {
 		Address destaddr = op.getInput(0).getAddress();
 		if (destaddr.getAddressSpace().isConstantSpace()) {
@@ -338,10 +346,14 @@ public class Emulate {
 		}
 	}
 
-	/// Give instuctionStateModifier first shot at executing custom pcodeop,
-	/// if not supported look for a breakpoint for the given user-defined op and invoke it.
-	/// If it doesn't exist, or doesn't replace the action, throw an exception
-	/// \param op is the particular user-defined op being executed
+	/**
+	 * Give instuctionStateModifier first shot at executing custom pcodeop, if not supported look
+	 * for a breakpoint for the given user-defined op and invoke it. If it doesn't exist, or doesn't
+	 * replace the action, throw an exception
+	 * 
+	 * @param op is the particular user-defined op being executed
+	 * @throws UnimplementedCallOtherException
+	 */
 	public void executeCallother(PcodeOpRaw op) throws UnimplementedCallOtherException {
 		if ((instructionStateModifier == null || !instructionStateModifier.executeCallOther(op)) &&
 			!breaktable.doPcodeOpBreak(op)) {
@@ -352,9 +364,12 @@ public class Emulate {
 		fallthruOp();
 	}
 
-	/// Set the current execution address and cache the pcode translation of the machine instruction
-	/// at that address
-	/// \param addr is the address where execution should continue
+	/**
+	 * Set the current execution address and cache the pcode translation of the machine instruction
+	 * at that address
+	 * 
+	 * @param addr is the address where execution should continue
+	 */
 	public void setExecuteAddress(Address addr) {
 		if (addr != null && addr.equals(current_address)) {
 			return;
@@ -370,11 +385,19 @@ public class Emulate {
 		faultCause = null;
 	}
 
-	/// This routine executes an entire machine instruction at once, as a conventional debugger step
-	/// function would do.  If execution is at the start of an instruction, the breakpoints are checked
-	/// and invoked as needed for the current address.  If this routine is invoked while execution is
-	/// in the middle of a machine instruction, execution is continued until the current instruction
-	/// completes.
+	/**
+	 * This routine executes an entire machine instruction at once, as a conventional debugger step
+	 * function would do. If execution is at the start of an instruction, the breakpoints are
+	 * checked and invoked as needed for the current address. If this routine is invoked while
+	 * execution is in the middle of a machine instruction, execution is continued until the current
+	 * instruction completes.
+	 * 
+	 * @param stopAtBreakpoint
+	 * @param monitor
+	 * @throws CancelledException
+	 * @throws LowlevelError
+	 * @throws InstructionDecodeException
+	 */
 	public void executeInstruction(boolean stopAtBreakpoint, TaskMonitor monitor)
 			throws CancelledException, LowlevelError, InstructionDecodeException {
 		if (monitor == null) {
@@ -428,13 +451,17 @@ public class Emulate {
 		}
 	}
 
-	/// \return the memory state object which this emulator uses
+	/**
+	 * {@return the memory state object which this emulator uses}
+	 */
 	public MemoryState getMemoryState() {
 		return memstate;
 	}
 
-	/// This method executes a single pcode operation, the current one (returned by getCurrentOp()).
-	/// The MemoryState of the emulator is queried and changed as needed to accomplish this.
+	/**
+	 * This method executes a single pcode operation, the current one (returned by getCurrentOp()).
+	 * The MemoryState of the emulator is queried and changed as needed to accomplish this.
+	 */
 	private void executeCurrentOp() throws LowlevelError {
 
 		if (current_op >= pcode.length) {
@@ -497,7 +524,7 @@ public class Emulate {
 			fallthruOp(); // All binary ops are fallthrus
 		}
 		else {
-			switch (behave.getOpCode()) {
+			switch (behave.opcode()) {
 				case PcodeOp.LOAD:
 					executeLoad(raw);
 					fallthruOp();
@@ -536,13 +563,16 @@ public class Emulate {
 					fallthruOp();
 					break;
 				default:
-					throw new LowlevelError("Unsupported op (opcode=" + behave.getOpCode() + ")");
+					throw new LowlevelError("Unsupported op (opcode=" + behave.opcode() + ")");
 			}
 		}
 	}
 
-	/// This routine performs a standard pcode \b load operation on the memory state
-	/// \param op is the particular \e load op being executed
+	/**
+	 * This routine performs a standard pcode load operation on the memory state
+	 * 
+	 * @param op is the particular load op being executed
+	 */
 	public void executeLoad(PcodeOpRaw op) {
 
 		AddressSpace space =
@@ -564,8 +594,11 @@ public class Emulate {
 		}
 	}
 
-	/// This routine performs a standard pcode \b store operation on the memory state
-	/// \param op is the particular \e store op being executed
+	/**
+	 * This routine performs a standard pcode store operation on the memory state
+	 * 
+	 * @param op is the particular store op being executed
+	 */
 	public void executeStore(PcodeOpRaw op) {
 
 		AddressSpace space =
@@ -586,189 +619,179 @@ public class Emulate {
 		}
 	}
 
-	/// This routine performs a standard pcode \b branch \b indirect operation on the memory state
-	/// \param op is the particular \e branchind op being executed
+	/**
+	 * This routine performs a standard pcode branch indirect operation on the memory state
+	 * 
+	 * @param op is the particular branchind op being executed
+	 */
 	public void executeBranchind(PcodeOpRaw op) {
 		long offset = memstate.getValue(op.getInput(0));
 		AddressSpace space = op.getAddress().getAddressSpace();
 		setCurrentAddress(space.getTruncatedAddress(offset, true));
 	}
 
-	/// This routine performs a standard pcode \b call operation on the memory state
-	/// \param op is the particular \e call op being executed
+	/**
+	 * This routine performs a standard pcode call operation on the memory state
+	 * 
+	 * @param op is the particular call op being executed
+	 */
 	public void executeCall(PcodeOpRaw op) {
 		setCurrentAddress(op.getInput(0).getAddress());
 	}
 
-	/// This routine performs a standard pcode \b call \b indirect operation on the memory state
-	/// \param op is the particular \e callind op being executed
+	/**
+	 * This routine performs a standard pcode call indirect operation on the memory state
+	 * 
+	 * @param op is the particular callind op being executed
+	 */
 	public void executeCallind(PcodeOpRaw op) {
 		executeBranchind(op); // same behavior as branch indirect
 	}
 
-	/// This kind of pcode op should not come up in ordinary emulation, so this routine
-	/// throws an exception.
-	/// \param op is the particular \e multiequal op being executed
+	/**
+	 * This kind of pcode op should not come up in ordinary emulation, so this routine throws an
+	 * exception.
+	 * 
+	 * @param op is the particular multiequal op being executed
+	 */
 	public void executeMultiequal(PcodeOpRaw op) {
 		throw new LowlevelError("MULTIEQUAL appearing in unheritaged code?");
 	}
 
-	/// This kind of pcode op should not come up in ordinary emulation, so this routine
-	/// throws an exception.
-	/// \param op is the particular \e indirect op being executed
+	/**
+	 * This kind of pcode op should not come up in ordinary emulation, so this routine throws an
+	 * exception.
+	 * 
+	 * @param op is the particular indirect op being executed
+	 */
 	public void executeIndirect(PcodeOpRaw op) {
 		throw new LowlevelError("INDIRECT appearing in unheritaged code?");
 	}
 
 }
-/** \page sleighAPIemulate The SLEIGH Emulator
-    
-  \section emu_overview Overview
-  
-  \b SLEIGH provides a framework for emulating the processors which have a specification written
-   for them.  The key classes in this framework are:
-
-  \b Key \b Classes
-    - \ref MemoryState
-    - \ref MemoryBank
-    - \ref BreakTable
-    - \ref BreakCallBack
-    - \ref Emulate
-    - \ref EmulatePcodeCache
-
-  The MemoryState object holds the representation of registers and memory during emulation.  It
-  understands the address spaces defined in the \b SLEIGH specification and how data is encoded
-  in these spaces.  It also knows any register names defined by the specification, so these
-  can be used to set or query the state of these registers naturally.
-
-  The emulation framework can be tailored to a particular environment by creating \b breakpoint
-  objects, which derive off the BreakCallBack interface.  These can be used to create callbacks
-  during emulation that have full access to the memory state and the emulator, so any action
-  can be accomplished.  The breakpoint callbacks can be designed to either augment or replace
-  the instruction at a particular address, or the callback can be used to implement the action
-  of a user-defined pcode op.  The BreakCallBack objects are managed by the BreakTable object,
-  which takes care of invoking the callback at the appropriate time.
-
-  The Emulate object serves as a basic execution engine.  Its main method is
-  Emulate::executeCurrentOp() which executes a single pcode operation on the memory state.
-  Methods exist for querying and setting the current execution address and examining the pcode
-  op being executed.
-
-  The main implementation of the Emulate interface is the EmulatePcodeCache object.  It uses
-  SLEIGH to translate machine instructions as they are executed.  The currently executing instruction
-  is translated into a cached sequence of pcode operations.  Additional methods allow this entire
-  sequence to be inspected, and there is another stepping function which allows the emulator
-  to be stepped through an entire machine instruction at a time.  The single pcode stepping methods
-  are of course still available and the two methods can be used together without conflict.
-
-  \section emu_membuild Building a Memory State
-
-  Assuming the SLEIGH Translate object and the LoadImage object have already been built
-  (see \ref sleighAPIbasic), the only required step left before instantiating an emulator
-  is to create a MemoryState object.  The MemoryState object can be instantiated simply by
-  passing the constructor the Translate object, but before it will work properly, you need
-  to register individual MemoryBank objects with it, for each address space that might
-  get used by the emulator.
-
-  A MemoryBank is a representation of data stored in a single address space
-  There are some choices for the type of MemoryBank associated with an address space.
-  A MemoryImage is a read-only memory bank that gets its data from a LoadImage.  In order
-  to make this writeable, or to create a writeable memory bank which starts with its bytes
-  initialized to zero, you can use a MemoryPageOverlay.
-
-  A MemoryPageOverlay overlays another memory bank as well.  But it implements writes to the bank
-  by caching memory \e pages.  Any write creates an aligned page to hold the new data.  The class
-  takes care of loading and filling in pages as needed.
-
-  The Emulate constructor always adds a unique space memory bank using the UniqueMemoryBank, 
-  the user needs not add this space.
-
-  All the memory bank constructors need a page size, which is most relevant to the page implementation.  The
-  null pointers passed in, in place of a real memory bank, indicate that the memory bank has no initial
-  memory image. Once the memory banks are instantiated, they are registered with the memory state
-  via the MemoryState::setMemoryBank() method.
-
-  \section emu_breakpoints Breakpoints
-
-  In order to provide behavior within the emulator beyond just what the core instruction emulation
-  provides, the framework supports \b breakpoint classes.  A breakpoint is created by deriving a
-  class from the BreakCallBack class and overriding either BreakCallBack::addressCallback() or
-  BreakCallBack::pcodeCallback().  Here is an example of a breakpoint that implements a
-  standard C library \e puts call an the x86 architecture.  When the breakpoint is invoked,
-  a call to \e puts has just been made, so the stack pointer is pointing to the return address
-  and the next 4 bytes on the stack are a pointer to the string being passed in.
-
-  \code
-    class PutsCallBack : public BreakCallBack {
-    public:
-      virtual bool addressCallback(const Address &addr);
-    };
-
-    bool PutsCallBack::addressCallback(const Address &addr)
-
-    {
-      MemoryState *mem = emulate->getMemoryState();
-      uint1 buffer[256];
-      uint4 esp = mem->getValue("ESP");
-      AddrSpace *ram = mem->getTranslate()->getSpaceByName("ram");
-
-      uint4 param1 = mem->getValue(ram,esp+4,4);
-      mem->getChunk(buffer,ram,param1,255);
-
-      cout << (char *)&buffer << endl;
-
-      uint4 returnaddr = mem->getValue(ram,esp,4);
-      mem->setValue("ESP",esp+8);
-      emulate->setExecuteAddress(Address(ram,returnaddr));
-  
-      return true;			// This replaces the indicated instruction
-    }
-      
-  \endcode
-
-  Notice that the callback retrieves the value of the stack pointer by name.  Using this
-  value, the string pointer is retrieved, then the data for the actual string is retrieved.
-  After dumping the string to standard out, the return address is recovered and the \e return
-  instruction is emulated by explicitly setting the next execution address to be the return value.
-
-  \section emu_finalsetup Running the Emulator
-  Here is an example of instantiating an EmulatePcodeCache object. A breakpoint is also instantiated
-  and registered with the BreakTable.  
-
-  \code
-    ...
-    Sleigh trans(&loader,&context);    // Instantiate the translator
-    ...
-    MemoryState memstate(&trans);      // Instantiate the memory state
-    ...
-    BreakTableCallBack breaktable(&trans);  // Instantiate a breakpoint table
-    EmulatePcodeCache emulator(&trans,&memstate,&breaktable);  // Instantiate the emulator
-
-    // Set up the initial stack pointer
-    memstate.setValue("ESP",0xbffffffc);
-    emulator.setExecuteAddress(Address(trans.getDefaultSpace(),0x1D00114));  // Initial execution address
-    
-    PutsCallBack putscallback;
-    breaktable.registerAddressCallback(Address(trans.getDefaultSpace(),0x1D00130),&putscallback);
-
-    AssemblyRaw assememit;
-    for(;;) {
-      Address addr = emulator.getExecuteAddress();
-      trans.printAssembly(assememit,addr);
-      emulator.executeInstruction();
-    }
-
-  \endcode
-
-  Notice how the initial stack pointer and initial execute address is set up.  The breakpoint
-  is registered with the BreakTable, giving it a specific address.  The executeInstruction method
-  is called inside the loop, to actually run the emulator.  Notice that a disassembly of each
-  instruction is printed after each step of the emulator.
-
-  Other information can be examined from within this execution loop or in other tailored breakpoints.
-  In particular, the Emulate::getCurrentOp() method can be used to retrieve the an instance
-  of the currently executing pcode operation. From this starting point, you can examine the
-  low-level objects:
-    - PcodeOpRaw   and
-    - VarnodeData
+/**
+ * \page sleighAPIemulate The SLEIGH Emulator
+ * 
+ * \section emu_overview Overview
+ * 
+ * \b SLEIGH provides a framework for emulating the processors which have a specification written
+ * for them. The key classes in this framework are:
+ * 
+ * \b Key \b Classes - \ref MemoryState - \ref MemoryBank - \ref BreakTable - \ref BreakCallBack -
+ * \ref Emulate - \ref EmulatePcodeCache
+ * 
+ * The MemoryState object holds the representation of registers and memory during emulation. It
+ * understands the address spaces defined in the \b SLEIGH specification and how data is encoded in
+ * these spaces. It also knows any register names defined by the specification, so these can be used
+ * to set or query the state of these registers naturally.
+ * 
+ * The emulation framework can be tailored to a particular environment by creating \b breakpoint
+ * objects, which derive off the BreakCallBack interface. These can be used to create callbacks
+ * during emulation that have full access to the memory state and the emulator, so any action can be
+ * accomplished. The breakpoint callbacks can be designed to either augment or replace the
+ * instruction at a particular address, or the callback can be used to implement the action of a
+ * user-defined pcode op. The BreakCallBack objects are managed by the BreakTable object, which
+ * takes care of invoking the callback at the appropriate time.
+ * 
+ * The Emulate object serves as a basic execution engine. Its main method is
+ * Emulate::executeCurrentOp() which executes a single pcode operation on the memory state. Methods
+ * exist for querying and setting the current execution address and examining the pcode op being
+ * executed.
+ * 
+ * The main implementation of the Emulate interface is the EmulatePcodeCache object. It uses SLEIGH
+ * to translate machine instructions as they are executed. The currently executing instruction is
+ * translated into a cached sequence of pcode operations. Additional methods allow this entire
+ * sequence to be inspected, and there is another stepping function which allows the emulator to be
+ * stepped through an entire machine instruction at a time. The single pcode stepping methods are of
+ * course still available and the two methods can be used together without conflict.
+ * 
+ * \section emu_membuild Building a Memory State
+ * 
+ * Assuming the SLEIGH Translate object and the LoadImage object have already been built (see \ref
+ * sleighAPIbasic), the only required step left before instantiating an emulator is to create a
+ * MemoryState object. The MemoryState object can be instantiated simply by passing the constructor
+ * the Translate object, but before it will work properly, you need to register individual
+ * MemoryBank objects with it, for each address space that might get used by the emulator.
+ * 
+ * A MemoryBank is a representation of data stored in a single address space There are some choices
+ * for the type of MemoryBank associated with an address space. A MemoryImage is a read-only memory
+ * bank that gets its data from a LoadImage. In order to make this writeable, or to create a
+ * writeable memory bank which starts with its bytes initialized to zero, you can use a
+ * MemoryPageOverlay.
+ * 
+ * A MemoryPageOverlay overlays another memory bank as well. But it implements writes to the bank by
+ * caching memory \e pages. Any write creates an aligned page to hold the new data. The class takes
+ * care of loading and filling in pages as needed.
+ * 
+ * The Emulate constructor always adds a unique space memory bank using the UniqueMemoryBank, the
+ * user needs not add this space.
+ * 
+ * All the memory bank constructors need a page size, which is most relevant to the page
+ * implementation. The null pointers passed in, in place of a real memory bank, indicate that the
+ * memory bank has no initial memory image. Once the memory banks are instantiated, they are
+ * registered with the memory state via the MemoryState::setMemoryBank() method.
+ * 
+ * \section emu_breakpoints Breakpoints
+ * 
+ * In order to provide behavior within the emulator beyond just what the core instruction emulation
+ * provides, the framework supports \b breakpoint classes. A breakpoint is created by deriving a
+ * class from the BreakCallBack class and overriding either BreakCallBack::addressCallback() or
+ * BreakCallBack::pcodeCallback(). Here is an example of a breakpoint that implements a standard C
+ * library \e puts call an the x86 architecture. When the breakpoint is invoked, a call to \e puts
+ * has just been made, so the stack pointer is pointing to the return address and the next 4 bytes
+ * on the stack are a pointer to the string being passed in.
+ * 
+ * \code class PutsCallBack : public BreakCallBack { public: virtual bool addressCallback(const
+ * Address &addr); };
+ * 
+ * bool PutsCallBack::addressCallback(const Address &addr)
+ * 
+ * { MemoryState *mem = emulate->getMemoryState(); uint1 buffer[256]; uint4 esp =
+ * mem->getValue("ESP"); AddrSpace *ram = mem->getTranslate()->getSpaceByName("ram");
+ * 
+ * uint4 param1 = mem->getValue(ram,esp+4,4); mem->getChunk(buffer,ram,param1,255);
+ * 
+ * cout << (char *)&buffer << endl;
+ * 
+ * uint4 returnaddr = mem->getValue(ram,esp,4); mem->setValue("ESP",esp+8);
+ * emulate->setExecuteAddress(Address(ram,returnaddr));
+ * 
+ * return true; // This replaces the indicated instruction }
+ * 
+ * \endcode
+ * 
+ * Notice that the callback retrieves the value of the stack pointer by name. Using this value, the
+ * string pointer is retrieved, then the data for the actual string is retrieved. After dumping the
+ * string to standard out, the return address is recovered and the \e return instruction is emulated
+ * by explicitly setting the next execution address to be the return value.
+ * 
+ * \section emu_finalsetup Running the Emulator Here is an example of instantiating an
+ * EmulatePcodeCache object. A breakpoint is also instantiated and registered with the BreakTable.
+ * 
+ * \code ... Sleigh trans(&loader,&context); // Instantiate the translator ... MemoryState
+ * memstate(&trans); // Instantiate the memory state ... BreakTableCallBack breaktable(&trans); //
+ * Instantiate a breakpoint table EmulatePcodeCache emulator(&trans,&memstate,&breaktable); //
+ * Instantiate the emulator
+ * 
+ * // Set up the initial stack pointer memstate.setValue("ESP",0xbffffffc);
+ * emulator.setExecuteAddress(Address(trans.getDefaultSpace(),0x1D00114)); // Initial execution
+ * address
+ * 
+ * PutsCallBack putscallback;
+ * breaktable.registerAddressCallback(Address(trans.getDefaultSpace(),0x1D00130),&putscallback);
+ * 
+ * AssemblyRaw assememit; for(;;) { Address addr = emulator.getExecuteAddress();
+ * trans.printAssembly(assememit,addr); emulator.executeInstruction(); }
+ * 
+ * \endcode
+ * 
+ * Notice how the initial stack pointer and initial execute address is set up. The breakpoint is
+ * registered with the BreakTable, giving it a specific address. The executeInstruction method is
+ * called inside the loop, to actually run the emulator. Notice that a disassembly of each
+ * instruction is printed after each step of the emulator.
+ * 
+ * Other information can be examined from within this execution loop or in other tailored
+ * breakpoints. In particular, the Emulate::getCurrentOp() method can be used to retrieve the an
+ * instance of the currently executing pcode operation. From this starting point, you can examine
+ * the low-level objects: - PcodeOpRaw and - VarnodeData
  */

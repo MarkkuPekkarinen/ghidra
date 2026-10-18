@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -50,21 +50,46 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 
 		add(scrollPane);
 		viewport = scrollPane.getViewport();
+
+		// This scroll pane does not have the view component track the width. This is to
+		// prevent a text clipping issue caused by the scroll pane not compensating for the
+		// scroll bars. Since the component may not occupy the full width of this scroll pane,
+		// we need to process any scroll wheel events that happen outside of that component.
+		viewport.addMouseWheelListener(e -> {
+			scrollable.mouseWheelMoved(e.getPreciseWheelRotation(), e.isShiftDown());
+		});
 		viewport.setBackground(comp.getBackground());
 		viewport.addChangeListener(e -> viewportStateChanged());
 		viewport.setScrollMode(JViewport.SIMPLE_SCROLL_MODE);
 		this.indexMapper = createIndexMapper();
 	}
 
+	@Override
+	public void setBackground(Color bg) {
+		if (viewport != null) {
+			viewport.setBackground(bg);
+		}
+		super.setBackground(bg);
+	}
+
 	/**
-	 * Sets this scroll pane to never show scroll bars.  This is useful when you want a container
+	 * Sets this scroll pane to never show scroll bars. This is useful when you want a container
 	 * whose view is always as big as the component in this scroll pane.
+	 * @param b true to never scroll
 	 */
 	public void setNeverScroll(boolean b) {
 		neverScroll = true;
 		scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER);
 		scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 		useViewSizeAsPreferredSize = b;
+	}
+
+	public void setVerticalScrollBarPolicy(int policy) {
+		scrollPane.setVerticalScrollBarPolicy(policy);
+	}
+
+	public void setHorizontalScrollBarPolicy(int policy) {
+		scrollPane.setHorizontalScrollBarPolicy(policy);
 	}
 
 	private ViewToIndexMapper createIndexMapper() {
@@ -90,8 +115,15 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 
 	}
 
-	public Dimension getViewSize() {
-		return new Dimension(comp.getPreferredSize().width, indexMapper.getViewHeight());
+	public Dimension getViewExtentSize() {
+		Dimension size = viewport.getExtentSize();
+		int w = size.width;
+		int h = size.height;
+		return new Dimension(w, h);
+	}
+
+	public Insets getViewInsets() {
+		return scrollPane.getInsets();
 	}
 
 	public void viewportStateChanged() {
@@ -145,7 +177,8 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 	class ScrollViewLayout implements LayoutManager {
 
 		@Override
-		public void addLayoutComponent(String name, Component comp) {
+		public void addLayoutComponent(String name, Component c) {
+			// stub
 		}
 
 		@Override
@@ -167,7 +200,8 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 		}
 
 		@Override
-		public void removeLayoutComponent(Component comp) {
+		public void removeLayoutComponent(Component c) {
+			// stub
 		}
 
 	}
@@ -177,6 +211,7 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 		ScrollView(JComponent component) {
 			setLayout(new ScrollViewLayout());
 			add(component);
+
 		}
 
 		@Override
@@ -208,13 +243,32 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 
 		@Override
 		protected void paintComponent(Graphics g) {
+			// stub
 		}
 
 		@Override
 		public boolean getScrollableTracksViewportWidth() {
-			return false;
+			int prefWidth = comp.getPreferredSize().width;
+			int scrollPaneWidth = getScrollPaneWidth();
+			return scrollPaneWidth > prefWidth;
 		}
 
+		private int getScrollPaneWidth() {
+			Container myParent = getParent();
+			if (myParent == null) {
+				return 0;
+			}
+			if (myParent instanceof JViewport vp) {
+				return vp.getExtentSize().width;
+			}
+			Container grandParent = myParent.getParent();
+			if (grandParent == null) {
+				return 0;
+			}
+			return grandParent.getSize().width;
+		}
+
+		@Override
 		public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation,
 				int direction) {
 
@@ -260,7 +314,7 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 	public void setColumnHeaderComp(JComponent comp) {
 		scrollPane.setColumnHeaderView(comp);
 
-		// SWING WORK AROUND - setting the header panel on a scrollpane that is horizontally
+		// SWING WORK AROUND - setting the header panel on a scroll pane that is horizontally
 		// scrolled does not initially scroll the header to match the main view.  Setting the
 		// horizontal position to 0 and back to where it was, resynchronizes the header with the
 		// view.
@@ -296,8 +350,8 @@ public class IndexedScrollPane extends JPanel implements IndexScrollListener {
 
 	/**
 	 * Sets whether the scroll wheel triggers scrolling <b>when over the scroll pane</b> of this
-	 * class.   When disabled, scrolling will still work when over the component inside of 
-	 * this class, but not when over the scroll bar.
+	 * class. When disabled, scrolling will still work when over the component inside of this class,
+	 * but not when over the scroll bar.
 	 * 
 	 * @param enabled true to enable
 	 */

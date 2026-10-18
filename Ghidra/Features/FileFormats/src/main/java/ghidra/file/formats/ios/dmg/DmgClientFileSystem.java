@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -44,50 +44,52 @@ import ghidra.util.task.*;
  * DMG server process seems to leak memory.  Currently it is killed every N commands and
  * restarted.
  */
-@FileSystemInfo(type = "dmg", description = "iOS Disk Image (DMG)", factory = DmgClientFileSystemFactory.class)
-public class DmgClientFileSystem implements GFileSystem {
+@FileSystemInfo(
+	type = "dmg",
+	description = "iOS Disk Image (DMG)",
+	factory = DmgClientFileSystemFactory.class,
+	extensions = { "dmg" }
+)
+public class DmgClientFileSystem extends AbstractFileSystem<Object> {
 
-	private final FSRLRoot fsrl;
-	private FileSystemRefManager refManager = new FileSystemRefManager(this);
-	private FileSystemIndexHelper<Object> fsih;
 	private File decryptedDmgFile;
 	private boolean deleteFileWhenDone;
 	private DmgServerProcessManager processManager;
 	private CancelledListener listener = () -> processManager.interruptCmd();
-	private FileSystemService fsService;
 
 	/**
 	 * Creates a {@link DmgClientFileSystem} instance, using a decrypted dmg file and
 	 * the filesystem's {@link FSRLRoot}.
 	 *
 	 * @param decryptedDmgFile path to a decrypted DMG file.  The DmgClientFileSystemFactory
-	 * takes care of decrypting for us.
-	 * @param fsrl {@link FSRLRoot} of this filesystem.
+	 * takes care of decrypting for us
+	 * @param deleteFileWhenDone boolean flag, if true, the container file will be deleted when
+	 * the filesystem is closed
+	 * @param fsrl {@link FSRLRoot} of this filesystem
+	 * @param fsService {@link FileSystemService} reference
 	 */
 	public DmgClientFileSystem(File decryptedDmgFile, boolean deleteFileWhenDone, FSRLRoot fsrl,
 			FileSystemService fsService) {
-		this.fsrl = fsrl;
-		this.fsih = new FileSystemIndexHelper<>(this, fsrl);
+		super(fsrl, fsService);
 		this.decryptedDmgFile = decryptedDmgFile;
 		this.deleteFileWhenDone = deleteFileWhenDone;
-		this.fsService = fsService;
 	}
 
 	public void mount(TaskMonitor monitor) throws CancelledException, IOException {
 		processManager =
-			new DmgServerProcessManager(decryptedDmgFile, fsrl.getContainer().getName());
+			new DmgServerProcessManager(decryptedDmgFile, fsFSRL.getContainer().getName());
 
 		monitor.addCancelledListener(listener);
 		try {
 			UnknownProgressWrappingTaskMonitor upwtm =
 				new UnknownProgressWrappingTaskMonitor(monitor, 1);
-			recurseDirectories(fsih.getRootDir(), upwtm);
+			recurseDirectories(fsIndex.getRootDir(), upwtm);
 		}
 		finally {
 			monitor.removeCancelledListener(listener);
 		}
-		Msg.info(this,
-			"Indexed " + fsih.getFileCount() + " files in " + fsrl.getContainer().getName());
+		Msg.info(this, "Indexed %d files in %s".formatted(fsIndex.getFileCount(),
+			fsFSRL.getContainer().getName()));
 
 	}
 
@@ -98,8 +100,8 @@ public class DmgClientFileSystem implements GFileSystem {
 		processManager.close();
 		processManager = null;
 
-		fsih.clear();
-		fsih = null;
+		fsIndex.clear();
+		fsIndex = null;
 		if (deleteFileWhenDone) {
 			Msg.info(this, "Deleting DMG temp file:" + decryptedDmgFile);
 			decryptedDmgFile.delete();
@@ -107,23 +109,8 @@ public class DmgClientFileSystem implements GFileSystem {
 	}
 
 	@Override
-	public String getName() {
-		return fsrl.getContainer().getName();
-	}
-
-	@Override
-	public FSRLRoot getFSRL() {
-		return fsrl;
-	}
-
-	@Override
 	public boolean isClosed() {
 		return processManager == null;
-	}
-
-	@Override
-	public FileSystemRefManager getRefManager() {
-		return refManager;
 	}
 
 	@Override
@@ -162,7 +149,7 @@ public class DmgClientFileSystem implements GFileSystem {
 			monitor.incrementProgress(1);
 
 			// throw away the gfileimpl from getrawlisting(), create new gfile in rafi
-			GFile newF = fsih.storeFileWithParent(f.getName(), dir, -1, f.isDirectory(),
+			GFile newF = fsIndex.storeFileWithParent(f.getName(), dir, -1, f.isDirectory(),
 				f.getLength(), null);
 			if (newF.isDirectory()) {
 				recurseDirectories(newF, monitor);
@@ -188,21 +175,6 @@ public class DmgClientFileSystem implements GFileSystem {
 			results.add(gFile);
 		}
 		return results;
-	}
-
-	@Override
-	public GFile lookup(String path) throws IOException {
-		return fsih.lookup(path);
-	}
-
-	@Override
-	public List<GFile> getListing(GFile directory) throws IOException {
-		return fsih.getListing(directory);
-	}
-
-	@Override
-	public int getFileCount() {
-		return fsih.getFileCount();
 	}
 
 	@Override

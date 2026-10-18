@@ -7,6 +7,7 @@
     <property key="useNewFunctionStackAnalysis" value="true"/>
     <property key="emulateInstructionStateModifierClass"
 			value="ghidra.program.emulation.AARCH64EmulateInstructionStateModifier"/>
+    <property key="useropLibs" value="aarch64"/>
     <property key="assemblyRating:AARCH64:BE:64:v8A" value="PLATINUM"/>
     <property key="assemblyRating:AARCH64:LE:64:v8A" value="PLATINUM"/>
   </properties>
@@ -27,7 +28,7 @@
   </default_symbols>
   
   <volatile outputop="cWrite" inputop="cRead">
-    <range space="register" first="0x1000" last="0x3fff"/>
+    <range space="register" first="0x1000" last="0x2fff"/>
   </volatile>
   
   <register_data>

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,6 +18,7 @@ package ghidra.framework.client;
 import java.awt.Component;
 import java.io.IOException;
 import java.net.Authenticator;
+import java.net.URL;
 import java.rmi.*;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
@@ -26,11 +27,13 @@ import java.util.Hashtable;
 import javax.security.auth.callback.*;
 import javax.security.auth.login.LoginException;
 
+import generic.hash.HashUtilities;
 import ghidra.framework.model.ServerInfo;
 import ghidra.framework.remote.*;
 import ghidra.framework.remote.security.SSHKeyManager;
 import ghidra.net.*;
-import ghidra.util.*;
+import ghidra.util.Msg;
+import ghidra.util.SystemUtilities;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskLauncher;
 import ghidra.util.task.TaskMonitor;
@@ -40,11 +43,48 @@ import ghidra.util.task.TaskMonitor;
  */
 public class ClientUtil {
 
+	private static UrlAllowListProvider allowListProvider;
 	private static ClientAuthenticator clientAuthenticator;
 
 	private static Hashtable<ServerInfo, RepositoryServerAdapter> serverHandles = new Hashtable<>();
 
 	private ClientUtil() {
+	}
+
+	/**
+	 * Set client allow list provider for GhidraURL connections.
+	 * @param provider allow list provider
+	 */
+	public static synchronized void setAllowListProvider(
+			UrlAllowListProvider provider) {
+		allowListProvider = provider;
+	}
+
+	/**
+	 * Get the currently installed GhidraURL allow list provider.  If one has not been
+	 * installed, this will trigger the installation of a default instance.  The provider
+	 * facilitates prompting the user if supported and returning a final allow or deny
+	 * indication when accessing a URL.
+	 * 
+	 * @return current allow list provider 
+	 */
+	public static synchronized UrlAllowListProvider getAllowListProvider() {
+		if (allowListProvider == null) {
+			if (SystemUtilities.isInTestingMode()) {
+				// When testing disable the use of allow list. 
+				// Specific tests can always set a specific provider if needed.
+				setAllowListProvider(new AbstractUrlAllowListProvider() {
+					@Override
+					public boolean isAllowed(URL url) {
+						return true;
+					}
+				});
+			}
+			else {
+				setAllowListProvider(new DefaultGhidraUrlAllowListProvider());
+			}
+		}
+		return allowListProvider;
 	}
 
 	/**
@@ -63,7 +103,7 @@ public class ClientUtil {
 	 * installed, this will trigger the installation of a default instance.
 	 * @return current client authenticator
 	 */
-	public static ClientAuthenticator getClientAuthenticator() {
+	public static synchronized ClientAuthenticator getClientAuthenticator() {
 		if (clientAuthenticator == null) {
 			if (SystemUtilities.isInHeadlessMode()) {
 				setClientAuthenticator(new HeadlessClientAuthenticator());
@@ -81,6 +121,10 @@ public class ClientUtil {
 	 * prompted for a password via a Swing dialog.  If a previous connection
 	 * attempt to this server failed, the adapter may be returned in a
 	 * disconnected state.
+	 * <p>
+	 * NOTE: Requesting a Ghidra Server adapter using this method will automatically
+	 * add the server to the Server Allow List.
+	 * 
 	 * @param host server name or address
 	 * @param port server port, 0 indicates that default port should be used.
 	 * @return repository server adapter
@@ -93,6 +137,10 @@ public class ClientUtil {
 	 * Connect to a Repository Server and obtain a handle to it.
 	 * Based upon the server authentication requirements, the user may be
 	 * prompted for a password via a Swing dialog.
+	 * <p>
+	 * NOTE: Requesting a Ghidra Server adapter using this method will automatically
+	 * add the server to the Server Allow List.
+	 * 
 	 * @param host server name or address
 	 * @param port server port, 0 indicates that default port should be used.
 	 * @param forceConnect if true and the server adapter is disconnected, an
@@ -133,6 +181,21 @@ public class ClientUtil {
 	}
 
 	/**
+	 * Determine if a connected {@link RepositoryServerAdapter} already exists for the specified server.
+	 * @param host server name or address
+	 * @param port server port, 0 indicates that default port applies.
+	 * @return true if connection already exists, else false
+	 */
+	public static boolean isConnected(String host, int port) {
+		if (port <= 0) {
+			port = GhidraServerHandle.DEFAULT_PORT;
+		}
+		ServerInfo server = new ServerInfo(host, port);
+		RepositoryServerAdapter rsa = serverHandles.get(server);
+		return rsa != null && rsa.isConnected();
+	}
+
+	/**
 	 * Eliminate the specified repository server from the connection cache
 	 * @param host host name or IP address
 	 * @param port port (0: use default port)
@@ -156,13 +219,7 @@ public class ClientUtil {
 	 * @return default user name
 	 */
 	public static String getUserName() {
-		String name = SystemUtilities.getUserName();
-		// exclude domain prefix which may be included
-		int slashIndex = name.lastIndexOf('\\');
-		if (slashIndex >= 0) {
-			name = name.substring(slashIndex + 1);
-		}
-		return name;
+		return SystemUtilities.getUserName();
 	}
 
 	/**
@@ -190,10 +247,16 @@ public class ClientUtil {
 			Msg.debug(ClientUtil.class, "Server not connected (" + operation + ")");
 			promptForReconnect(repository, operation, mustRetry, parent);
 		}
+		else if (exc instanceof RepositoryNotFoundException) {
+			Msg.showError(ClientUtil.class, parent, title, exc.getMessage());
+		}
 		else if (exc instanceof UserAccessException) {
 			Msg.showError(ClientUtil.class, parent, title,
 				"Access denied: " + repository + "\n" + exc.getMessage());
 		}
+		// FIXME: Verify presence and source of ServerException and ServerError which
+		// both originate from UnicastServerRef.dispatch method and are both forms
+		// of RemoteException
 		else if ((exc instanceof ServerException) || (exc instanceof ServerError)) {
 			Msg.showError(ClientUtil.class, parent, title,
 				"Exception occurred on the Ghidra Server.", exc.getCause());
@@ -208,7 +271,7 @@ public class ClientUtil {
 				excMsg = exc.toString();
 			}
 			if (exc instanceof IOException) {
-				Msg.showError(ClientUtil.class, parent, title, excMsg, exc);
+				Msg.showError(ClientUtil.class, parent, title, excMsg);
 			}
 			else {
 				// show the stacktrace for non-IOException
@@ -311,6 +374,13 @@ public class ClientUtil {
 	static RemoteRepositoryServerHandle connect(ServerInfo server)
 			throws LoginException, GeneralSecurityException, IOException, CancelledException {
 
+		// Check for explicitly denied server connections
+		Boolean access =
+			UrlAllowListManager.getAccess("ghidra", server.getServerName(), server.getPortNumber());
+		if (access != null && !access) {
+			throw new NotConnectedException("Access denied by Server Allow List");
+		}
+
 		getClientAuthenticator();
 		boolean allowLoginRetry = (clientAuthenticator instanceof DefaultClientAuthenticator);
 
@@ -332,7 +402,7 @@ public class ClientUtil {
 		if (hdl == null) {
 			Exception e = connectTask.getException();
 			if (e == null) {
-				return null; // cancelled by user
+				throw new CancelledException();
 			}
 			if (e instanceof IOException) {
 				throw (IOException) e;
@@ -413,7 +483,8 @@ public class ClientUtil {
 				"Unsupported authentication callback: " + callbacks[0].getClass().getName());
 		}
 		if (!clientAuthenticator.processPasswordCallbacks("Repository Server Authentication",
-			"Repository Server", serverName, nameCb, passCb, choiceCb, anonymousCb, loginError)) {
+			"Repository Server", serverName, nameCb != null, nameCb, passCb, choiceCb, anonymousCb,
+			loginError)) {
 			return false;
 		}
 		String name = defaultUserID;
@@ -431,8 +502,8 @@ public class ClientUtil {
 	static void processSignatureCallback(String serverName, SignatureCallback sigCb)
 			throws IOException {
 		try {
-			SignedToken signedToken = ApplicationKeyManagerUtils.getSignedToken(
-				sigCb.getRecognizedAuthorities(), sigCb.getToken());
+			SignedToken signedToken = DefaultKeyManagerFactory
+					.getSignedToken(sigCb.getRecognizedAuthorities(), sigCb.getToken());
 			sigCb.sign(signedToken.certChain, signedToken.signature);
 			Msg.info(ClientUtil.class, "PKI Authenticating to " + serverName + " as user '" +
 				signedToken.certChain[0].getSubjectX500Principal() + "'");

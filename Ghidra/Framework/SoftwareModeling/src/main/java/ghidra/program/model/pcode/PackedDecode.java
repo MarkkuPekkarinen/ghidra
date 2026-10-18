@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,12 +15,12 @@
  */
 package ghidra.program.model.pcode;
 
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.util.ArrayList;
 
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.address.AddressSpace;
+import ghidra.program.model.pcode.LinkedByteBuffer.Position;
 
 /*
  * A byte-based decoder designed to marshal info to the decompiler efficiently
@@ -50,7 +50,7 @@ import ghidra.program.model.address.AddressSpace;
  * For strings, the integer encoded after the \e type byte, is the actual length of the string.  The
  * string data itself is stored immediately after the length integer using UTF8 format.
  * */
-public class PackedDecode implements Decoder {
+public class PackedDecode implements Decoder, Closeable {
 
 	public static final int HEADER_MASK = 0xc0;
 	public static final int ELEMENT_START = 0x40;
@@ -79,18 +79,40 @@ public class PackedDecode implements Decoder {
 	private AddressFactory addrFactory;
 	protected AddressSpace[] spaces;
 	private LinkedByteBuffer inStream;
-	private LinkedByteBuffer.Position startPos;
-	private LinkedByteBuffer.Position curPos;
-	private LinkedByteBuffer.Position endPos;
+	private Position startPos;
+	private Position curPos;
+	private Position endPos;
 	private boolean attributeRead;
+
+	/**
+	 * Constructor for formats that do not use the readSpace() methods or use
+	 * setAddressFactory() in the middle of decoding
+	 */
+	public PackedDecode() {
+		addrFactory = null;
+		inStream = null;
+	}
 
 	public PackedDecode(AddressFactory addrFactory) {
 		this.addrFactory = addrFactory;
 		inStream = null;
-		startPos = new LinkedByteBuffer.Position();
-		curPos = new LinkedByteBuffer.Position();
-		endPos = new LinkedByteBuffer.Position();
 		buildAddrSpaceArray();
+	}
+
+	/**
+	 * Build a decoder for an input stream, where the decoder is set to read pages from the stream
+	 * "as needed".  An initial page is read from the stream by this constructor. But then
+	 * the stream must remain open and additional pages are read during the decoding process.
+	 * Calling close() after decoding, will close the underlying stream.
+	 * @param stream is the stream
+	 * @param desc is a descriptive string for the stream used in error messages
+	 * @throws IOException for problems initially reading from the stream
+	 */
+	public PackedDecode(InputStream stream, String desc) throws IOException {
+		addrFactory = null;
+		inStream = null;
+		open(Integer.MAX_VALUE, desc);
+		inStream.ingestStreamAsNeeded(stream, endPos);
 	}
 
 	private void buildAddrSpaceArray() {
@@ -178,13 +200,37 @@ public class PackedDecode implements Decoder {
 	}
 
 	@Override
+	public void setAddressFactory(AddressFactory addrFactory) {
+		this.addrFactory = addrFactory;
+		buildAddrSpaceArray();
+	}
+
+	@Override
 	public void clear() {
 		inStream = null;
 	}
 
 	@Override
-	public void open(int max, String source) {
-		inStream = new LinkedByteBuffer(max, source);
+	public void open(long max, String desc) {
+		inStream = new LinkedByteBuffer(max, desc);
+		startPos = inStream.allocatePosition();
+		curPos = inStream.allocatePosition();
+		endPos = inStream.allocatePosition();
+	}
+
+	/**
+	 * Close stream cached by the ingestStreamAsNeeded method.
+	 * @throws IOException for low-level problems with the stream
+	 */
+	@Override
+	public void close() throws IOException {
+		inStream.close();
+		inStream = null;
+	}
+
+	@Override
+	public void ingestStreamToNextTerminator(InputStream stream) throws IOException {
+		inStream.ingestStreamToNextTerminator(stream);
 	}
 
 	@Override
@@ -193,9 +239,14 @@ public class PackedDecode implements Decoder {
 	}
 
 	@Override
+	public void ingestBytes(byte[] byteArray, int off, int sz) throws IOException {
+		inStream.ingestBytes(byteArray, off, sz);
+	}
+
+	@Override
 	public void endIngest() {
-		inStream.pad(ELEMENT_END);
-		inStream.getStartPosition(endPos);
+		inStream.endIngest();
+		endPos.setToStart();
 	}
 
 	@Override
@@ -379,7 +430,7 @@ public class PackedDecode implements Decoder {
 	public long readSignedIntegerExpectString(String expect, long expectval)
 			throws DecoderException {
 		long res;
-		LinkedByteBuffer.Position tmpPos = new LinkedByteBuffer.Position();
+		Position tmpPos = inStream.allocatePosition();
 		tmpPos.copy(curPos);
 		byte header1 = tmpPos.getNextByte();
 		if ((header1 & HEADEREXTEND_MASK) != 0) {
@@ -454,29 +505,7 @@ public class PackedDecode implements Decoder {
 		length = (int) readInteger(length);
 
 		attributeRead = true;
-		int curLen = curPos.array.length - curPos.current;
-		if (curLen >= length) {
-			String res = new String(curPos.array, curPos.current, length);
-			curPos.advancePosition(length);
-			return res;
-		}
-		StringBuilder buf = new StringBuilder();
-		String res = new String(curPos.array, curPos.current, curLen);
-		buf.append(res);
-		length -= curLen;
-		curPos.advancePosition(curLen);
-		while (length > 0) {
-			curLen = curPos.array.length - curPos.current;
-			if (curLen > length) {
-				curLen = length;
-			}
-			res = new String(curPos.array, curPos.current, curLen);
-			buf.append(res);
-			length -= curLen;
-			curPos.advancePosition(curLen);
-		}
-		res = buf.toString();
-		return res;
+		return curPos.getNextString(length);
 	}
 
 	@Override
@@ -539,4 +568,38 @@ public class PackedDecode implements Decoder {
 		return res;
 	}
 
+	@Override
+	public int readOpcode() throws DecoderException {
+		int val = (int) readSignedInteger();
+		if (val < 0 || val >= PcodeOp.PCODE_MAX) {
+			throw new DecoderException("Bad OpCode");
+		}
+		return val;
+	}
+
+	@Override
+	public int readOpcode(AttributeId attribId) throws DecoderException {
+		findMatchingAttribute(attribId);
+		int opcode = readOpcode();
+		curPos.copy(startPos);
+		return opcode;
+	}
+
+	@Override
+	public MetaDataType readDataTypeMeta() throws DecoderException {
+		int val = (int) readSignedInteger();
+		MetaDataType meta = MetaDataType.getById(val);
+		if (meta == null) {
+			throw new DecoderException("PackedDecoder: bad meta-type");
+		}
+		return meta;
+	}
+
+	@Override
+	public MetaDataType readDataTypeMeta(AttributeId attribId) throws DecoderException {
+		findMatchingAttribute(attribId);
+		MetaDataType metatype = readDataTypeMeta();
+		curPos.copy(startPos);
+		return metatype;
+	}
 }

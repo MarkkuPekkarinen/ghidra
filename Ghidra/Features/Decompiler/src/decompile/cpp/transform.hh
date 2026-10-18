@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -38,8 +38,7 @@ public:
     preexisting = 2,		///< Varnode preexisted in the original data-flow
     normal_temp = 3,		///< A new temporary (unique space) Varnode
     piece_temp = 4,		///< A temporary representing a piece of an original Varnode
-    constant = 5,		///< A new constant Varnode
-    constant_iop = 6,		///< Special iop constant encoding a PcodeOp reference
+    constant = 5		///< A new constant Varnode
   };
   /// \brief Flags for a TransformVar
   enum {
@@ -71,8 +70,9 @@ public:
   enum {
     op_replacement = 1,		///< Op replaces an existing op
     op_preexisting = 2,		///< Op already exists (but will be transformed)
-    indirect_creation = 4,	///< Mark op as indirect creation
-    indirect_creation_possible_out = 8	///< Mark op as indirect creation and possible call output
+    op_indirect = 4,		///< Op is a new INDIRECT
+    indirect_creation = 8,	///< Mark op as indirect creation
+    indirect_creation_possible_out = 0x10	///< Mark op as indirect creation and possible call output
   };
 private:
   PcodeOp *op;			///< Original op which \b this is splitting (or null)
@@ -114,7 +114,7 @@ private:
 public:
   LanedRegister(void) { wholeSize = 0; sizeBitMask = 0; }	///< Constructor for use with decode
   LanedRegister(int4 sz,uint4 mask) { wholeSize = sz; sizeBitMask = mask; }	///< Constructor
-  bool decode(Decoder &decoder);			///< Parse \<register> elements for lane sizes
+  void parseSizes(int4 registerSize,string laneSizes);			///< Parse a \e vector_lane_sizes attribute
   int4 getWholeSize(void) const { return wholeSize; }	///< Get the size in bytes of the whole laned register
   uint4 getSizeBitMask(void) const { return sizeBitMask; }	///< Get the bit mask of possible lane sizes
   void addLaneSize(int4 size) { sizeBitMask |= ((uint4)1 << size); }	///< Add a new \e size to the allowed list
@@ -173,11 +173,11 @@ public:
   TransformVar *newPreexistingVarnode(Varnode *vn);	///< Make placeholder for preexisting Varnode
   TransformVar *newUnique(int4 size);		///< Make placeholder for new unique space Varnode
   TransformVar *newConstant(int4 size,int4 lsbOffset,uintb val);	///< Make placeholder for constant Varnode
-  TransformVar *newIop(Varnode *vn);	///< Make placeholder for special iop constant
   TransformVar *newPiece(Varnode *vn,int4 bitSize,int4 lsbOffset);	///< Make placeholder for piece of a Varnode
   TransformVar *newSplit(Varnode *vn,const LaneDescription &description);
   TransformVar *newSplit(Varnode *vn,const LaneDescription &description,int4 numLanes,int4 startLane);
   TransformOp *newOpReplace(int4 numParams,OpCode opc,PcodeOp *replace);
+  TransformOp *newIndirectReplace(PcodeOp *replace);
   TransformOp *newOp(int4 numParams,OpCode opc,TransformOp *follow);
   TransformOp *newPreexistingOp(int4 numParams,OpCode opc,PcodeOp *originalOp);
 

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -65,10 +65,11 @@ public class FSRLTest {
 	}
 
 	@Test
-	public void testDOSPaths() throws MalformedURLException {
-		FSRL fsrl = FSRL.fromString("fsrl://a:\\dir\\filename.txt");
+	public void testPathsWithBackslashes() throws MalformedURLException {
+		FSRL fsrl = FSRL.fromString("fsrl:///dir/filename\\with\\backslashes");
 		assertEquals("fsrl", fsrl.getFS().getProtocol());
-		assertEquals("a:/dir/filename.txt", fsrl.getPath());
+		assertEquals("/dir/filename\\with\\backslashes", fsrl.getPath());
+		assertEquals("filename\\with\\backslashes", fsrl.getName());
 	}
 
 	@Test
@@ -102,9 +103,11 @@ public class FSRLTest {
 
 	@Test
 	public void testStringFormat() throws MalformedURLException {
-		FSRL fsrl = FSRL.fromString("fsrl://path/filename?MD5=1234|subfsrl://subpath/subfile");
+		FSRL fsrl = FSRL.fromString(
+			"fsrl://path/filename?MD5=00000000000000000000000000000000|subfsrl://subpath/subfile");
 
-		assertEquals("string format bad", "fsrl://path/filename?MD5=1234|subfsrl://subpath/subfile",
+		assertEquals("string format bad",
+			"fsrl://path/filename?MD5=00000000000000000000000000000000|subfsrl://subpath/subfile",
 			fsrl.toString());
 		assertEquals("pretty string format bad", "fsrl://path/filename|subfsrl://subpath/subfile",
 			fsrl.toPrettyString());
@@ -116,11 +119,12 @@ public class FSRLTest {
 
 	@Test
 	public void testStringFormat2() throws MalformedURLException {
-		FSRL fsrl =
-			FSRL.fromString("fsrl://path/filename?MD5=1234|subfsrl://subpath/subfile|sub2://");
+		FSRL fsrl = FSRL.fromString(
+			"fsrl://path/filename?MD5=00000000000000000000000000000000|subfsrl://subpath/subfile|sub2://");
 
 		assertEquals("string format bad",
-			"fsrl://path/filename?MD5=1234|subfsrl://subpath/subfile|sub2://", fsrl.toString());
+			"fsrl://path/filename?MD5=00000000000000000000000000000000|subfsrl://subpath/subfile|sub2://",
+			fsrl.toString());
 		assertEquals("pretty string format bad",
 			"fsrl://path/filename|subfsrl://subpath/subfile|sub2://", fsrl.toPrettyString());
 		assertEquals("partial string format bad", "sub2://", fsrl.toStringPart());
@@ -130,11 +134,12 @@ public class FSRLTest {
 
 	@Test
 	public void testStringFormat3() throws MalformedURLException {
-		FSRL fsrl =
-			FSRL.fromString("fsrl:///path/filename?MD5=1234|subfsrl:///subpath/subfile|sub2://");
+		FSRL fsrl = FSRL.fromString(
+			"fsrl:///path/filename?MD5=00000000000000000000000000000000|subfsrl:///subpath/subfile|sub2://");
 
 		assertEquals("string format bad",
-			"fsrl:///path/filename?MD5=1234|subfsrl:///subpath/subfile|sub2://", fsrl.toString());
+			"fsrl:///path/filename?MD5=00000000000000000000000000000000|subfsrl:///subpath/subfile|sub2://",
+			fsrl.toString());
 		assertEquals("pretty string format bad",
 			"fsrl:///path/filename|subfsrl:///subpath/subfile|sub2://", fsrl.toPrettyString());
 		assertEquals("partial string format bad", "sub2://", fsrl.toStringPart());
@@ -241,5 +246,13 @@ public class FSRLTest {
 		FSRL childFSRL = FSRL.fromString("file:///subdir1/subdir2/file1.txt");
 
 		assertTrue(childFSRL.isDescendantOf(parentFSRL));
+	}
+
+	@Test
+	public void testBadMD5s() throws MalformedURLException {
+		assertNull(FSRL.fromString("fsrl://path/rootfile?MD5").getMD5());
+		assertNull(FSRL.fromString("fsrl://path/rootfile?MD5=").getMD5());
+		assertNull(FSRL.fromString("fsrl://path/rootfile?MD5=xyz").getMD5());
+		assertNull(FSRL.fromString("fsrl://path/rootfile?MD5=AABB").getMD5());
 	}
 }

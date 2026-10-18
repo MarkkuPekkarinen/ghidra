@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,10 +18,10 @@ package ghidra.file.formats.tar;
 import static ghidra.formats.gfilesystem.fileinfo.FileAttributeType.*;
 
 import java.io.IOException;
-import java.util.List;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.io.FilenameUtils;
 
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.formats.gfilesystem.*;
@@ -33,28 +33,19 @@ import ghidra.util.task.TaskMonitor;
 /**
  * TAR file system implementation.
  * <p>
- * The factory supports detecting both compressed (gz) and uncompressed tar files,
+ * The factory supports detecting both compressed (gz/bz2/xz) and uncompressed tar files,
  * and keys both on the tar filename extension as well as the data in the file.
- * <p>
  */
-@FileSystemInfo(type = "tar", description = "TAR", priority = FileSystemInfo.PRIORITY_HIGH, factory = TarFileSystemFactory.class)
-public class TarFileSystem implements GFileSystem {
+@FileSystemInfo(
+	type = "tar",
+	description = "TAR",
+	priority = FileSystemInfo.PRIORITY_HIGH,
+	factory = TarFileSystemFactory.class,
+	extensions = { "tar", "tgz", "tbz2" }
+)
+public class TarFileSystem extends AbstractFileSystem<TarMetadata> {
 
-	private static class TarMetadata {
-		TarArchiveEntry tarArchiveEntry;
-		int fileNum;
-
-		TarMetadata(TarArchiveEntry tae, int fileNum) {
-			this.tarArchiveEntry = tae;
-			this.fileNum = fileNum;
-		}
-	}
-
-	private FSRLRoot fsrl;
-	private FileSystemService fsService;
 	private ByteProvider provider;
-	private FileSystemIndexHelper<TarMetadata> fsih;
-	private FileSystemRefManager refManager = new FileSystemRefManager(this);
 	private int fileCount;
 
 	/**
@@ -65,10 +56,9 @@ public class TarFileSystem implements GFileSystem {
 	 * @param fsService reference to the {@link FileSystemService}.
 	 */
 	public TarFileSystem(FSRLRoot fsrl, ByteProvider provider, FileSystemService fsService) {
-		this.fsrl = fsrl;
-		this.fsih = new FileSystemIndexHelper<>(this, fsrl);
+		super(fsrl, fsService);
+
 		this.provider = provider;
-		this.fsService = fsService;
 	}
 
 	ByteProvider getProvider() {
@@ -79,21 +69,28 @@ public class TarFileSystem implements GFileSystem {
 		try (TarArchiveInputStream tarInput =
 			new TarArchiveInputStream(provider.getInputStream(0))) {
 			TarArchiveEntry tarEntry;
-			while ((tarEntry = tarInput.getNextTarEntry()) != null) {
+			while ((tarEntry = tarInput.getNextEntry()) != null) {
 				monitor.setMessage(tarEntry.getName());
 				monitor.checkCancelled();
 
 				int fileNum = fileCount++;
-				GFile newFile = fsih.storeFile(tarEntry.getName(), fileCount,
-					tarEntry.isDirectory(), tarEntry.getSize(), new TarMetadata(tarEntry, fileNum));
+				String linkName = tarEntry.getLinkName();
+				TarMetadata tmd = new TarMetadata(tarEntry, fileNum);
+				GFile newFile = !tarEntry.isSymbolicLink()
+						? fsIndex.storeFile(tarEntry.getName(), fileCount, tarEntry.isDirectory(),
+							tarEntry.getSize(), tmd)
+						: fsIndex.storeSymlink(tarEntry.getName(), fileCount, linkName,
+							linkName.length(), tmd);
 
-				if (tarEntry.getSize() < FileCache.MAX_INMEM_FILESIZE) {
+				if (!tarEntry.isSymbolicLink() &&
+					tarEntry.getSize() < FileCache.MAX_INMEM_FILESIZE) {
 					// because tar files are sequential access, we cache smaller files if they
 					// will fit in a in-memory ByteProvider
 					try (ByteProvider bp =
-						fsService.getDerivedByteProvider(fsrl.getContainer(), newFile.getFSRL(),
+						fsService.getDerivedByteProvider(fsFSRL.getContainer(), newFile.getFSRL(),
 							newFile.getPath(), tarEntry.getSize(), () -> tarInput, monitor)) {
-						fsih.updateFSRL(newFile, newFile.getFSRL().withMD5(bp.getFSRL().getMD5()));
+						fsIndex.updateFSRL(newFile,
+							newFile.getFSRL().withMD5(bp.getFSRL().getMD5()));
 					}
 				}
 			}
@@ -101,14 +98,9 @@ public class TarFileSystem implements GFileSystem {
 	}
 
 	@Override
-	public String getName() {
-		return fsrl.getContainer().getName();
-	}
-
-	@Override
 	public void close() throws IOException {
 		refManager.onClose();
-		fsih.clear();
+		fsIndex.clear();
 		if (provider != null) {
 			provider.close();
 			provider = null;
@@ -121,24 +113,16 @@ public class TarFileSystem implements GFileSystem {
 	}
 
 	@Override
-	public FSRLRoot getFSRL() {
-		return fsrl;
-	}
-
-	@Override
-	public int getFileCount() {
-		return fileCount;
-	}
-
-	@Override
 	public FileAttributes getFileAttributes(GFile file, TaskMonitor monitor) {
-		TarMetadata tmd = fsih.getMetadata(file);
+		TarMetadata tmd = fsIndex.getMetadata(file);
 		if (tmd == null) {
-			return null;
+			return FileAttributes.EMPTY;
 		}
 		TarArchiveEntry blob = tmd.tarArchiveEntry;
 		return FileAttributes.of(
-			FileAttribute.create(NAME_ATTR, blob.getName()),
+			FileAttribute.create(NAME_ATTR, FilenameUtils.getName(blob.getName())),
+			FileAttribute.create(PATH_ATTR,
+				FilenameUtils.getFullPathNoEndSeparator(blob.getName())),
 			FileAttribute.create(SIZE_ATTR, blob.getSize()),
 			FileAttribute.create(MODIFIED_DATE_ATTR, blob.getLastModifiedDate()),
 			FileAttribute.create(FILE_TYPE_ATTR, tarToFileType(blob)),
@@ -146,7 +130,10 @@ public class TarFileSystem implements GFileSystem {
 			FileAttribute.create(GROUP_NAME_ATTR, blob.getGroupName()),
 			FileAttribute.create(USER_ID_ATTR, blob.getLongUserId()),
 			FileAttribute.create(GROUP_ID_ATTR, blob.getLongGroupId()),
-			FileAttribute.create(UNIX_ACL_ATTR, (long) blob.getMode()));
+			FileAttribute.create(UNIX_ACL_ATTR, (long) blob.getMode()),
+			blob.isSymbolicLink()
+					? FileAttribute.create(SYMLINK_DEST_ATTR, blob.getLinkName())
+					: null);
 	}
 
 	private FileType tarToFileType(TarArchiveEntry tae) {
@@ -163,48 +150,41 @@ public class TarFileSystem implements GFileSystem {
 	}
 
 	@Override
-	public GFile lookup(String path) throws IOException {
-		return fsih.lookup(path);
+	public FileType getFileType(GFile f, TaskMonitor monitor) {
+		TarMetadata tmd = fsIndex.getMetadata(f);
+		return tmd != null ? tarToFileType(tmd.tarArchiveEntry) : FileType.UNKNOWN;
 	}
 
 	@Override
 	public ByteProvider getByteProvider(GFile file, TaskMonitor monitor)
 			throws IOException, CancelledException {
 
-		TarMetadata tmd = fsih.getMetadata(file);
+		GFile resolvedFile = fsIndex.resolveSymlinks(file);
+		TarMetadata tmd = fsIndex.getMetadata(resolvedFile);
 		if (tmd == null) {
 			throw new IOException("Unknown file " + file);
 		}
 
-		ByteProvider fileBP = fsService.getDerivedByteProvider(provider.getFSRL(), file.getFSRL(),
-			file.getPath(), tmd.tarArchiveEntry.getSize(), () -> {
+		ByteProvider fileBP = fsService.getDerivedByteProvider(provider.getFSRL(),
+			resolvedFile.getFSRL(), resolvedFile.getPath(), tmd.tarArchiveEntry.getSize(), () -> {
 				TarArchiveInputStream tarInput = new TarArchiveInputStream(provider.getInputStream(0));
 
 				int fileNum = 0;
 				TarArchiveEntry tarEntry;
-				while ((tarEntry = tarInput.getNextTarEntry()) != null) {
+				while ((tarEntry = tarInput.getNextEntry()) != null) {
 					if (fileNum == tmd.fileNum) {
 						if (!tmd.tarArchiveEntry.getName().equals(tarEntry.getName())) {
 							throw new IOException(
-								"Mismatch between filenum and tarEntry for " + file);
+								"Mismatch between filenum and tarEntry for " + resolvedFile);
 						}
 						return tarInput;
 					}
 					fileNum++;
 				}
-				throw new IOException("Could not find requested file " + file);
+				throw new IOException("Could not find requested file " + resolvedFile);
 			}, monitor);
 
 		return fileBP;
 	}
-
-	@Override
-	public List<GFile> getListing(GFile directory) throws IOException {
-		return fsih.getListing(directory);
-	}
-
-	@Override
-	public FileSystemRefManager getRefManager() {
-		return refManager;
-	}
 }
+

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,6 +36,8 @@ import ghidra.program.model.address.AddressSpace;
 public interface Decoder extends ByteIngest {
 
 	public AddressFactory getAddressFactory();
+
+	public void setAddressFactory(AddressFactory addrFactory);
 
 	/**
 	 * Peek at the next child element of the current parent, without traversing in (opening) it.
@@ -242,6 +244,42 @@ public interface Decoder extends ByteIngest {
 	 * @throws DecoderException if the expected value is not present
 	 */
 	public AddressSpace readSpace(AttributeId attribId) throws DecoderException;
+
+	/**
+	 * Parse the current attribute is a p-code opcode
+	 * The last attribute, as returned by getNextAttributeId, is returned as an opcode.
+	 * The opcode is one of the constants specified in {@link PcodeOp}
+	 * @return the opcode associated with the current attribute
+	 * @throws DecoderException if the expected value is not present
+	 */
+	public int readOpcode() throws DecoderException;
+
+	/**
+	 * Find the specific attribute in the current element and return it as an opcode
+	 * Search attributes from the current element for a match to the given attribute id.
+	 * Return this attribute as an opcode constant from {@link PcodeOp}. If there is no
+	 * matching attribute id, an exception is thrown. Parse via getNextAttributeId is reset. 
+	 * @param attribId is the specific attribute id to match
+	 * @return the opcode associated with the attribute
+	 * @throws DecoderException if the expected value is not present
+	 */
+	public int readOpcode(AttributeId attribId) throws DecoderException;
+
+	/**
+	 * Parse the current attribute as a data-type meta-type (MetaDataType).
+	 * The last attribute, as returned by getNextAttributeId, is returned as a meta-type.
+	 * @return the meta-type associated with the current attribute
+	 * @throws DecoderException if the expected value is not present
+	 */
+	public MetaDataType readDataTypeMeta() throws DecoderException;
+
+	/**
+	 * Find the specific attribute in the current element and return it as a data-type meta-type.
+	 * @param attribId is the specific attribute id to match
+	 * @return the meta-type associated with the current attribute
+	 * @throws DecoderException if the expected value is not present
+	 */
+	public MetaDataType readDataTypeMeta(AttributeId attribId) throws DecoderException;
 
 	/**
 	 * Skip parsing of the next element

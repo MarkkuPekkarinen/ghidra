@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,13 +17,14 @@ package ghidra.app.util.viewer.field;
 
 import java.awt.Color;
 import java.awt.FontMetrics;
-import java.beans.PropertyEditor;
 import java.math.BigInteger;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.function.Predicate;
 
 import javax.swing.event.ChangeListener;
+
+import org.apache.commons.lang3.mutable.MutableInt;
 
 import docking.widgets.fieldpanel.field.*;
 import docking.widgets.fieldpanel.support.*;
@@ -42,6 +43,7 @@ import ghidra.program.model.symbol.*;
 import ghidra.program.util.ProgramLocation;
 import ghidra.program.util.XRefFieldLocation;
 import ghidra.util.HelpLocation;
+import ghidra.util.datastruct.Counter;
 import ghidra.util.exception.AssertException;
 import util.CollectionUtils;
 
@@ -74,8 +76,6 @@ public class XRefFieldFactory extends FieldFactory {
 		GROUP_TITLE + Options.DELIMITER + "Display Namespace";
 	static final String GROUP_BY_FUNCTION_KEY =
 		GROUP_TITLE + Options.DELIMITER + "Group by Function";
-
-	private PropertyEditor namespaceOptionsEditor = new NamespacePropertyEditor();
 
 	protected String delim = DELIMITER;
 	protected boolean displayBlockName;
@@ -167,15 +167,14 @@ public class XRefFieldFactory extends FieldFactory {
 	private void setupNamespaceOptions(Options fieldOptions) {
 		// we need to install a custom editor that allows us to edit a group of related options
 		fieldOptions.registerOption(NAMESPACE_OPTIONS_KEY, OptionType.CUSTOM_TYPE,
-			new NamespaceWrappedOption(), null, "Adjusts the XREFs Field namespace display",
-			namespaceOptionsEditor);
+			new NamespaceWrappedOption(), new HelpLocation("CodeBrowserPlugin", "XREFs_Field"),
+			"Adjusts the XREFs Field namespace display", () -> new NamespacePropertyEditor());
 		CustomOption customOption = fieldOptions.getCustomOption(NAMESPACE_OPTIONS_KEY, null);
-		fieldOptions.getOptions(NAMESPACE_OPTIONS_KEY)
-				.setOptionsHelpLocation(new HelpLocation("CodeBrowserPlugin", "XREFs_Field"));
+
 		if (!(customOption instanceof NamespaceWrappedOption)) {
 			throw new AssertException("Someone set an option for " + NAMESPACE_OPTIONS_KEY +
 				" that is not the expected " +
-				"ghidra.app.util.viewer.field.NamespaceWrappedOption type.");
+				NamespaceWrappedOption.class.getName() + " type.");
 		}
 
 		NamespaceWrappedOption namespaceOption = (NamespaceWrappedOption) customOption;
@@ -239,9 +238,10 @@ public class XRefFieldFactory extends FieldFactory {
 		}
 
 		CodeUnit cu = (CodeUnit) obj;
-		List<Reference> xrefs = XReferenceUtils.getXReferences(cu, maxXRefs + 1);
+		Counter fullCount = new Counter();
+		List<Reference> xrefs = XReferenceUtils.getXReferences(cu, maxXRefs, fullCount);
 		int maxOffcuts = Math.max(0, maxXRefs - xrefs.size());
-		List<Reference> offcuts = XReferenceUtils.getOffcutXReferences(cu, maxOffcuts);
+		List<Reference> offcuts = XReferenceUtils.getOffcutXReferences(cu, maxOffcuts, fullCount);
 		if (sortChoice == SORT_CHOICE.Address) {
 			xrefs.sort(null);
 			offcuts.sort(null);
@@ -252,9 +252,9 @@ public class XRefFieldFactory extends FieldFactory {
 		}
 
 		if (groupByFunction) {
-			return getFieldByFunction(proxy, varWidth, xrefs, offcuts);
+			return getFieldByFunction(proxy, varWidth, xrefs, offcuts, fullCount);
 		}
-		return getFieldByAddress(proxy, varWidth, xrefs, offcuts);
+		return getFieldByAddress(proxy, varWidth, xrefs, offcuts, fullCount);
 	}
 
 	/*
@@ -285,9 +285,9 @@ public class XRefFieldFactory extends FieldFactory {
 									
 	*/
 	private ListingField getFieldByFunction(ProxyObj<?> proxy, int varWidth, List<Reference> xrefs,
-			List<Reference> offcuts) {
+			List<Reference> offcuts, MutableInt fullCount) {
 
-		int totalXrefs = xrefs.size() + offcuts.size();
+		int totalXrefs = fullCount.intValue();
 		if (totalXrefs == 0) {
 			return null;
 		}
@@ -330,9 +330,9 @@ public class XRefFieldFactory extends FieldFactory {
 			xrefsByFunction, isOffcut, varWidth, hlFactory);
 
 		//
-		// TODO maxXRefs makes sense when simply displaying xrefs.  What does max mean when
-		//      binning xrefs by function.  Currently, we use the max as the max row count, but
-		//      this may need to be changed and it may require a new tool option.
+		// Note: maxXRefs makes sense when simply displaying xrefs.  What does max mean when
+		//       binning xrefs by function.  Currently, we use the max as the max row count, but
+		//       this may need to be changed and it may require a new tool option.
 		//
 
 		int maxLines = maxXRefs;
@@ -483,9 +483,9 @@ public class XRefFieldFactory extends FieldFactory {
 								
 	*/
 	private ListingField getFieldByAddress(ProxyObj<?> proxy, int varWidth, List<Reference> xrefs,
-			List<Reference> offcuts) {
+			List<Reference> offcuts, MutableInt fullCount) {
 
-		int totalXrefs = xrefs.size() + offcuts.size();
+		int totalXrefs = fullCount.intValue();
 		if (totalXrefs == 0) {
 			return null;
 		}
@@ -549,7 +549,7 @@ public class XRefFieldFactory extends FieldFactory {
 			int lastRow = list.size() - 1;
 			AttributedString as =
 				new AttributedString(MORE_XREFS_STRING, XrefColors.DEFAULT, getMetrics());
-			fieldElements.add(new TextFieldElement(as, lastRow, 0));
+			fieldElements.add(new TextFieldElement(as, lastRow + 1, 0));
 		}
 		return fieldElements;
 	}

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,8 +15,9 @@
  */
 package utilities.util;
 
-import static generic.test.AbstractGTest.assertListEqualsArrayOrdered;
-import static org.hamcrest.CoreMatchers.equalTo;
+import static generic.test.AbstractGTest.*;
+import static org.hamcrest.CoreMatchers.*;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.*;
 
 import java.io.*;
@@ -30,8 +31,7 @@ import org.junit.Test;
 
 import generic.jar.ResourceFile;
 import generic.test.AbstractGenericTest;
-import ghidra.framework.OperatingSystem;
-import ghidra.framework.Platform;
+import ghidra.framework.*;
 import utilities.util.FileResolutionResult.FileResolutionStatus;
 
 public class FileUtilitiesTest {
@@ -198,11 +198,11 @@ public class FileUtilitiesTest {
 	@Test
 	public void copyFile_ResourceFile_To_ResourceFile() throws Exception {
 
-		File from = File.createTempFile("from.file", ".txt");
+		File from = Application.createTempFile("from.file", ".txt");
 		FileUtilities.writeLinesToFile(from, Arrays.asList("From file contents"));
 		from.deleteOnExit();
 
-		File to = File.createTempFile("to.file", ".txt");
+		File to = Application.createTempFile("to.file", ".txt");
 		to.deleteOnExit();
 		FileUtilities.writeLinesToFile(to, Arrays.asList("To file contents"));
 
@@ -222,7 +222,7 @@ public class FileUtilitiesTest {
 			}
 		};
 
-		File to = File.createTempFile("to.file", ".txt");
+		File to = Application.createTempFile("to.file", ".txt");
 		to.deleteOnExit();
 
 		// should fail
@@ -232,7 +232,7 @@ public class FileUtilitiesTest {
 	@Test(expected = IOException.class)
 	public void copyFile_ExceptionFromOutputStream() throws Exception {
 
-		File from = File.createTempFile("from.file", ".txt");
+		File from = Application.createTempFile("from.file", ".txt");
 		from.deleteOnExit();
 
 		ResourceFile to = new ResourceFile(new File("/to.from.file")) {

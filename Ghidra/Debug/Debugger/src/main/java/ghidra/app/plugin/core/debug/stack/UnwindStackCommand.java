@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,8 +15,10 @@
  */
 package ghidra.app.plugin.core.debug.stack;
 
-import ghidra.app.plugin.core.debug.DebuggerCoordinates;
-import ghidra.framework.cmd.TypedBackgroundCommand;
+import java.util.Map;
+
+import ghidra.debug.api.tracemgr.DebuggerCoordinates;
+import ghidra.framework.cmd.BackgroundCommand;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.pcode.exec.DebuggerPcodeUtils.WatchValue;
 import ghidra.trace.model.Trace;
@@ -27,7 +29,7 @@ import ghidra.util.task.TaskMonitor;
  * A command to unwind as much of the stack as possible and annotate the resulting frame in the
  * dynamic listing
  */
-public class UnwindStackCommand extends TypedBackgroundCommand<Trace> {
+public class UnwindStackCommand extends BackgroundCommand<Trace> {
 
 	private final PluginTool tool;
 	private final DebuggerCoordinates where;
@@ -39,19 +41,23 @@ public class UnwindStackCommand extends TypedBackgroundCommand<Trace> {
 	}
 
 	@Override
-	public boolean applyToTyped(Trace obj, TaskMonitor monitor) {
+	public boolean applyTo(Trace obj, TaskMonitor monitor) {
 		try {
 			StackUnwinder unwinder = new StackUnwinder(tool, where.getPlatform());
 			int prevParamSize = 0;
-			for (AnalysisUnwoundFrame<WatchValue> frame : unwinder.frames(where.frame(0),
-				monitor)) {
-				UnwindInfo info = frame.getUnwindInfo();
-				if (info != null) {
-					frame.applyToListing(prevParamSize, monitor);
-					prevParamSize = info.computeParamSize();
-				}
-				else {
-					tool.setStatusInfo(frame.getError().getMessage());
+			Map<Integer, AnalysisUnwoundFrame<WatchValue>> frames =
+				unwinder.getFrames(where, monitor);
+			for (int i = 0; i < frames.size(); i++) {
+				AnalysisUnwoundFrame<WatchValue> frame = frames.get(i);
+				if (frame != null) {
+					UnwindInfo info = frame.getUnwindInfo();
+					if (info != null && info.error() == null) {
+						frame.applyToListing(prevParamSize, monitor);
+						prevParamSize = info.computeParamSize();
+					}
+					else {
+						tool.setStatusInfo(frame.getError().getMessage());
+					}
 				}
 			}
 			return true;

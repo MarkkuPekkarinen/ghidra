@@ -5,9 +5,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -39,8 +39,8 @@ import ghidra.framework.Platform;
 import ghidra.util.ColorUtils;
 import ghidra.util.Msg;
 
-public class GTreeDragNDropAdapter implements DragSourceListener, DragGestureListener,
-		DropTargetListener {
+public class GTreeDragNDropAdapter
+		implements DragSourceListener, DragGestureListener, DropTargetListener {
 
 	private JTree tree;
 	private GTreeDragNDropHandler dragNDropHandler;
@@ -76,18 +76,17 @@ public class GTreeDragNDropAdapter implements DragSourceListener, DragGestureLis
 	}
 
 	private void setCursor(int action, DragSourceContext dragSourceContext) {
-		Cursor cursor = DragSource.DefaultCopyNoDrop;
-		switch (action) {
-			case DnDConstants.ACTION_COPY:
-				cursor = DragSource.DefaultCopyDrop;
-				break;
-			case DnDConstants.ACTION_MOVE:
-				cursor = DragSource.DefaultMoveDrop;
-				break;
-			case DnDConstants.ACTION_LINK:
-				cursor = DragSource.DefaultLinkDrop;
-		}
+		Cursor cursor = getCursor(action);
 		dragSourceContext.setCursor(cursor);
+	}
+
+	private Cursor getCursor(int action) {
+		return switch (action) {
+			case DnDConstants.ACTION_COPY -> DragSource.DefaultCopyDrop;
+			case DnDConstants.ACTION_MOVE -> DragSource.DefaultMoveDrop;
+			case DnDConstants.ACTION_LINK -> DragSource.DefaultLinkDrop;
+			default -> DragSource.DefaultCopyNoDrop;
+		};
 	}
 
 	@Override
@@ -121,18 +120,19 @@ public class GTreeDragNDropAdapter implements DragSourceListener, DragGestureLis
 		if (!tree.isPathSelected(path)) {
 			return;
 		}
+
+		int dragAction = dragEvent.getDragAction();
 		List<GTreeNode> selectedData = createSelectionList(tree.getSelectionPaths());
-		if (!dragNDropHandler.isStartDragOk(selectedData, dragEvent.getDragAction())) {
+		if (!dragNDropHandler.isStartDragOk(selectedData, dragAction)) {
 			return;
 		}
 
 		Transferable transferable = new GTreeNodeTransferable(dragNDropHandler, selectedData);
 
 		Image image = getDragImage(selectedData);
-
+		Cursor cursor = getCursor(dragAction);
 		try {
-			dragEvent.startDrag(DragSource.DefaultCopyNoDrop, image, new Point(-10, -30),
-				transferable, this);
+			dragEvent.startDrag(cursor, image, new Point(-10, -30), transferable, this);
 		}
 		catch (InvalidDnDOperationException exc) {
 			Msg.debug(this, "Unable to initiate drag from tree", exc);
@@ -159,9 +159,8 @@ public class GTreeDragNDropAdapter implements DragSourceListener, DragGestureLis
 		GradientPaint mask;
 		Color treeBg = tree.getBackground();
 		Color transparentTreeBackground = ColorUtils.withAlpha(treeBg, 100);
-		mask =
-			new GradientPaint(0, 0, transparentTreeBackground, 0, size.height >> 1,
-				Palette.NO_COLOR);
+		mask = new GradientPaint(0, 0, transparentTreeBackground, 0, size.height >> 1,
+			Palette.NO_COLOR);
 		g2.setPaint(mask);
 
 		// Sets the alpha composite
@@ -195,9 +194,8 @@ public class GTreeDragNDropAdapter implements DragSourceListener, DragGestureLis
 					return;
 				}
 
-				Component renderer =
-					cellRenderer.getTreeCellRendererComponent(tree, node, true, true,
-						node.isLeaf(), row, false);
+				Component renderer = cellRenderer.getTreeCellRendererComponent(tree, node, true,
+					true, node.isLeaf(), row, false);
 				renderer.setSize(renderer.getPreferredSize());
 
 				// move down the point in our graphics space into which we will paint

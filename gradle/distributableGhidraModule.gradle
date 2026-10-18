@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,28 +28,32 @@ apply from: "$rootProject.projectDir/gradle/support/distributionCommon.gradle"
 
 rootProject.assembleDistribution {
 	def p = this.project
-
-	def zipPath = getZipPath(p)
+	def zipPath = rootProject.getZipPath(p)
 	
-	from (p.projectDir.toString() + "/Module.manifest") {
+	from ("${p.projectDir}/Module.manifest") {
 		into  { zipPath }
 	}
 
-	from (p.projectDir.toString() + "/data") {
-		into { zipPath + "/data" }
-		exclude 'build.xml' // associated with language modules (dev use only)
+	from ("${p.projectDir}/support") {
+		into  { "${zipPath}/support" }
+	}
+
+	from ("${p.projectDir}/data") {
+		into { "${zipPath}/data" }
+		exclude 'build.xml'   // associated with language modules (dev use only)
+		exclude '**/*.sla.lock' // associated with language modules
 	}
 	
-	from (BIN_REPO + '/' + getGhidraRelativePath(p) + "/data") {
-		into { zipPath + "/data" }
+	from ("${rootProject.BIN_REPO}/${rootProject.getGhidraRelativePath(p)}/data") {
+		into { "${zipPath}/data" }
 	}
 	
-	from (p.projectDir.toString() + "/build/LICENSE.txt") {
+	from ("${p.projectDir}/build/LICENSE.txt") {
 		into { zipPath }
 	}
 
 	// handle special case where modules build data artifacts into the build dir
-	from (p.projectDir.toString() + "/build/data") {
+	from ("${p.projectDir}/build/data") {
 		into {zipPath + "/data" }
 	}
 	
@@ -91,15 +95,25 @@ rootProject.assembleDistribution {
 	//
 	fileTree.each { File file ->
 		String filePath = getGlobalFilePathSubDirName(file)
-		from (file) {
-			into filePath
+		
+		if (file.name.toLowerCase().endsWith(".md")) {
+			rootProject.assembleMarkdownToHtml {
+				from (file) {
+					into filePath
+				}
+			}
+		}
+		else {
+			from (file) {
+				into filePath
+			}
 		}
 	}
 }
 
 // copy os specific files for each platform
 rootProject.PLATFORMS.each { platform ->
-	rootProject.tasks.findAll {it.name == "assembleDistribution_${platform.name}"}.each { t -> 
+	rootProject.tasks.matching {it.name == "assembleDistribution_${platform.name}"}.each { t -> 
 
 		def p = this.project
 		
@@ -107,10 +121,10 @@ rootProject.PLATFORMS.each { platform ->
 		t.from (p.projectDir.toString() + "/build/os/${platform.name}") {
 			exclude '*.lib'
 			exclude '*.exp'
-			into getZipPath(p)	+ "/os/${platform.name}"
+			into rootProject.getZipPath(p)	+ "/os/${platform.name}"
 		}
 		t.from (p.projectDir.toString() + "/os/${platform.name}") {
-			into getZipPath(p) + "/os/${platform.name}"
+			into rootProject.getZipPath(p) + "/os/${platform.name}"
 		}
 	}	
 }
@@ -118,7 +132,7 @@ rootProject.PLATFORMS.each { platform ->
 // For win_x86_64 build, we have to also include any win_x86_32 binaries in the final zip.
 rootProject.assembleDistribution_win_x86_64 {
 	from (this.project.projectDir.toString() + "/build/os/win_x86_32") {
-		into getZipPath(this.project)	+ "/os/win_x86_32"
+		into rootProject.getZipPath(this.project)	+ "/os/win_x86_32"
 	}
 }
 
@@ -163,19 +177,17 @@ String getGlobalFilePathSubDirName(File file) {
 
 
 plugins.withType(JavaPlugin) {
-	// build up a java classpath for javadocs
-	rootProject.ghidraPath.from(sourceSets.main.compileClasspath)
 
 	rootProject.assembleSource {
 		from (this.project.zipSourceSubproject) {
-			into  rootProject.ext.ZIP_DIR_PREFIX + "/" +  getZipPath(this.project) + "/lib" 
+			into  rootProject.ext.ZIP_DIR_PREFIX + "/" +  rootProject.getZipPath(this.project) + "/lib" 
 		}
 	}
 	
 	rootProject.assembleDistribution {
 		dependsOn assemble
 		def p = this.project
-		def zipPath = getZipPath(p)
+		def zipPath = rootProject.getZipPath(p)
 		
 		from (p.jar) {
 			// use closures for getting zip path to delay evaluation. See note at top of file.
@@ -183,29 +195,37 @@ plugins.withType(JavaPlugin) {
 		}
 		from (p.projectDir.toString() + "/ghidra_scripts") {
 			exclude 'bin/'
+			exclude '**/__pycache__/**'
 			into { zipPath + "/ghidra_scripts" }
 		}
 		
-			// External Libraries
+		// External Libraries
 		gradle.taskGraph.whenReady { taskGraph ->
-			List<String> externalPaths = getExternalRuntimeDependencies(p)
+			List<String> externalPaths = rootProject.getExternalRuntimeDependencies(p)
 			externalPaths.each { path ->
 				from (path) {
 					into {zipPath + "/lib" }
 				}
 			}
 		}
-			
-	
 	}
 }	
+
+rootProject.assembleMarkdownToHtml {
+	def p = this.project
+	def zipPath = rootProject.getZipPath(p)
+	
+	from ("${p.projectDir}/README.md") {
+		into { zipPath }
+	}
+}
 	
 /////////////////////////////////////////////////////////////////////////////
 // Native 
 /////////////////////////////////////////////////////////////////////////////	
 plugins.withType(CPlugin) {
 	rootProject.PLATFORMS.each { platform ->
-		rootProject.tasks.findAll {it.name == "assembleDistribution_${platform.name}"}.each { t -> 
+		rootProject.tasks.matching {it.name == "assembleDistribution_${platform.name}"}.each { t -> 
 			t.dependsOn this.assemble
 		}
 	}

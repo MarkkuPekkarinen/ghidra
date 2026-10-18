@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,7 +24,6 @@ import docking.widgets.tree.GTree;
 import docking.widgets.tree.GTreeNode;
 import ghidra.app.plugin.core.datamgr.DataTypeManagerPlugin;
 import ghidra.app.plugin.core.datamgr.DataTypesActionContext;
-import ghidra.app.plugin.core.datamgr.archive.Archive;
 import ghidra.app.plugin.core.datamgr.tree.*;
 import ghidra.program.model.data.Category;
 import ghidra.program.model.data.DataTypeManager;
@@ -86,14 +85,13 @@ public class CreateCategoryAction extends DockingAction {
 		TreePath[] selectionPaths = gtree.getSelectionPaths();
 		final CategoryNode node = (CategoryNode) selectionPaths[0].getLastPathComponent();
 		Category category = node.getCategory();
-		ArchiveNode archiveNode = node.getArchiveNode();
-		Archive archive = archiveNode.getArchive();
-		DataTypeManager dataTypeManager = archive.getDataTypeManager();
+		DataTypeStoreNode dataStoreNode = node.getArchiveNode();
+		DataTypeManager dataTypeManager = dataStoreNode.getDataTypeManager();
 
-		String newNodeName = null;
-		int transactionID = dataTypeManager.startTransaction("Create Category");
+		String newNodeName = getUniqueCategoryName(category);
+		String path = category.toString() + newNodeName;
+		int transactionID = dataTypeManager.startTransaction("Create " + path);
 		try {
-			newNodeName = getUniqueCategoryName(category);
 			category.createCategory(newNodeName);
 		}
 		catch (InvalidNameException ie) {

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -47,12 +47,12 @@ public class GnuDemangler implements Demangler {
 	public boolean canDemangle(Program program) {
 
 		String executableFormat = program.getExecutableFormat();
-		if (isELF(executableFormat) || isMacho(executableFormat)) {
+		if (ElfLoader.isElf(executableFormat) || isMacho(executableFormat)) {
 			return true;
 		}
-		
-		String compiler = program.getCompiler(); 
-		if(compiler != null && compiler.contains("gcc")) {
+
+		String compiler = program.getCompiler();
+		if (compiler != null && compiler.contains("gcc")) {
 			return true;
 		}
 
@@ -66,19 +66,21 @@ public class GnuDemangler implements Demangler {
 	}
 
 	@Override
-	@Deprecated(since = "9.2", forRemoval = true)
-	public DemangledObject demangle(String mangled, boolean demangleOnlyKnownPatterns)
+	public DemangledObject demangle(MangledContext mangledContext)
 			throws DemangledException {
-		GnuDemanglerOptions options = new GnuDemanglerOptions();
-		options.setDemangleOnlyKnownPatterns(demangleOnlyKnownPatterns);
-		return demangle(mangled, options);
+		DemangledObject demangled = demangleInternal(mangledContext);
+		if (demangled != null) {
+			demangled.setMangledContext(mangledContext);
+		}
+		return demangled;
 	}
 
-	@Override
-	public DemangledObject demangle(String mangled, DemanglerOptions demanglerOtions)
+	private DemangledObject demangleInternal(MangledContext mangledContext)
 			throws DemangledException {
 
-		GnuDemanglerOptions options = getGnuOptions(demanglerOtions);
+		DemanglerOptions demanglerOptions = mangledContext.getOptions();
+		String mangled = mangledContext.getMangled();
+		GnuDemanglerOptions options = getGnuOptions(demanglerOptions);
 		if (skip(mangled, options)) {
 			return null;
 		}
@@ -93,7 +95,10 @@ public class GnuDemangler implements Demangler {
 			}
 		}
 		else if (mangled.startsWith("__Z")) {
-			mangled = mangled.substring(1);//removed first underscore....
+			mangled = mangled.substring(1);
+		}
+		else if (mangled.startsWith("._Z")) {
+			mangled = mangled.substring(1);
 		}
 
 		boolean isDwarf = false;
@@ -106,20 +111,25 @@ public class GnuDemangler implements Demangler {
 		try {
 
 			GnuDemanglerNativeProcess process = getNativeProcess(options);
-			String demangled = process.demangle(mangled).trim();
-			if (mangled.equals(demangled) || demangled.length() == 0) {
+			String demangled = process.demangle(mangled, options.getTimeoutSeconds());
+			if (demangled == null) {
+				throw new DemangledException(false);
+			}
+			demangled = demangled.trim();
+			if (demangled.length() == 0 || mangled.equals(demangled)) {
 				throw new DemangledException(true);
 			}
 
-			boolean onlyKnownPatterns = options.demangleOnlyKnownPatterns();
-			DemangledObject demangledObject = parse(mangled, process, demangled, onlyKnownPatterns);
+			DemangledObject demangledObject =
+				parse(originalMangled, process, demangled, options);
 			if (demangledObject == null) {
-				return demangledObject;
+				return null;
 			}
 
 			if (globalPrefix != null) {
+				String prefix = translateGlobalPrefix(globalPrefix);
 				DemangledFunction dfunc = new DemangledFunction(originalMangled, demangled,
-					globalPrefix + demangledObject.getName());
+					prefix + demangledObject.getName());
 				dfunc.setNamespace(demangledObject.getNamespace());
 				demangledObject = dfunc;
 			}
@@ -144,6 +154,17 @@ public class GnuDemangler implements Demangler {
 			}
 			throw new DemangledException(e);
 		}
+	}
+
+	private String translateGlobalPrefix(String globalPrefix) {
+
+		return switch (globalPrefix) {
+			case "_GLOBAL__sub_I_" -> "global_init_constructor_";
+			case "_GLOBAL__sub_D_" -> "global_destructor_";
+			// case "_GLOBAL__N_" // anonymous namespace; only seen inside mangled text 
+			// case "_GLOBAL__sub_G__" // debugging info; not seen in the wild
+			default -> globalPrefix;
+		};
 	}
 
 	private GnuDemanglerOptions getGnuOptions(DemanglerOptions options) {
@@ -195,10 +216,19 @@ public class GnuDemangler implements Demangler {
 
 		// This is the current list of known demangler start patterns.  Add to this list if we
 		// find any other known GNU start patterns.
+		if (mangled.startsWith(GLOBAL_PREFIX)) {
+			int index = mangled.indexOf("_Z");
+			if (index > 0) {
+				return false;
+			}
+		}
 		if (mangled.startsWith("_Z")) {
 			return false;
 		}
 		if (mangled.startsWith("__Z")) {
+			return false;
+		}
+		if (mangled.startsWith("._Z")) {
 			return false;
 		}
 		if (mangled.startsWith("h__")) {
@@ -215,14 +245,16 @@ public class GnuDemangler implements Demangler {
 	}
 
 	private DemangledObject parse(String mangled, GnuDemanglerNativeProcess process,
-			String demangled, boolean demangleOnlyKnownPatterns) {
+			String demangled, GnuDemanglerOptions options) {
 
-		if (demangleOnlyKnownPatterns && !isKnownMangledString(mangled, demangled)) {
+		boolean onlyKnownPatterns = options.demangleOnlyKnownPatterns();
+		if (onlyKnownPatterns && !isKnownMangledString(mangled, demangled)) {
 			return null;
 		}
 
+		boolean replaceStdTypedefs = options.shouldUseStandardReplacements();
 		GnuDemanglerParser parser = new GnuDemanglerParser();
-		DemangledObject demangledObject = parser.parse(mangled, demangled);
+		DemangledObject demangledObject = parser.parse(mangled, demangled, replaceStdTypedefs);
 		return demangledObject;
 	}
 
@@ -266,10 +298,6 @@ public class GnuDemangler implements Demangler {
 			   mangled.startsWith("_GLOBAL__I__Z") ||
 			   mangled.startsWith("_GLOBAL__D__Z");
 		//@formatter:on
-	}
-
-	private boolean isELF(String executableFormat) {
-		return executableFormat != null && executableFormat.indexOf(ElfLoader.ELF_NAME) != -1;
 	}
 
 	private boolean isMacho(String executableFormat) {

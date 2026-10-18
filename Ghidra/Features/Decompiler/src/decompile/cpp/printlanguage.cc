@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -223,7 +223,8 @@ void PrintLanguage::pushVnExplicit(const Varnode *vn,const PcodeOp *op)
     return;
   }
   if (vn->isConstant()) {
-    pushConstant(vn->getOffset(),vn->getHighTypeReadFacing(op),vn,op);
+    Datatype *ct = vn->getHighTypeReadFacing(op);
+    pushConstant(vn->getOffset(),ct,vartoken,vn,op,ct->getDisplayFormat());
     return;
   }
   pushSymbolDetail(vn,op,true);
@@ -241,7 +242,7 @@ void PrintLanguage::pushSymbolDetail(const Varnode *vn,const PcodeOp *op,bool is
   HighVariable *high = vn->getHigh();
   Symbol *sym = high->getSymbol();
   if (sym == (Symbol *)0) {
-    pushUnnamedLocation(high->getNameRepresentative()->getAddr(),vn,op);
+    pushUnnamedLocation(high->getNameRepresentative()->getAddr(),vn->getSize(),vn,op);
   }
   else {
     int4 symboloff = high->getSymbolOffset();
@@ -254,7 +255,7 @@ void PrintLanguage::pushSymbolDetail(const Varnode *vn,const PcodeOp *op,bool is
     }
     if (symboloff + vn->getSize() <= sym->getType()->getSize()) {
       int4 inslot = isRead ? op->getSlot(vn) : -1;
-      pushPartialSymbol(sym,symboloff,vn->getSize(),vn,op,inslot);
+      pushPartialSymbol(sym,symboloff,vn->getSize(),vn,op,inslot,isRead);
     }
     else
       pushMismatchSymbol(sym,symboloff,vn->getSize(),vn,op);
@@ -394,6 +395,12 @@ void PrintLanguage::emitAtom(const Atom &atom)
   case fieldtoken:
     emit->tagField(atom.name,atom.highlight,atom.ptr_second.ct,atom.offset,atom.op);
     break;
+  case bitfieldtoken:
+    emit->tagBitField(atom.name,atom.highlight,atom.ptr_second.ct,atom.offset,atom.op);
+    break;
+  case casetoken:
+    emit->tagCaseLabel(atom.name, atom.highlight, atom.op, atom.ptr_second.intValue);
+    break;
   case blanktoken:
     break;			// Print nothing
   }
@@ -499,7 +506,7 @@ bool PrintLanguage::escapeCharacterData(ostream &s,const uint1 *buf,int4 count,i
   int4 skip = charsize;
   int4 codepoint = 0;
   while(i<count) {
-    codepoint = StringManager::getCodepoint(buf+i,charsize,bigend,skip);
+    codepoint = StringManager::getCodepoint(buf+i,count-i,charsize,bigend,skip);
     if (codepoint == 0 || codepoint == -1) break;
     printUnicode(s,codepoint);
     i += skip;
@@ -645,12 +652,12 @@ void PrintLanguage::emitLineComment(int4 indent,const Comment *comm)
   comm->setEmitted(true);
 }
 
-/// Tell the emitter whether to emit just the raw tokens or if additional mark-up should be provided.
-/// \param val is \b true for additional mark-up
-void PrintLanguage::setMarkup(bool val)
+/// Select packed or unpacked (XML) output, if the emitter supports it.
+/// \param val is \b true for packed or \b false for unpacked
+void PrintLanguage::setPackedOutput(bool val)
 
 {
-  ((EmitPrettyPrint *)emit)->setMarkup(val);
+  emit->setPackedOutput(val);
 }
 
 /// Emitting formal code structuring can be turned off, causing all control-flow

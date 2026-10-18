@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,7 +22,7 @@ import java.util.*;
 import javax.swing.*;
 import javax.swing.event.ChangeListener;
 
-import org.jdom.Element;
+import org.jdom2.Element;
 
 import docking.*;
 import docking.action.DockingActionIf;
@@ -31,9 +31,9 @@ import docking.actions.PopupActionProvider;
 import docking.util.image.ToolIconURL;
 import ghidra.framework.model.*;
 import ghidra.framework.options.ToolOptions;
-import ghidra.framework.plugintool.PluginEvent;
-import ghidra.framework.plugintool.PluginTool;
-import ghidra.framework.plugintool.util.*;
+import ghidra.framework.plugintool.*;
+import ghidra.framework.plugintool.util.ServiceListener;
+import ghidra.framework.plugintool.util.UndoRedoToolState;
 import ghidra.program.model.listing.Program;
 
 public class DummyTool extends PluginTool {
@@ -401,7 +401,7 @@ public class DummyTool extends PluginTool {
 
 	@Override
 	public void removeContextListener(DockingContextListener listener) {
-		//do nothing		
+		//do nothing
 	}
 
 	@Override
@@ -416,16 +416,16 @@ public class DummyTool extends PluginTool {
 
 	@Override
 	public void addServiceListener(ServiceListener listener) {
-		//do nothing		
+		//do nothing
 	}
 
 	@Override
 	public void removeServiceListener(ServiceListener listener) {
-		//do nothing		
+		//do nothing
 	}
 
 	@Override
-	public PluginClassManager getPluginClassManager() {
+	public PluginsConfiguration createPluginsConfigurations() {
 		return null;
 	}
 

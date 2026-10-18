@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,7 +15,6 @@
  */
 package ghidra.app.services;
 
-import java.awt.Component;
 import java.net.URL;
 
 import ghidra.framework.model.DomainFile;
@@ -53,13 +52,19 @@ public class TestDummyProgramManager implements ProgramManager {
 	}
 
 	@Override
+	public Program openCachedProgram(URL ghidraURL, Object consumer) {
+		// stub
+		return null;
+	}
+
+	@Override
 	public Program openProgram(DomainFile domainFile) {
 		// stub
 		return null;
 	}
 
 	@Override
-	public Program openProgram(DomainFile domainFile, Component dialogParent) {
+	public Program openCachedProgram(DomainFile domainFile, Object consumer) {
 		// stub
 		return null;
 	}
@@ -78,11 +83,6 @@ public class TestDummyProgramManager implements ProgramManager {
 
 	@Override
 	public void openProgram(Program program) {
-		// stub
-	}
-
-	@Override
-	public void openProgram(Program program, boolean current) {
 		// stub
 	}
 
@@ -108,17 +108,6 @@ public class TestDummyProgramManager implements ProgramManager {
 
 	@Override
 	public void saveProgramAs(Program program) {
-		// stub
-	}
-
-	@Override
-	public boolean setPersistentOwner(Program program, Object owner) {
-		// stub
-		return false;
-	}
-
-	@Override
-	public void releaseProgram(Program program, Object persistentOwner) {
 		// stub
 	}
 
@@ -156,16 +145,4 @@ public class TestDummyProgramManager implements ProgramManager {
 		// stub
 		return null;
 	}
-
-	@Override
-	public void lockDown(boolean state) {
-		// stub
-	}
-
-	@Override
-	public boolean isLocked() {
-		// stub
-		return false;
-	}
-
 }

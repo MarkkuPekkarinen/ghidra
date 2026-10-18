@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 package ghidra.program.model.data;
+
+import java.util.function.Consumer;
 
 import ghidra.docking.settings.Settings;
 import ghidra.program.database.data.DataTypeUtilities;
@@ -62,6 +64,13 @@ public abstract class CompositeDataTypeImpl extends GenericDataType implements C
 		description = "";
 	}
 
+	protected DataTypeComponentImpl createComponent(DataType dataType, int length, int ordinal,
+			int offset, String fieldName, String comment) {
+
+		return new DataTypeComponentImpl(dataType, this, length, ordinal,
+			offset, fieldName, comment);
+	}
+
 	@Override
 	public final int getAlignedLength() {
 		return getLength();
@@ -83,25 +92,72 @@ public abstract class CompositeDataTypeImpl extends GenericDataType implements C
 	}
 
 	/**
-	 * Get the preferred length for a new component. For Unions and internally
-	 * aligned structures the preferred component length for a fixed-length dataType
-	 * will be the length of that dataType. Otherwise the length returned will be no
-	 * larger than the specified length.
+	 * Get the preferred length for a new component. If type is dynamic length must be specified
+	 * (assuming {@link Dynamic#canSpecifyLength()} is true).  Otherwise, when packing is enabled
+	 * the {@link DataType#getAlignedLength()} is returned; when packing disabled for Union
+	 * use of fixed-length type size is forced. Otherwise the decision
+	 * is deferred to {@link DataTypeComponentImpl#getPreferredComponentLength(DataType, int)}.
+	 * During packing the actual component length may be changed.
 	 * 
 	 * @param dataType new component datatype
-	 * @param length   constrained length or -1 to force use of dataType size.
-	 *                 Dynamic types such as string must have a positive length
+	 * @param length   constrained length or -1 to force use of dataType size for non-packing.
+	 *                 Dynamic types such as string must have a positive length specified.
+	 *                 This value is ignored for fixed-length types if maxLength has been 
 	 *                 specified.
+	 * @param maxLength applies to non-packed structures only to indicate available space for
+	 *                 fixed-length types using {@link DataType#getLength()}. Specify -1
+	 *                 to ignore this value.
 	 * @return preferred component length
+	 * @throws IllegalArgumentException if length not specified for a {@link Dynamic} dataType.
 	 */
-	protected int getPreferredComponentLength(DataType dataType, int length) {
+	protected int getPreferredComponentLength(DataType dataType, int length, int maxLength) {
+
 		if (DataTypeComponent.usesZeroLengthComponent(dataType)) {
 			return 0;
 		}
-		if ((isPackingEnabled() || (this instanceof Union)) && !(dataType instanceof Dynamic)) {
-			length = -1; // force use of datatype size
+
+		if (!(dataType instanceof Dynamic)) {
+			if (isPackingEnabled()) {
+				length = dataType.getAlignedLength();
+				if (length > 0) {
+					return length;
+				}
+			}
+			else if (this instanceof Union) {
+				// enforce Union component size for fixed-length types
+				length = dataType.getLength();
+				if (length > 0) {
+					return length;
+				}
+			}
+			else if (maxLength >= 0) {
+				// length determined by datatype but must not exceed maxLength
+				length = Math.min(dataType.getLength(), maxLength);
+				if (length > 0) {
+					return length;
+				}
+			}
 		}
+
 		return DataTypeComponentImpl.getPreferredComponentLength(dataType, length);
+	}
+
+	/**
+	 * Get the preferred length for a new component. If type is dynamic length must be specified
+	 * (assuming {@link Dynamic#canSpecifyLength()} is true).  Otherwise, when packing is enabled
+	 * the {@link DataType#getAlignedLength()} is returned; when packing disabled for Union
+	 * use of fixed-length type size is forced. Otherwise the decision
+	 * is deferred to {@link DataTypeComponentImpl#getPreferredComponentLength(DataType, int)}.
+	 * During packing the actual component length may be changed.
+	 * 
+	 * @param dataType new component datatype
+	 * @param length   constrained length or -1 to force use of dataType size for non-packing.
+	 *                 Dynamic types such as string must have a positive length specified.
+	 * @return preferred component length
+	 * @throws IllegalArgumentException if length not specified for a {@link Dynamic} dataType.
+	 */
+	protected int getPreferredComponentLength(DataType dataType, int length) {
+		return getPreferredComponentLength(dataType, length, -1);
 	}
 
 	@Override
@@ -126,26 +182,6 @@ public abstract class CompositeDataTypeImpl extends GenericDataType implements C
 	@Override
 	public boolean isPartOf(DataType dataTypeOfInterest) {
 		return DataTypeUtilities.isSecondPartOfFirst(this, dataTypeOfInterest);
-	}
-
-	/**
-	 * This method throws an exception if the indicated data type is an ancestor of
-	 * this data type. In other words, the specified data type has a component or
-	 * sub-component containing this data type.
-	 * 
-	 * @param dataType the data type
-	 * @throws IllegalArgumentException if the data type is an ancestor of this data
-	 *                                  type.
-	 */
-	protected void checkAncestry(DataType dataType) throws IllegalArgumentException {
-		if (this.equals(dataType)) {
-			throw new IllegalArgumentException(
-				"Data type " + getDisplayName() + " can't contain itself.");
-		}
-		else if (DataTypeUtilities.isSecondPartOfFirst(dataType, this)) {
-			throw new IllegalArgumentException("Data type " + dataType.getDisplayName() + " has " +
-				getDisplayName() + " within it.");
-		}
 	}
 
 	/**
@@ -186,24 +222,23 @@ public abstract class CompositeDataTypeImpl extends GenericDataType implements C
 	 * @param oldDt             affected datatype which has been removed or replaced
 	 * @param newDt             replacement datatype
 	 * @return true if bitfield component was modified
-	 * @throws InvalidDataTypeException if new datatype is not
 	 */
 	protected boolean updateBitFieldDataType(DataTypeComponentImpl bitfieldComponent,
-			DataType oldDt, DataType newDt) throws InvalidDataTypeException {
+			DataType oldDt, DataType newDt) {
 		if (!bitfieldComponent.isBitFieldComponent()) {
 			throw new AssertException("expected bitfield component");
 		}
 
 		BitFieldDataType bitfieldDt = (BitFieldDataType) bitfieldComponent.getDataType();
-		if (bitfieldDt.getBaseDataType() != oldDt) {
+		if (bitfieldDt.getBaseDataType() != oldDt || !BitFieldDataType.isValidBaseDataType(newDt)) {
 			return false;
 		}
 
 		if (newDt != null) {
-			BitFieldDataType.checkBaseDataType(newDt);
 			int maxBitSize = 8 * newDt.getLength();
 			if (bitfieldDt.getBitSize() > maxBitSize) {
-				throw new InvalidDataTypeException("Replacement datatype too small for bitfield");
+				// Replacement datatype too small for bitfield
+				return false;
 			}
 		}
 
@@ -215,7 +250,7 @@ public abstract class CompositeDataTypeImpl extends GenericDataType implements C
 			newDt.addParent(this);
 		}
 		catch (InvalidDataTypeException e) {
-			throw new AssertException("unexpected");
+			throw new AssertException(e); // unexpected
 		}
 
 		return true;
@@ -414,6 +449,8 @@ public abstract class CompositeDataTypeImpl extends GenericDataType implements C
 
 	@Override
 	public abstract int getAlignment();
+
+	abstract void forEachDefinedComponent(Consumer<DataTypeComponentImpl> dtcConsumer);
 
 	@Override
 	public String toString() {

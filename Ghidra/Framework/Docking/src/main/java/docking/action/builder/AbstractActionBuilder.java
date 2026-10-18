@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,6 +25,7 @@ import javax.swing.KeyStroke;
 import docking.*;
 import docking.action.*;
 import docking.actions.KeyBindingUtils;
+import generic.theme.GIcon;
 import ghidra.util.HelpLocation;
 import ghidra.util.Msg;
 import resources.ResourceManager;
@@ -251,6 +252,18 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	}
 
 	/**
+	 * Builds and adds the action as a local action for the given dialog provider
+	 * 
+	 * @param provider the dialog provider to add the action to
+	 * @return the newly created action
+	 */
+	public T buildAndInstallLocal(DialogComponentProvider provider) {
+		T action = build();
+		provider.addAction(action);
+		return action;
+	}
+
+	/**
 	 * Configure the description for the action.  This description will appear as a tooltip
 	 * over tool bar buttons.
 	 * 
@@ -428,6 +441,9 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	/**
 	 * Sets the icon to use in this action's tool bar button.  Setting this attribute is what 
 	 * causes the action to appear on the tool's or component provider's action tool bar.
+	 * <P>
+	 * Clients should be passing in {@link GIcon}s so that icons can be changed via the theme 
+	 * framework.
 	 * 
 	 * @param icon the icon to use in the action's tool bar
 	 * @return this builder (for chaining)
@@ -445,7 +461,9 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 * @param iconFilepath the module-relative path for the icon to use in the action's tool bar
 	 * @return this builder (for chaining)
 	 * @see #toolBarIcon(Icon)
+	 * @deprecated use {@link #toolBarIcon(Icon)}, passing in a {@link GIcon}
 	 */
+	@Deprecated(forRemoval = true, since = "12.2")
 	public B toolBarIcon(String iconFilepath) {
 		toolbarIcon = ResourceManager.loadImage(iconFilepath);
 		return self();
@@ -571,6 +589,24 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	}
 
 	/**
+	 * @param predicate the predicate 
+	 * @return this builder (for chaining)
+	 * @deprecated use {@link #validWhen(Predicate)}
+	 */
+	@Deprecated(forRemoval = true, since = "11.4")
+	public B validContextWhen(Predicate<C> predicate) {
+		validContextPredicate = Objects.requireNonNull(predicate);
+
+		// automatic enablement management triggered, make sure there is a existing enablement 
+		// predicate. The default behavior of manual management interferes with automatic management.
+		if (enabledPredicate == null) {
+			enabledPredicate = ALWAYS_TRUE;
+		}
+
+		return self();
+	}
+
+	/**
 	 * Sets a predicate for dynamically determining if this action is valid for the current 
 	 * {@link ActionContext}.  See {@link DockingActionIf#isValidContext(ActionContext)}.
 	 * 
@@ -584,7 +620,7 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 * validity for a given {@link ActionContext}
 	 * @return this builder (for chaining)
 	 */
-	public B validContextWhen(Predicate<C> predicate) {
+	public B validWhen(Predicate<C> predicate) {
 		validContextPredicate = Objects.requireNonNull(predicate);
 
 		// automatic enablement management triggered, make sure there is a existing enablement 
@@ -606,8 +642,7 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 * {@link #withContext(Class)} method must also be called to specify the matching
 	 * context; otherwise an exception will be thrown when the action is built.
 	 * <P>
-	 *  
-	 *  The default is that the action will only appear in the main window.
+	 * The default is that the action will only appear in the main window.
 	 *
 	 * @param when use the {@link When} enum to specify the windowing behavior
 	 * of the action.
@@ -651,7 +686,7 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 * {@link DockingAction#setEnabled(boolean)} method.
 	 * <P>
 	 * For more details on how the action context system works, see {@link ActionContext}.
-	 * <P>
+	 * 
 	 * @param newActionContextClass the more specific ActionContext type.
 	 * @param <AC2> The new ActionContext type (as determined by the newActionContextClass) that
 	 * the returned builder will have.
@@ -697,7 +732,7 @@ public abstract class AbstractActionBuilder<T extends DockingActionIf, C extends
 	 * {@link DockingAction#setEnabled(boolean)} method.
 	 * <P>
 	 * For more details on how the action context system works, see {@link ActionContext}.
-	 * <P>
+	 * 
 	 * @param newActionContextClass the more specific ActionContext type.
 	 * @param <AC2> The new ActionContext type (as determined by the newActionContextClass) that
 	 * the returned builder will have.

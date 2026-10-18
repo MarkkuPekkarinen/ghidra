@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -159,6 +159,16 @@ public:
 };
 
 class IfcMaphash : public IfaceDecompCommand {
+public:
+  virtual void execute(istream &s);
+};
+
+class IfcMapParam : public IfaceDecompCommand {
+public:
+  virtual void execute(istream &s);
+};
+
+class IfcMapReturn : public IfaceDecompCommand {
 public:
   virtual void execute(istream &s);
 };
@@ -395,6 +405,11 @@ public:
   virtual void execute(istream &s);
 };
 
+class IfcDestinationOverride : public IfaceDecompCommand {
+public:
+  virtual void execute(istream &s);
+};
+
 class IfcDeadcodedelay : public IfaceDecompCommand {
 public:
   virtual void execute(istream &s);
@@ -485,12 +500,21 @@ public:
   virtual void execute(istream &s);
 };
 
+class IfcFindVarnodeHash : public IfaceDecompCommand {
+public:
+  virtual void execute(istream &s);
+};
+
+class IfcFindOpHash : public IfaceDecompCommand {
+public:
+  virtual void execute(istream &s);
+};
+
 class IfcDuplicateHash : public IfaceDecompCommand {
 public:
   virtual void execute(istream &s);
   virtual void iterationCallback(Funcdata *fd);
   static void check(Funcdata *fd,ostream &s);		///< Check for duplicate hashes in given function
-
 };
 
 class IfcCallGraphDump : public IfaceDecompCommand {
@@ -652,6 +676,15 @@ public:
 };
 
 class IfcBreakjump : public IfaceDecompCommand {
+public:
+  virtual void execute(istream &s);
+};
+
+#endif
+
+#ifdef TYPEPROP_DEBUG
+
+class IfcTracePropagation : public IfaceDecompCommand {
 public:
   virtual void execute(istream &s);
 };

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,10 +19,13 @@ import java.beans.PropertyEditor;
 import java.io.File;
 import java.io.IOException;
 
+import javax.swing.KeyStroke;
+
 import org.apache.commons.io.FilenameUtils;
 
 import ghidra.util.HelpLocation;
 import ghidra.util.Msg;
+import ghidra.util.classfinder.ClassSearcher;
 
 public class FileOptions extends AbstractOptions {
 
@@ -48,12 +51,13 @@ public class FileOptions extends AbstractOptions {
 		return file;
 	}
 
-	public CustomOption readCustomOption(SaveState saveState) {
-		String customOptionClassName = saveState.getString("CUSTOM_OPTION_CLASS", null);
+	public CustomOption readCustomOption(GProperties properties) {
+		String customOptionClassName = properties.getString("CUSTOM_OPTION_CLASS", null);
 		try {
-			Class<?> c = Class.forName(customOptionClassName);
-			CustomOption customOption = (CustomOption) c.getDeclaredConstructor().newInstance();
-			customOption.readState(saveState);
+			Class<? extends CustomOption> c = ClassSearcher.forNameSafe(customOptionClassName,
+				CustomOption.class, getClass().getClassLoader());
+			CustomOption customOption = c.getDeclaredConstructor().newInstance();
+			customOption.readState(properties);
 			return customOption;
 		}
 		catch (Exception e) {
@@ -63,11 +67,10 @@ public class FileOptions extends AbstractOptions {
 	}
 
 	private void loadFromFile() throws IOException {
-		SaveState saveState = SaveState.readJsonFile(file);
-		for (String optionName : saveState.getNames()) {
-			Object object = saveState.getObject(optionName);
-			if (object instanceof SaveState) {
-				SaveState customState = (SaveState) object;
+		GProperties properties = new JSonProperties(file);
+		for (String optionName : properties.getNames()) {
+			Object object = properties.getObject(optionName);
+			if (object instanceof GProperties customState) {
 				object = readCustomOption(customState);
 			}
 			Option option =
@@ -105,6 +108,15 @@ public class FileOptions extends AbstractOptions {
 	@Override
 	protected Option createUnregisteredOption(String optionName, OptionType type,
 			Object defaultValue) {
+
+		if (type == OptionType.KEYSTROKE_TYPE) {
+			// convert key strokes to action triggers
+			type = OptionType.ACTION_TRIGGER;
+			if (defaultValue instanceof KeyStroke keyStroke) {
+				defaultValue = new ActionTrigger(keyStroke);
+			}
+		}
+
 		return new FileOption(optionName, type, null, null, defaultValue, false, null);
 	}
 

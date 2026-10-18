@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,8 +18,7 @@ package ghidra.app.plugin.core.datamgr;
 import java.awt.Component;
 import java.awt.Point;
 import java.awt.event.MouseEvent;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 import javax.swing.*;
 import javax.swing.event.*;
@@ -31,27 +30,23 @@ import docking.action.DockingAction;
 import docking.action.ToggleDockingAction;
 import docking.event.mouse.GMouseListenerAdapter;
 import docking.menu.MultiActionDockingAction;
-import docking.widgets.OptionDialog;
 import docking.widgets.textpane.GHtmlTextPane;
-import docking.widgets.tree.*;
+import docking.widgets.tree.GTreeNode;
+import docking.widgets.tree.GTreeState;
 import docking.widgets.tree.support.GTreeSelectionEvent.EventOrigin;
 import generic.theme.GIcon;
 import generic.theme.GThemeDefaults.Colors;
 import ghidra.app.plugin.core.datamgr.actions.*;
 import ghidra.app.plugin.core.datamgr.actions.associate.*;
-import ghidra.app.plugin.core.datamgr.archive.*;
 import ghidra.app.plugin.core.datamgr.tree.*;
-import ghidra.app.plugin.core.datamgr.util.DataTypeUtils;
 import ghidra.app.util.ToolTipUtils;
 import ghidra.app.util.datatype.DataTypeUrl;
-import ghidra.framework.main.datatree.ArchiveProvider;
-import ghidra.framework.main.datatree.VersionControlDataTypeArchiveUndoCheckoutAction;
 import ghidra.framework.main.projectdata.actions.*;
 import ghidra.framework.options.SaveState;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.DataTypeConflictHandler.ConflictResolutionPolicy;
-import ghidra.program.model.listing.DataTypeArchive;
+import ghidra.program.model.dtarchive.PersistentDataTypeArchive;
 import ghidra.program.model.listing.Program;
 import ghidra.util.*;
 import ghidra.util.task.SwingUpdateManager;
@@ -60,8 +55,6 @@ import util.HistoryList;
 public class DataTypesProvider extends ComponentProviderAdapter {
 
 	private static final String TITLE = "Data Type Manager";
-	private static final String POINTER_FILTER_STATE = "PointerFilterState";
-	private static final String ARRAY_FILTER_STATE = "ArrayFilterState";
 	private static final String CONFLICT_RESOLUTION_MODE = "ConflictResolutionMode";
 	private static final String PREVIEW_WINDOW_STATE = "PreviewWindowState";
 	private static final String INCLUDE_DATA_MEMBERS_IN_SEARCH = "DataMembersInSearchState";
@@ -73,7 +66,6 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 	private int defaultDividerSize;
 	private JScrollPane previewScrollPane;
 	private JTextPane previewPane;
-
 	private GTreeNode lastPreviewNode;
 	private SwingUpdateManager previewUpdateManager =
 		new SwingUpdateManager(100, () -> updatePreviewPane());
@@ -90,11 +82,18 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 	private MultiActionDockingAction previousAction;
 
 	private ConflictHandlerModesAction conflictHandlerModesAction;
-	private ToggleDockingAction filterArraysAction;
-	private ToggleDockingAction filterPointersAction;
+	private DtFilterAction filterAction;
 	private ToggleDockingAction previewWindowAction;
 	private ToggleDockingAction includeDataMembersInSearchAction;
+	private FilterOnNameOnlyAction filterOnNameOnlyAction;
 	private boolean includeDataMembersInFilter;
+	private boolean filterOnNameOnly;
+	private DtFilterState filterState = new DtFilterState();
+
+	/**
+	 * Saves state of program nodes so the state can be restored as users tab between programs
+	 */
+	private Map<Long, TreePath> programTreeState = new HashMap<>();
 
 	public DataTypesProvider(DataTypeManagerPlugin plugin, String providerName) {
 		this(plugin, providerName, false);
@@ -108,10 +107,12 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		if (isTransient) {
 			setTransient();
 		}
+		else {
+			addToToolbar();
+		}
 
 		setTitle(TITLE);
 		setIcon(new GIcon("icon.plugin.datatypes.provider"));
-		addToToolbar();
 
 		navigationHistory.setAllowDuplicates(true);
 
@@ -156,27 +157,26 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		addLocalAction(new CutAction(plugin));
 		addLocalAction(new CopyAction(plugin));
 		addLocalAction(new PasteAction(plugin));
+		addLocalAction(new CompareDataTypesAction(plugin));
 		addLocalAction(new ReplaceDataTypeAction(plugin));
+		addLocalAction(new MergeDataTypeAction(plugin));
 		addLocalAction(new DeleteAction(plugin));
 		addLocalAction(new DeleteArchiveAction(plugin));
 		addLocalAction(new RenameAction(plugin));
 		addLocalAction(new EditAction(plugin));
-		// NOTE: it make very little sense to blindly enable packing
-//		  addLocalAction(new PackDataTypeAction(plugin));
-//        addLocalAction( new PackDataTypeAction( plugin ));
-//        addLocalAction( new PackSizeDataTypeAction( plugin ));
-//		  addLocalAction(new PackAllDataTypesAction(plugin));
-//        addLocalAction( new DefineDataTypeAlignmentAction( plugin ));
 		addLocalAction(new CreateEnumFromSelectionAction(plugin));
 
 		// File group
 		addLocalAction(new SaveArchiveAction(plugin)); // Archive
+		addLocalAction(new SaveArchiveAsAction(plugin));
 		addLocalAction(new CloseArchiveAction(plugin)); // Archive
 		addLocalAction(new RemoveInvalidArchiveFromProgramAction(plugin)); // Archive
 
 		// FileEdit group
-		addLocalAction(new LockArchiveAction(plugin)); // Archive
-		addLocalAction(new UnlockArchiveAction(plugin)); // Archive
+		addLocalAction(new OpenArchiveForEditingAction(plugin)); // Archive
+		addLocalAction(new CloseArchiveForEditingAction(plugin)); // Archive
+		addLocalAction(new UndoArchiveTransactionAction(plugin)); // Archive
+		addLocalAction(new RedoArchiveTransactionAction(plugin)); // Archive
 
 		// Arch group
 		addLocalAction(new SetArchiveArchitectureAction(plugin)); // Archive
@@ -192,10 +192,16 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		// VeryLast group
 		addLocalAction(new FindDataTypesByNameAction(plugin, "1"));
 		addLocalAction(new FindDataTypesBySizeAction(plugin, "2"));
-		addLocalAction(new FindStructuresByOffsetAction(plugin, "3"));
-		addLocalAction(new FindStructuresBySizeAction(plugin, "4"));
-		includeDataMembersInSearchAction = new IncludeDataTypesInFilterAction(plugin, this, "5");
+		addLocalAction(new FindEnumsByValueAction(plugin, "3"));
+		addLocalAction(new FindStructuresByOffsetAction(plugin, "4"));
+		addLocalAction(new FindStructuresBySizeAction(plugin, "5"));
+		addLocalAction(new ShowDataTypesTableAction(plugin, "6"));
+
+		includeDataMembersInSearchAction = new IncludeDataTypesInFilterAction(plugin, this, "6");
 		addLocalAction(includeDataMembersInSearchAction);
+
+		filterOnNameOnlyAction = new FilterOnNameOnlyAction(plugin, this, "7");
+		addLocalAction(filterOnNameOnlyAction);
 
 		addLocalAction(new ApplyFunctionDataTypesAction(plugin)); // Tree
 		addLocalAction(new CaptureFunctionDataTypesAction(plugin)); // Tree
@@ -205,7 +211,7 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 
 		// ZVeryLast group
 		addLocalAction(new FindReferencesToDataTypeAction(plugin)); // DataType
-		addLocalAction(new FindReferencesToFieldAction(plugin)); // DataType
+		addLocalAction(new FindReferencesToFieldByNameOrOffsetAction(plugin)); // DataType
 		addLocalAction(new FindBaseDataTypeAction(plugin)); // DataType
 		addLocalAction(new DisplayTypeAsGraphAction(plugin));
 
@@ -214,12 +220,9 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		addLocalAction(previousAction);
 		nextAction = new NextPreviousDataTypeAction(this, plugin.getName(), true);
 		addLocalAction(nextAction);
-		filterArraysAction = getFilterArraysAction();
-		addLocalAction(filterArraysAction);
-		filterPointersAction = getFilterPointersAction();
-		addLocalAction(filterPointersAction);
-		conflictHandlerModesAction = getConflictHandlerModesAction();
-		addLocalAction(conflictHandlerModesAction);
+		filterAction = new DtFilterAction(plugin);
+		addLocalAction(filterAction);
+		addLocalAction(getConflictHandlerModesAction());
 
 		// toolbar menu
 		addLocalAction(new OpenArchiveAction(plugin));
@@ -243,20 +246,6 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 
 	private void addVersionControlActions() {
 
-		ArchiveProvider archiveProvider = () -> {
-			TreePath[] selectionPaths = archiveGTree.getSelectionPaths();
-			List<Archive> selectedArchives = new ArrayList<>();
-			for (TreePath path : selectionPaths) {
-				Object lastPathComponent = path.getLastPathComponent();
-				if (lastPathComponent instanceof ProjectArchiveNode) {
-					ProjectArchiveNode node = (ProjectArchiveNode) lastPathComponent;
-					ProjectArchive archive = (ProjectArchive) node.getArchive();
-					selectedArchives.add(archive);
-				}
-			}
-			return selectedArchives;
-		};
-
 		VersionControlAddAction addAction = new VersionControlAddAction(plugin);
 		addAction.setEnabled(false);
 
@@ -270,8 +259,8 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 			new VersionControlCheckInAction(plugin, archiveGTree);
 		checkInAction.setEnabled(false);
 
-		VersionControlDataTypeArchiveUndoCheckoutAction undoCheckOutAction =
-			new VersionControlDataTypeArchiveUndoCheckoutAction(plugin, archiveProvider);
+		ArchiveUndoCheckoutTask undoCheckOutAction =
+			new ArchiveUndoCheckoutTask(plugin);
 		undoCheckOutAction.setEnabled(false);
 
 		VersionControlShowHistoryAction showHistoryAction =
@@ -296,32 +285,17 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		addLocalAction(viewCheckOutsAction);
 	}
 
-	private boolean hasFilter() {
-		return archiveGTree.isFiltered();
+	private boolean isFiltered(DataType dt) {
+		return archiveGTree.isFiltered() || !filterState.passesFilters(dt);
 	}
 
-	public boolean isFilteringPointers() {
-		return filterPointersAction.isSelected();
+	public DtFilterState getFilterState() {
+		return filterState;
 	}
 
-	public boolean isFilteringArrays() {
-		return filterArraysAction.isSelected();
-	}
-
-	private ToggleDockingAction getFilterPointersAction() {
-		if (filterPointersAction == null) {
-			filterPointersAction = new FilterPointersAction(plugin);
-		}
-
-		return filterPointersAction;
-	}
-
-	private ToggleDockingAction getFilterArraysAction() {
-		if (filterArraysAction == null) {
-			filterArraysAction = new FilterArraysAction(plugin);
-		}
-
-		return filterArraysAction;
+	public void setFilterState(DtFilterState filterState) {
+		this.filterState = filterState;
+		archiveGTree.setFilterState(filterState);
 	}
 
 	private ConflictHandlerModesAction getConflictHandlerModesAction() {
@@ -379,6 +353,10 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
 
 		archiveGTree = new DataTypeArchiveGTree(plugin);
+
+		ArchiveRootNode rootNode = (ArchiveRootNode) archiveGTree.getModelRoot();
+		rootNode.setNodeListener(new ProgramNodeUpdateListener());
+
 		archiveGTree.addMouseListener(new GMouseListenerAdapter() {
 
 			private GTreeNode lastClickedNode;
@@ -397,7 +375,10 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 					return;
 				}
 
-				editNode(clickedNode);
+				if (clickedNode instanceof DataTypeNode dtNode) {
+					DataType dt = dtNode.getDataType();
+					plugin.edit(dt);
+				}
 			}
 
 			@Override
@@ -434,9 +415,18 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		archiveGTree.addGTreeSelectionListener(e -> {
 
 			TreePath path = e.getNewLeadSelectionPath();
-			DataType dataType = getDataTypeFrom(path);
+			DataType selectedDt = getDataTypeFrom(path);
+			DataTypeUrl dtUrl = navigationHistory.getCurrentHistoryItem();
+			if (dtUrl != null) {
+				DataType historyDt = dtUrl.getDataType(plugin);
+				if (Objects.equals(historyDt, selectedDt)) {
+					// Don't add an item to the history that is already there.  This can happen when
+					// the user interacts with the navigation buttons.
+					return;
+				}
+			}
 
-			dataTypeSelected(e.getEventOrigin(), dataType);
+			dataTypeSelected(e.getEventOrigin(), selectedDt);
 		});
 
 		buildPreviewPane();
@@ -486,8 +476,8 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		previewScrollPane = new JScrollPane(previewPane);
 
 		DockingWindowManager.getHelpService()
-			.registerHelp(previewScrollPane,
-				new HelpLocation("DataTypeManagerPlugin", "Preview_Window"));
+				.registerHelp(previewScrollPane,
+					new HelpLocation("DataTypeManagerPlugin", "Preview_Window"));
 	}
 
 	private DataType locateDataType(HyperlinkEvent event) {
@@ -543,7 +533,7 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		DataType dataType = dataTypeNode.getDataType();
 		if (dataType.isDeleted()) {
 			// this can happen during an undo
-			lastPreviewNode = null;
+			clearDataTypePreview();
 			return;
 		}
 
@@ -551,6 +541,11 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		String updated = HTMLUtilities.convertLinkPlaceholdersToHyperlinks(toolTipText);
 		previewPane.setText(updated);
 		previewPane.setCaretPosition(0);
+	}
+
+	private void clearDataTypePreview() {
+		lastPreviewNode = null;
+		previewPane.setText("");
 	}
 
 	void dispose() {
@@ -564,87 +559,12 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		return helpLocation;
 	}
 
-	private static DataType updateDataType(CategoryPath path, String dataTypeName,
-			ArchiveNode archiveNode) {
-		DataTypeManager dataTypeManager = archiveNode.getArchive().getDataTypeManager();
-		Category category = dataTypeManager.getCategory(path);
-		return category.getDataType(dataTypeName);
-	}
-
-	private boolean getWriteLock(DataTypeManagerPlugin dataTypePlugin, ArchiveNode archiveNode) {
-		if (!isOkToLock()) {
-			return false;
-		}
-		GTree tree = dataTypePlugin.getProvider().getGTree();
-		GTreeState state = tree.getTreeState();
-		if (!ArchiveUtils.lockArchive((FileArchive) archiveNode.getArchive())) {
-			return false;
-		}
-		tree.restoreTreeState(state);
-
-		return true;
-	}
-
-	private boolean needsWriteLock(ArchiveNode archiveNode) {
-		if (archiveNode instanceof FileArchiveNode) {
-			FileArchiveNode fileArchiveNode = (FileArchiveNode) archiveNode;
-			return !fileArchiveNode.hasWriteLock();
-		}
-		return false;
-	}
-
-	private boolean isOkToLock() {
-		return (OptionDialog.showYesNoDialog(archiveGTree, "Open Archive for Edit?",
-			"Archive file is not modifiable.\nDo you want to open for edit?") == OptionDialog.OPTION_ONE);
-	}
-
 //==================================================================================================
 // Helper Methods
 //==================================================================================================
 
-	public void editNode(GTreeNode node) {
-		if (!(node instanceof DataTypeNode)) {
-			return;
-		}
-		DataTypeNode dataTypeNode = (DataTypeNode) node;
-
-		if (!dataTypeNode.hasCustomEditor()) {
-			return;
-		}
-
-		DataType dataType = dataTypeNode.getDataType();
-		dataType = DataTypeUtils.getBaseDataType(dataType);
-		CategoryPath path = dataType.getCategoryPath();
-		String dataTypeName = dataType.getName();
-		ArchiveNode archiveNode = dataTypeNode.getArchiveNode();
-
-		if (archiveNode instanceof ProjectArchiveNode && !archiveNode.isModifiable()) {
-			ProjectArchiveNode projectArchive = (ProjectArchiveNode) archiveNode;
-			if (projectArchive.getDomainFile().isReadOnly()) {
-				Msg.showInfo(getClass(), archiveGTree, "Read-Only Archive",
-					"You may not edit data type within a read-only project archive.");
-			}
-			else {
-				Msg.showInfo(getClass(), archiveGTree, "Archive Not Checked Out",
-					"You must checkout this archive before you may edit data types.");
-			}
-			return;
-		}
-
-		// must get write lock before we can edit
-		if (needsWriteLock(archiveNode)) {
-			if (!getWriteLock(plugin, archiveNode)) {
-				return;
-			}
-			dataType = updateDataType(path, dataTypeName, archiveNode);
-		}
-
-		plugin.getEditorManager().edit(dataType);
-	}
-
 	void restore(SaveState saveState) {
-		boolean filterPointers = saveState.getBoolean(POINTER_FILTER_STATE, true);
-		boolean filterArrays = saveState.getBoolean(ARRAY_FILTER_STATE, true);
+
 		ConflictResolutionPolicy conflictMode;
 		try {
 			conflictMode =
@@ -654,12 +574,12 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		catch (IllegalArgumentException e) {
 			conflictMode = ConflictResolutionPolicy.RENAME_AND_ADD;
 		}
-		getFilterPointersAction().setSelected(filterPointers);
-		getFilterArraysAction().setSelected(filterArrays);
+
 		getConflictHandlerModesAction().setCurrentActionStateByUserData(conflictMode);
 
-		archiveGTree.enableArrayFilter(filterArrays);
-		archiveGTree.enablePointerFilter(filterPointers);
+		filterState = new DtFilterState();
+		filterState.restore(saveState);
+		archiveGTree.setFilterState(filterState);
 
 		boolean previewWindowVisible = saveState.getBoolean(PREVIEW_WINDOW_STATE, false);
 		getPreviewWindowAction().setSelected(previewWindowVisible);
@@ -669,8 +589,9 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 	}
 
 	void save(SaveState saveState) {
-		saveState.putBoolean(POINTER_FILTER_STATE, getFilterPointersAction().isSelected());
-		saveState.putBoolean(ARRAY_FILTER_STATE, getFilterArraysAction().isSelected());
+
+		filterState.save(saveState);
+
 		saveState.putString(CONFLICT_RESOLUTION_MODE,
 			getConflictHandlerModesAction().getCurrentUserData().toString());
 		saveState.putBoolean(PREVIEW_WINDOW_STATE, getPreviewWindowAction().isSelected());
@@ -685,58 +606,26 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		return archiveGTree;
 	}
 
-	void domainObjectRestored(DataTypeManagerDomainObject domainObject) {
+	void domainObjectRestored(PersistentDataTypeArchive archive) {
 		if (archiveGTree == null) {
 			return; // nothing to update
 		}
-		if (domainObject instanceof Program) {
-			Program program = (Program) domainObject;
-			Program programInTree = plugin.getProgram(); // May be null.
-			if (program == programInTree) {
-				DataTypeArchiveGTree gTree = getGTree();
-				ArchiveNode node = getProgramArchiveNode();
-				// don't know how this can be null, but a mysterious stack trace showed it.
-				if (node != null) {
-					GTreeState state = gTree.getTreeState(node);
-					node.structureChanged();
-					gTree.restoreTreeState(state);
-				}
-			}
-		}
-		else if (domainObject instanceof DataTypeArchive) {
-			DataTypeArchive dataTypeArchive = (DataTypeArchive) domainObject;
-			DataTypeArchiveGTree gTree = getGTree();
-			ArchiveNode node = getDataTypeArchiveNode(dataTypeArchive);
-			if (node != null) {
-				GTreeState state = gTree.getTreeState(node);
-				node.structureChanged();
-				gTree.restoreTreeState(state);
-			}
+		DataTypeArchiveGTree gTree = getGTree();
+		ArchiveNode node = getDataTypeArchiveNode(archive);
+		if (node != null) {
+			GTreeState state = gTree.getTreeState(node);
+			node.structureChanged();
+			gTree.restoreTreeState(state);
 		}
 	}
 
-	private ArchiveNode getProgramArchiveNode() {
+	private ArchiveNode getDataTypeArchiveNode(PersistentDataTypeArchive dataTypeArchive) {
 		GTreeNode rootNode = getGTree().getModelRoot();
 		List<GTreeNode> children = rootNode.getChildren();
 		for (GTreeNode node : children) {
-			ArchiveNode archiveNode = (ArchiveNode) node;
-			Archive archive = archiveNode.getArchive();
-			if (archive instanceof ProgramArchive) {
-				return archiveNode;
-			}
-		}
-		return null;
-	}
-
-	private ArchiveNode getDataTypeArchiveNode(DataTypeArchive dataTypeArchive) {
-		GTreeNode rootNode = getGTree().getModelRoot();
-		List<GTreeNode> children = rootNode.getChildren();
-		for (GTreeNode node : children) {
-			ArchiveNode archiveNode = (ArchiveNode) node;
-			Archive archive = archiveNode.getArchive();
-			if (archive instanceof ProjectArchive) {
-				ProjectArchive projectArchive = (ProjectArchive) archive;
-				if (projectArchive.getDataTypeManager() == dataTypeArchive.getDataTypeManager()) {
+			if (node instanceof ArchiveNode archiveNode) {
+				PersistentDataTypeArchive archive = archiveNode.getArchive();
+				if (archive == dataTypeArchive) {
 					return archiveNode;
 				}
 			}
@@ -757,6 +646,15 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 	 * @param dataType the data type to select; may be null
 	 */
 	public void setDataTypeSelected(DataType dataType) {
+		setDataTypeSelected(dataType, false);
+	}
+
+	public void clearSelection() {
+		DataTypeArchiveGTree gTree = getGTree();
+		gTree.getSelectionModel().clearSelection();
+	}
+
+	public void setDataTypeSelected(DataType dataType, boolean addToSelection) {
 		DataTypeArchiveGTree gTree = getGTree();
 		if (dataType == null) { // clear the selection
 			gTree.getSelectionModel().clearSelection();
@@ -770,7 +668,7 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 
 		Category category = dataTypeManager.getCategory(dataType.getCategoryPath());
 		ArchiveRootNode rootNode = (ArchiveRootNode) gTree.getViewRoot();
-		ArchiveNode archiveNode = rootNode.getNodeForManager(dataTypeManager);
+		DataTypeStoreNode archiveNode = rootNode.getNodeForManager(dataTypeManager);
 		if (archiveNode == null) {
 			plugin.setStatus("Cannot find archive '" + dataTypeManager.getName() + "'.  It may " +
 				"be filtered out of view or may have been closed (Data Type Manager)");
@@ -787,15 +685,61 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		DataTypeNode dataTypeNode = node.getNode(dataType);
 		if (dataTypeNode == null) {
 
-			if (hasFilter()) {
+			if (isFiltered(dataType)) {
 				plugin.setStatus("Unable to find " + dataType.getName() +
 					".  It may be filtered out of view.  (Data Type Manager)");
 			}
 			return;
 		}
 
-		gTree.setSelectedNode(dataTypeNode);
-		gTree.scrollPathToVisible(dataTypeNode.getTreePath());
+		if (addToSelection) {
+			gTree.addSelectedNode(dataTypeNode);
+		}
+		else {
+			gTree.setSelectedNode(dataTypeNode);
+		}
+
+		TreePath treePath = dataTypeNode.getTreePath();
+		gTree.scrollPathToVisible(treePath);
+		contextChanged();
+	}
+
+	/**
+	 * Selects the given data type category in the tree of data types.  This method will cause the
+	 * data type tree to come to the front, scroll to the category and then to select the tree
+	 * node that represents the category.  If the category is null, the selection is cleared.
+	 *
+	 * @param category the category to select; may be null
+	 */
+	public void setCategorySelected(Category category) {
+		DataTypeArchiveGTree gTree = getGTree();
+		if (category == null) { // clear the selection
+			gTree.clearSelectionPaths();
+			return;
+		}
+
+		DataTypeManager dataTypeManager = category.getDataTypeManager();
+		if (dataTypeManager == null) {
+			return;
+		}
+
+		ArchiveRootNode rootNode = (ArchiveRootNode) gTree.getViewRoot();
+		DataTypeStoreNode archiveNode = rootNode.getNodeForManager(dataTypeManager);
+		if (archiveNode == null) {
+			plugin.setStatus("Cannot find archive '" + dataTypeManager.getName() + "'.  It may " +
+				"be filtered out of view or may have been closed (Data Type Manager)");
+			return;
+		}
+
+		// Note: passing 'true' here forces a load if needed.  This could be slow for programs
+		//       with many types.  If this locks the UI, then put this work into a GTreeTask.
+		CategoryNode node = archiveNode.findCategoryNode(category, true);
+		if (node == null) {
+			return;
+		}
+
+		gTree.setSelectedNode(node);
+		gTree.scrollPathToVisible(node.getTreePath());
 		contextChanged();
 	}
 
@@ -818,35 +762,32 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		return selectedDataTypes;
 	}
 
-	// this is a callback from the action--we need this to prevent callbacks, as the other
-	// version of this method will update the action, which would trigger a callback
+	// this is called from the action
 	public void setIncludeDataTypeMembersInFilterCallback(boolean newValue) {
 		includeDataMembersInFilter = newValue;
-		archiveGTree.setIncludeDataTypeMembersInSearch(includeDataMembersInFilter);
+		archiveGTree.updateDataTransformer(this);
+	}
+
+	// this is called from the action
+	public void setFilterOnNameOnlyCallback(boolean newValue) {
+		filterOnNameOnly = newValue;
+		archiveGTree.updateDataTransformer(this);
 	}
 
 	public void setIncludeDataTypeMembersInFilter(boolean newValue) {
-		includeDataMembersInFilter = newValue;
-		archiveGTree.setIncludeDataTypeMembersInSearch(includeDataMembersInFilter);
-
-		// make sure the action is in sync
-		ToggleDockingAction action = includeDataMembersInSearchAction;
-		boolean selected = action.isSelected();
-		if (selected != includeDataMembersInFilter) {
-			action.setSelected(includeDataMembersInFilter);
-		}
+		includeDataMembersInSearchAction.setSelected(newValue);
 	}
 
-	public void setFilteringArrays(boolean b) {
-		archiveGTree.enableArrayFilter(b);
+	public void setFilterOnNameOnly(boolean newValue) {
+		filterOnNameOnlyAction.setSelected(newValue);
 	}
 
-	public void setFilteringPointers(boolean b) {
-		archiveGTree.enablePointerFilter(b);
-	}
-
-	boolean includeDataMembersInSearch() {
+	public boolean isIncludeDataMembersInSearch() {
 		return includeDataMembersInFilter;
+	}
+
+	public boolean isFilterOnNameOnly() {
+		return filterOnNameOnly;
 	}
 
 	@Override
@@ -873,27 +814,82 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		}
 
 		GTreeNode node = (GTreeNode) path.getLastPathComponent();
-		previewPane.setText(node.getToolTip());
+		if (node instanceof DataTypeNode dtNode) {
+			showDataTypePreview(dtNode);
+		}
 	}
 
 	String getPreviewText() {
 		return previewPane.getText();
 	}
 
-	void programClosed() {
+	private void restoreProgramTreeState(ProgramArchiveNode programNode) {
+		Program program = programNode.getProgram();
+		long id = program.getUniqueProgramID();
+		TreePath selectedPath = programTreeState.get(id);
+		if (selectedPath == null) {
+			return;
+		}
+
+		TreePath[] selectionPaths = archiveGTree.getSelectionPaths();
+		List<TreePath> list = new ArrayList<>(Arrays.asList(selectionPaths));
+		list.add(selectedPath);
+		archiveGTree.setSelectionPaths(list);
+	}
+
+	private void saveProgramTreeState(ProgramArchiveNode programNode) {
+		//
+		// Save the program's selected path as a convenience to the user when we are about to switch
+		// to a new program.  The act of switching will replace the program node, throwing away all
+		// expansion and selection info.   It does not seem useful to save too many selected paths
+		// of the program node, so only save the path if there is a single selection.  This will 
+		// be helpful in the case that the user was working with a single data type in the program.
+		//
+		Program program = programNode.getProgram();
+		long id = program.getUniqueProgramID();
+		GTreeState state = archiveGTree.getTreeState();
+		List<TreePath> paths = state.getSelectedPaths();
+		programTreeState.remove(id);
+
+		TreePath treePath = getSingleProgramSelection(programNode, paths);
+		if (treePath != null) {
+			programTreeState.put(id, treePath);
+		}
+	}
+
+	private TreePath getSingleProgramSelection(ProgramArchiveNode programNode,
+			List<TreePath> paths) {
+
+		if (paths.size() != 1) {
+			return null;
+		}
+
+		TreePath treePath = paths.get(0);
+		Object[] path = treePath.getPath();
+		if (path.length > 2) {  // the program node is the second element in a selection path
+			if (path[1] == programNode) {
+				return treePath;
+			}
+		}
+		return null;
+	}
+
+	void programClosed(Program program) {
 		archiveGTree.cancelWork();
+
+		long id = program.getUniqueProgramID();
+		programTreeState.remove(id);
 	}
 
-	void archiveClosed(DataTypeManager dtm) {
-		dataTypeManagerChanged(dtm);
+	void programActivated(Program program) {
+		clearDataTypePreview();
 	}
 
-	void archiveChanged(Archive archive) {
-		DataTypeManager dtm = archive.getDataTypeManager();
-		dataTypeManagerChanged(dtm);
+	void archiveClosed(PersistentDataTypeArchive archive) {
+		archiveChanged(archive.getName());
 	}
 
-	private void dataTypeManagerChanged(DataTypeManager dtm) {
+	void archiveChanged(String name) {
 
 		if (lastPreviewNode == null || !(lastPreviewNode instanceof DataTypeNode)) {
 			return;
@@ -902,9 +898,10 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		DataTypeNode dtNode = (DataTypeNode) lastPreviewNode;
 		DataType dt = dtNode.getDataType();
 		DataTypeManager dtManager = dt.getDataTypeManager();
-
-		// note: compare using name; an equality check will fail if the manager is reloaded
-		if (dtm.getName().equals(dtManager.getName())) {
+		// notes: the archive name and the datatypeManager name are the same. If the archive
+		// changed because it was closed, then its datatype manager will be null. So just
+		// compare the datatype's manager's name with the archive's name.
+		if (name.equals(dtManager.getName())) {
 			lastPreviewNode = null;
 		}
 	}
@@ -913,9 +910,8 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		ArchiveRootNode rootNode = (ArchiveRootNode) archiveGTree.getModelRoot();
 		List<GTreeNode> allChildren = rootNode.getChildren();
 		for (GTreeNode node : allChildren) {
-			ArchiveNode archiveNode = (ArchiveNode) node;
-			if (archiveNode.getArchive() instanceof ProgramArchive) {
-				archiveNode.nodeChanged();
+			if (node instanceof ProgramArchiveNode programNode) {
+				programNode.nodeChanged();
 				return;
 			}
 		}
@@ -976,4 +972,26 @@ public class DataTypesProvider extends ComponentProviderAdapter {
 		navigationHistory.add(new DataTypeUrl(dt));
 		contextChanged();
 	}
+
+//=================================================================================================
+// Inner Classes
+//=================================================================================================
+
+	private class ProgramNodeUpdateListener implements ArchiveRootNodeListener {
+
+		@Override
+		public void archiveNodeAdded(DataTypeStoreNode node) {
+			if (node instanceof ProgramArchiveNode programNode) {
+				restoreProgramTreeState(programNode);
+			}
+		}
+
+		@Override
+		public void archiveNodeRemoved(DataTypeStoreNode node) {
+			if (node instanceof ProgramArchiveNode programNode) {
+				saveProgramTreeState(programNode);
+			}
+		}
+	}
+
 }

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,14 +17,15 @@ package ghidra.framework.data;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.*;
 
 import javax.swing.Icon;
 
+import ghidra.framework.client.*;
 import ghidra.framework.model.*;
 import ghidra.framework.protocol.ghidra.GhidraURL;
+import ghidra.framework.remote.RepositoryItem;
 import ghidra.framework.store.ItemCheckoutStatus;
 import ghidra.framework.store.Version;
 import ghidra.framework.store.db.PackedDatabase;
@@ -43,6 +44,7 @@ import ghidra.util.task.TaskMonitor;
 public class DomainFileProxy implements DomainFile {
 
 	private DomainObjectAdapter domainObj;
+	private DomainFile originalDomainFile;
 	private ProjectLocator projectLocation;
 	private String name;
 	private int version;
@@ -50,7 +52,7 @@ public class DomainFileProxy implements DomainFile {
 	private long lastModified = 0;
 	private String fileID;
 
-	public DomainFileProxy(String name, DomainObjectAdapter doa) {
+	DomainFileProxy(String name, DomainObjectAdapter doa) {
 		domainObj = doa;
 		this.name = name;
 		doa.setDomainFile(this);
@@ -58,14 +60,15 @@ public class DomainFileProxy implements DomainFile {
 		version = DomainFile.DEFAULT_VERSION;
 	}
 
-	DomainFileProxy(String name, String parentPath, DomainObjectAdapter doa, int version,
-			String fileID, ProjectLocator projectLocation) {
-
-		this(name, doa);
-		this.parentPath = parentPath;
+	DomainFileProxy(DomainFile originalDomainFile, DomainObjectAdapter doa, int version)
+			throws IOException {
+		this(originalDomainFile.getName(), doa);
+		this.originalDomainFile = originalDomainFile;
+		DomainFolder parent = originalDomainFile.getParent();
+		this.parentPath = parent.getPathname();
 		this.version = version;
-		this.fileID = fileID;
-		this.projectLocation = projectLocation;
+		this.fileID = originalDomainFile.getFileID();
+		this.projectLocation = parent.getProjectLocator();
 	}
 
 	@Override
@@ -114,25 +117,75 @@ public class DomainFileProxy implements DomainFile {
 		return parentPath + DomainFolder.SEPARATOR + getName();
 	}
 
+	private URL getSharedFileURL(Properties properties, String ref) {
+		if (properties == null) {
+			return null;
+		}
+		String serverName = properties.getProperty(DefaultProjectData.SERVER_NAME);
+		String repoName = properties.getProperty(DefaultProjectData.REPOSITORY_NAME);
+		if (serverName == null || repoName == null) {
+			return null;
+		}
+		int port = Integer.parseInt(properties.getProperty(DefaultProjectData.PORT_NUMBER, "0"));
+
+		if (!ClientUtil.isConnected(serverName, port)) {
+			return null; // avoid initiating a server connection. 
+		}
+
+		RepositoryAdapter repository = null;
+		try {
+			RepositoryServerAdapter repositoryServer =
+				ClientUtil.getRepositoryServer(serverName, port);
+			Set<String> repoNames = Set.of(repositoryServer.getRepositoryNames());
+			if (!repoNames.contains(repoName)) {
+				return null; // only consider repos which user has access to
+			}
+			repository = repositoryServer.getRepository(repoName);
+			if (repository == null) {
+				return null;
+			}
+			repository.connect();
+			RepositoryItem item = repository.getItem(parentPath, name);
+			if (item == null || !Objects.equals(item.getFileID(), fileID)) {
+				return null;
+			}
+			ServerInfo serverInfo = repository.getServerInfo();
+			return GhidraURL.makeURL(serverInfo.getServerName(), serverInfo.getPortNumber(),
+				repository.getName(), item.getPathName(), ref);
+		}
+		catch (IOException e) {
+			// ignore
+		}
+		finally {
+			if (repository != null) {
+				repository.disconnect();
+			}
+		}
+		return null;
+	}
+
 	@Override
-	public URL getSharedProjectURL() {
+	public URL getSharedProjectURL(String ref) {
 		if (projectLocation != null && version == DomainFile.DEFAULT_VERSION) {
 			URL projectURL = projectLocation.getURL();
 			if (GhidraURL.isServerRepositoryURL(projectURL)) {
-				try {
-					// Direct URL construction done so that ghidra protocol 
-					// extension may be supported
-					String urlStr = projectURL.toExternalForm();
-					if (urlStr.endsWith("/")) {
-						urlStr = urlStr.substring(0, urlStr.length() - 1);
-					}
-					urlStr += getPathname();
-					return new URL(urlStr);
-				}
-				catch (MalformedURLException e) {
-					// ignore
-				}
+				return GhidraURL.resolve(projectURL, getPathname(), ref);
 			}
+			Properties properties =
+				DefaultProjectData.readProjectProperties(projectLocation.getProjectDir());
+			return getSharedFileURL(properties, ref);
+		}
+		return null;
+	}
+
+	@Override
+	public URL getLocalProjectURL(String ref) {
+		if (projectLocation != null && version == DomainFile.DEFAULT_VERSION) {
+			URL projectURL = projectLocation.getURL();
+			if (GhidraURL.isServerRepositoryURL(projectURL)) {
+				return null;
+			}
+			return GhidraURL.makeURL(projectLocation, getPathname(), ref);
 		}
 		return null;
 	}
@@ -180,24 +233,13 @@ public class DomainFileProxy implements DomainFile {
 	}
 
 	@Override
-	public boolean isLinkFile() {
-		DomainObjectAdapter dobj = getDomainObject();
-		if (dobj != null) {
-			ContentHandler<?> ch;
-			try {
-				ch = DomainObjectAdapter.getContentHandler(dobj);
-				return LinkHandler.class.isAssignableFrom(ch.getClass());
-			}
-			catch (IOException e) {
-				// ignore
-			}
-		}
+	public boolean isLink() {
 		return false;
 	}
 
 	@Override
-	public DomainFolder followLink() {
-		throw new UnsupportedOperationException();
+	public LinkFileInfo getLinkInfo() {
+		return null;
 	}
 
 	@Override
@@ -244,11 +286,6 @@ public class DomainFileProxy implements DomainFile {
 
 	public boolean isInUse() {
 		return true;
-	}
-
-	public boolean isUsedExclusivelyBy(Object consumer) {
-		DomainObjectAdapter dobj = getDomainObject();
-		return dobj != null ? dobj.isUsedExclusivelyBy(consumer) : false;
 	}
 
 	@Override
@@ -336,7 +373,7 @@ public class DomainFileProxy implements DomainFile {
 	}
 
 	@Override
-	public void checkin(CheckinHandler checkinHandler, boolean okToUpgrade, TaskMonitor monitor)
+	public void checkin(CheckinHandler checkinHandler, TaskMonitor monitor)
 			throws IOException, VersionException, CancelledException {
 		throw new UnsupportedOperationException("Repository operations not supported");
 	}
@@ -352,8 +389,8 @@ public class DomainFileProxy implements DomainFile {
 	}
 
 	@Override
-	public DomainFile copyToAsLink(DomainFolder newParent) throws IOException {
-		return null; // not supported by proxy file
+	public DomainFile copyToAsLink(DomainFolder newParent, boolean relative) throws IOException {
+		throw new UnsupportedOperationException();
 	}
 
 	@Override
@@ -545,6 +582,13 @@ public class DomainFileProxy implements DomainFile {
 			dobj.getMetadata();
 		}
 		return new HashMap<>();
+	}
+
+	/**
+	 * {@return the original DomainFile which was used to open the associated domain object or null}
+	 */
+	public DomainFile getOriginalDomainFile() {
+		return originalDomainFile;
 	}
 
 }

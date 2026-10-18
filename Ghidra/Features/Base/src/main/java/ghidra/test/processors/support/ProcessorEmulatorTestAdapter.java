@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -38,13 +38,16 @@ import ghidra.app.util.opinion.Loader;
 import ghidra.framework.*;
 import ghidra.framework.options.Options;
 import ghidra.framework.store.LockException;
+import ghidra.pcode.emu.EmulatorUtilities;
 import ghidra.pcode.floatformat.FloatFormat;
 import ghidra.pcode.floatformat.FloatFormatFactory;
 import ghidra.program.database.ProgramDB;
+import ghidra.program.database.dtarchive.DataTypeArchiveFactory;
 import ghidra.program.disassemble.DisassemblerContextImpl;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
-import ghidra.program.model.data.StandAloneDataTypeManager.ArchiveWarning;
+import ghidra.program.model.dtarchive.ArchiveWarning;
+import ghidra.program.model.dtarchive.FileDataTypeArchive;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.listing.Function.FunctionUpdateType;
@@ -65,20 +68,21 @@ import utilities.util.FileUtilities;
 import utility.application.ApplicationLayout;
 
 /**
- * <code>ProcessorEmulatorTestAdapter</code> provides an abstract JUnit test implementation
- * for processor-specific test cases.  All test cases which extend this class must have a
- * class name which ends with 'EmulatorTest' and starts with the processor designator which
- * will be used to identify associated test binaries within either the processor module's
- * data/pcodetests/ directory or the Ghidra/Test/TestResources/data/pcodetests/ directory generally 
- * contained within the binary repository (e.g., ghidra.bin).
+ * <code>ProcessorEmulatorTestAdapter</code> provides an abstract JUnit test implementation for
+ * processor-specific test cases. All test cases which extend this class must have a class name
+ * which ends with 'EmulatorTest' and starts with the processor designator which will be used to
+ * identify associated test binaries within either the processor module's data/pcodetests/ directory
+ * or the Ghidra/Test/TestResources/data/pcodetests/ directory generally contained within the binary
+ * repository (e.g., ghidra.bin).
  * <p>
  * Within the pcodetests directory all files and folders which start with the prefix
- * {@literal <processor-designator>_pcodetest*} will be processed.  All files contained within a matching
- * subdirectory will be treated as related binaries and imported.  Any *.gzf file will be
- * imported but assumed to be pre-analyzed.  Binary files to be imported and analyzed must
- * utilize the *.out file extension.
+ * {@literal <processor-designator>_pcodetest*} will be processed. All files contained within a
+ * matching subdirectory will be treated as related binaries and imported. Any *.gzf file will be
+ * imported but assumed to be pre-analyzed. Binary files to be imported and analyzed must utilize
+ * the *.out file extension.
  * <p>
  * JUnit X86EmulatorTest could utilize the following binary file naming strategy:
+ * 
  * <pre>
  * pcodetests/X86_PCodeTests
  * - binary1.o
@@ -92,25 +96,22 @@ import utility.application.ApplicationLayout;
  * - pcodetests/X86_PCodeTest.out
  * </pre>
  *
- * Any *.out binary found will be imported and analyzed.  The resulting program will
- * be stored as a gzf in the test-output cache directory.  These cached files will be used
- * instead of a test resource binary if that binary's md5 checksum has not changed since its cached
- * gzf was created.  This use of cache files will allow the tests to run quickly on subsequent
- * executions.  If re-analysis is required, the cache will need to be cleared manually.
+ * Any *.out binary found will be imported and analyzed. The resulting program will be stored as a
+ * gzf in the test-output cache directory. These cached files will be used instead of a test
+ * resource binary if that binary's md5 checksum has not changed since its cached gzf was created.
+ * This use of cache files will allow the tests to run quickly on subsequent executions. If
+ * re-analysis is required, the cache will need to be cleared manually.
  * 
- * NOTES:
- * 1. Dummy Test Methods must be added for all known test groups.  See bottom of this file.  This
- *    all allows for the single test trace mode execution to work within Eclipse.
- * 2. Trace logging disabled by default when all test groups are run (see buildEmulatorTestSuite method).
- *    Specific traceLevel and traceLog file controlled via environment properties
- *    EmuTestTraceLevel and EmuTestTraceFile.
- * 3. The TestInfo structure must be properly maintained within the datatype archive EmuTesting.gdt
- *    and field naming consistent with use in PCodeTestControlBlock.java
- * 4. The {@link #initializeState(EmulatorTestRunner, Program)} may be overriden to initialize the
- *    register values if needed.  This should be based upon symbols or other program information
- *    if possible since hardcoded constants may not track future builds of a test binaries.  
- *    An attempt is made to initialize the stack pointer automatically based upon well known
- *    stack initialization symbols.
+ * NOTES: 1. Dummy Test Methods must be added for all known test groups. See bottom of this file.
+ * This all allows for the single test trace mode execution to work within Eclipse. 2. Trace logging
+ * disabled by default when all test groups are run (see buildEmulatorTestSuite method). Specific
+ * traceLevel and traceLog file controlled via environment properties EmuTestTraceLevel and
+ * EmuTestTraceFile. 3. The TestInfo structure must be properly maintained within the datatype
+ * archive EmuTesting.gdt and field naming consistent with use in PCodeTestControlBlock.java 4. The
+ * {@link #initializeState(EmulatorTestRunner, Program)} may be overriden to initialize the register
+ * values if needed. This should be based upon symbols or other program information if possible
+ * since hardcoded constants may not track future builds of a test binaries. An attempt is made to
+ * initialize the stack pointer automatically based upon well known stack initialization symbols.
  */
 public abstract class ProcessorEmulatorTestAdapter extends TestCase implements ExecutionListener {
 
@@ -208,7 +209,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	private Collection<ResourceFile> applicationRootDirectories;
 	private File resourcesTestDataDir;
 
-	private FileDataTypeManager archiveDtMgr;
+	private FileDataTypeArchive fileArchive;
 	private Structure testInfoStruct;
 	private Structure groupInfoStruct;
 
@@ -257,9 +258,9 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 				// By default, create test output within a directory at the same level as the
 				// development repositories
 				outputRoot = Application.getApplicationRootDirectory()
-					.getParentFile()
-					.getParentFile()
-					.getCanonicalPath();
+						.getParentFile()
+						.getParentFile()
+						.getCanonicalPath();
 			}
 			catch (IOException e) {
 				throw new RuntimeException(e);
@@ -428,7 +429,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 //			return; // already enabled by batch test environment
 //		}
 //
-//		String tmpDir = System.getProperty("java.io.tmpdir");
+//		File tmpDir = Application.getUserTempDirectory();
 //		File cacheDir = new File(tmpDir, "EmulatorDBTestCache");
 //		if (cacheDir.exists() && !FileUtilities.deleteDir(cacheDir)) {
 //			Msg.warn(ProcessorEmulatorTestAdapter.class,
@@ -495,10 +496,11 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Create TestSuite based upon available test groups contained within binary
-	 * test files associated with target processor.
-	 * @param emulatorTestClass test which extends <code>ProcessorEmulatorTestAdapter</code>
-	 * and whose name ends with "EmulatorTest".
+	 * Create TestSuite based upon available test groups contained within binary test files
+	 * associated with target processor.
+	 * 
+	 * @param emulatorTestClass test which extends <code>ProcessorEmulatorTestAdapter</code> and
+	 *            whose name ends with "EmulatorTest".
 	 * @return test suite
 	 */
 	public static final Test buildEmulatorTestSuite(Class<?> emulatorTestClass) {
@@ -825,7 +827,8 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 		int byteCount = dumpSize * elementSize;
 
-		byte[] bytes = emulatorTestRunner.getEmulatorHelper().readMemory(dumpAddr, byteCount);
+		byte[] bytes =
+			emulatorTestRunner.getEmulatorThread().getState().inspectConcrete(dumpAddr, byteCount);
 		int index = 0;
 
 		log(null, "MEMORY DUMP (" + elementFormat + "): " + comment);
@@ -902,11 +905,6 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 		log(testRunner.getTestGroup(), " Write " + formatAssignmentString(address, size, values));
 	}
 
-	@Override
-	public void stepCompleted(EmulatorTestRunner testRunner) {
-		logState(testRunner);
-	}
-
 	/**
 	 * Converts the stack trace into a string
 	 */
@@ -938,7 +936,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 		applicationRootDirectories = Application.getApplicationRootDirectories();
 
 		ResourceFile myModuleRootDirectory =
-			Application.getModuleContainingClass(getClass().getName());
+			Application.getModuleContainingClass(getClass());
 		if (myModuleRootDirectory != null) {
 			File myModuleRoot = myModuleRootDirectory.getFile(false);
 			if (myModuleRoot != null) {
@@ -971,16 +969,18 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 		}
 
 		ResourceFile emuTestingArchive = Application.getModuleDataFile("pcodetest/EmuTesting.gdt");
-		archiveDtMgr = FileDataTypeManager.openFileArchive(emuTestingArchive, false);
-		assertEquals(ArchiveWarning.NONE, archiveDtMgr.getWarning());
-		DataType dt = archiveDtMgr.getDataType(CategoryPath.ROOT, TEST_INFO_STRUCT_NAME);
+		fileArchive =
+			DataTypeArchiveFactory.openReadOnly(emuTestingArchive, this, TaskMonitor.DUMMY);
+		assertEquals(ArchiveWarning.NONE, fileArchive.getWarning());
+		DataTypeManager dtm = fileArchive.getDataTypeManager();
+		DataType dt = dtm.getDataType(CategoryPath.ROOT, TEST_INFO_STRUCT_NAME);
 		if (dt == null || !(dt instanceof Structure)) {
 			fail(TEST_INFO_STRUCT_NAME +
 				" structure data-type not found in resource EmuTesting.gdt");
 		}
 		testInfoStruct = (Structure) dt;
 
-		dt = archiveDtMgr.getDataType(CategoryPath.ROOT, GROUP_INFO_STRUCT_NAME);
+		dt = dtm.getDataType(CategoryPath.ROOT, GROUP_INFO_STRUCT_NAME);
 		if (dt == null || !(dt instanceof Structure)) {
 			fail(GROUP_INFO_STRUCT_NAME +
 				" structure data-type not found in resource EmuTesting.gdt");
@@ -1078,8 +1078,8 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 			logData.traceLog.close();
 			logData.traceLog = null;
 		}
-		if (archiveDtMgr != null) {
-			archiveDtMgr.close();
+		if (fileArchive != null) {
+			fileArchive.release(this);
 		}
 		if (env != null) {
 			env.dispose();
@@ -1088,8 +1088,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Single unit test which handles named test group specified during test
-	 * instantiation.
+	 * Single unit test which handles named test group specified during test instantiation.
 	 */
 	@Override
 	public final void runTest() {
@@ -1187,7 +1186,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 			boolean done;
 			if (traceDisabled) {
-				done = testRunner.execute(EXECUTION_TIMEOUT_MS, TaskMonitor.DUMMY);
+				done = testRunner.execute(EXECUTION_TIMEOUT_MS);
 			}
 			else {
 				done = testRunner.executeSingleStep(MAX_EXECUTION_STEPS);
@@ -1327,6 +1326,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 	/**
 	 * Get symbol name which defines initial stack pointer offset
+	 * 
 	 * @return stack symbol or null
 	 */
 	protected String getPreferredStackSymbolName() {
@@ -1350,8 +1350,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 		Address currentAddr = testRunner.getCurrentAddress();
 
 		// dump context register state if decode failure
-		RegisterValue contextRegValue =
-			testRunner.getEmulatorHelper().getEmulator().getContextRegisterValue();
+		RegisterValue contextRegValue = testRunner.getEmulatorThread().getContext();
 		if (contextRegValue == null) {
 			return;
 		}
@@ -1383,7 +1382,8 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 			}
 
 			// check for memory modification
-			byte[] emuBytes = testRunner.getEmulatorHelper().readMemory(currentAddr, len);
+			byte[] emuBytes =
+				testRunner.getEmulatorThread().getState().inspectConcrete(currentAddr, len);
 			byte[] programBytes = new byte[emuBytes.length];
 			program.getMemory().getBytes(currentAddr, programBytes);
 			if (!Arrays.equals(emuBytes, programBytes)) {
@@ -1425,6 +1425,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 	/**
 	 * Get the maximum defined memory address ignoring any overlays which have been defined.
+	 * 
 	 * @return max defined physical address
 	 */
 	protected static final Address getMaxDefinedMemoryAddress(Program program) {
@@ -1441,10 +1442,10 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Add specified test names to the set of tests which should be ignored due to know issues
-	 * or limitations.  The tests will still be executed, if present, however they will
-	 * not be included in pass/fail counts.  They will appear in log as "(IGNORED)" test
-	 * result.
+	 * Add specified test names to the set of tests which should be ignored due to know issues or
+	 * limitations. The tests will still be executed, if present, however they will not be included
+	 * in pass/fail counts. They will appear in log as "(IGNORED)" test result.
+	 * 
 	 * @param testNames one or more test names to be ignored
 	 */
 	protected void addIgnoredTests(String... testNames) {
@@ -1456,10 +1457,10 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	//
 
 	/**
-	 * Get the processor designator used to identify test binary files/folder.
-	 * The default implementation requires the JUnit test class name to end with
-	 * "EmulatorTest" where the portion of the name proceeding this suffix will be
-	 * used as the processor designator
+	 * Get the processor designator used to identify test binary files/folder. The default
+	 * implementation requires the JUnit test class name to end with "EmulatorTest" where the
+	 * portion of the name proceeding this suffix will be used as the processor designator
+	 * 
 	 * @return processor designator
 	 */
 	protected String getProcessorDesignator() {
@@ -1473,6 +1474,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 	/**
 	 * Get CUint file designator if use of A, B, C... is not suitable.
+	 * 
 	 * @param fileIndex file index within sorted list
 	 * @param filePath binary file path
 	 * @return short file designator for use in qualified test name
@@ -1482,12 +1484,12 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Invoked for each program immediately prior to executing a test group.
-	 * By default this method will initialize the register states based upon the 
-	 * specific register values/context stored at the test group function entry point.
-	 * Such register values may have been established via the processor specification,
-	 * loader or analyzers.  A specific test may override or extend
-	 * this behavior for other registers as needed.
+	 * Invoked for each program immediately prior to executing a test group. By default this method
+	 * will initialize the register states based upon the specific register values/context stored at
+	 * the test group function entry point. Such register values may have been established via the
+	 * processor specification, loader or analyzers. A specific test may override or extend this
+	 * behavior for other registers as needed.
+	 * 
 	 * @param testRunner emulator group test runner/facilitator
 	 * @param program
 	 * @throws Exception if initialization criteria has not been satisfied
@@ -1496,28 +1498,15 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 			throws Exception {
 		Address addr = testRunner.getTestGroup().functionEntryPtr;
 		addr = PseudoDisassembler.getNormalizedDisassemblyAddress(program, addr);
-		ProgramContext programContext = program.getProgramContext();
-		for (Register reg : programContext.getRegisters()) {
-			if (reg.isProcessorContext() || reg.isProgramCounter()) {
-				continue;
-			}
-			RegisterValue value = programContext.getRegisterValue(reg, addr);
-			if (value != null && value.hasValue()) {
-				log(testRunner.getTestGroup(),
-					"Initialized register " + reg.getName() + "=0x" +
-						value.getUnsignedValue().toString(16) + " using context at " +
-						addr.toString(true));
-				testRunner.setRegister(reg.getName(), value.getUnsignedValue());
-			}
-		}
+		EmulatorUtilities.initializeRegisters(testRunner.getEmulatorThread(), program, addr);
 	}
 
 	/**
-	 * Invoked immediately following import allow byte processing prior to
-	 * control structure identification.
-	 * NOTE: This method will only be invoked once during the first test setup
-	 * for all test binaries found.  This method will not be invoked
-	 * during subsequent tests since the analyzed program will be cached.
+	 * Invoked immediately following import allow byte processing prior to control structure
+	 * identification. NOTE: This method will only be invoked once during the first test setup for
+	 * all test binaries found. This method will not be invoked during subsequent tests since the
+	 * analyzed program will be cached.
+	 * 
 	 * @param program
 	 * @throws Exception
 	 */
@@ -1527,10 +1516,10 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 	/**
 	 * Invoked prior to analysis to allow analysis options or other pre-analysis
-	 * inspection/modification to be performed.
-	 * NOTE: This method will only be invoked once during the first test setup
-	 * for all test binaries found.  This method will not be invoked
-	 * during subsequent tests since the analyzed program will be cached.
+	 * inspection/modification to be performed. NOTE: This method will only be invoked once during
+	 * the first test setup for all test binaries found. This method will not be invoked during
+	 * subsequent tests since the analyzed program will be cached.
+	 * 
 	 * @param program
 	 * @throws Exception
 	 */
@@ -1539,11 +1528,11 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Invoked for non-gzf files immediately after the analyze method to
-	 * perform any follow-up changes of inspection of the program.
-	 * NOTE: This method will only be invoked once during the first test setup
-	 * for all test binaries found.  This method will not be invoked
-	 * during subsequent tests since the analyzed program will be cached.
+	 * Invoked for non-gzf files immediately after the analyze method to perform any follow-up
+	 * changes of inspection of the program. NOTE: This method will only be invoked once during the
+	 * first test setup for all test binaries found. This method will not be invoked during
+	 * subsequent tests since the analyzed program will be cached.
+	 * 
 	 * @param program
 	 * @throws Exception
 	 */
@@ -1552,10 +1541,10 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Invoked for non-gzf files to perform auto-analysis.
-	 * NOTE: This method will only be invoked once during the first test setup
-	 * for all test binaries found.  This method will not be invoked
+	 * Invoked for non-gzf files to perform auto-analysis. NOTE: This method will only be invoked
+	 * once during the first test setup for all test binaries found. This method will not be invoked
 	 * during subsequent tests since the analyzed program will be cached.
+	 * 
 	 * @param program
 	 * @throws Exception
 	 */
@@ -1616,7 +1605,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 		// Apply known function signatures
 		// Signatures with Float types have been excluded due to limited calling convention support
 		ArrayList<DataTypeManager> dtMgrList = new ArrayList<>();
-		dtMgrList.add(archiveDtMgr);
+		dtMgrList.add(fileArchive.getDataTypeManager());
 		ApplyFunctionDataTypesCmd cmd =
 			new ApplyFunctionDataTypesCmd(dtMgrList, null, SourceType.ANALYSIS, true, false);
 		cmd.applyTo(program);
@@ -1672,7 +1661,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 				RegisterValue thumbMode = new RegisterValue(tReg, BigInteger.ONE);
 				try {
 					program.getProgramContext()
-						.setRegisterValue(functionAddr, functionAddr, thumbMode);
+							.setRegisterValue(functionAddr, functionAddr, thumbMode);
 				}
 				catch (ContextChangeException e) {
 					throw new AssertException(e);
@@ -1686,7 +1675,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 				RegisterValue thumbMode = new RegisterValue(isaModeReg, BigInteger.ONE);
 				try {
 					program.getProgramContext()
-						.setRegisterValue(functionAddr, functionAddr, thumbMode);
+							.setRegisterValue(functionAddr, functionAddr, thumbMode);
 				}
 				catch (ContextChangeException e) {
 					throw new AssertException(e);
@@ -1713,8 +1702,9 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Get the loader class which should be used.  A null value should be
-	 * return to use the preferred loader.
+	 * Get the loader class which should be used. A null value should be return to use the preferred
+	 * loader.
+	 * 
 	 * @return loader class or null
 	 */
 	protected Class<? extends Loader> getLoaderClass() {
@@ -1911,7 +1901,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 					if (absoluteGzfFilePath.exists()) {
 						program = getGzfProgram(outputDir, gzfCachePath);
 						if (program != null && !MD5Utilities.getMD5Hash(testFile.file)
-							.equals(program.getExecutableMD5())) {
+								.equals(program.getExecutableMD5())) {
 							// remove obsolete GZF cache file
 							env.release(program);
 							program = null;
@@ -1936,7 +1926,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 						}
 						else {
 							program = env.getGhidraProject()
-								.importProgram(testFile.file, language, compilerSpec);
+									.importProgram(testFile.file, language, compilerSpec);
 						}
 						program.addConsumer(this);
 						env.getGhidraProject().close(program);
@@ -1957,8 +1947,8 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 
 				if (!program.getLanguageID().equals(language.getLanguageID()) ||
 					!program.getCompilerSpec()
-						.getCompilerSpecID()
-						.equals(compilerSpec.getCompilerSpecID())) {
+							.getCompilerSpecID()
+							.equals(compilerSpec.getCompilerSpecID())) {
 					throw new IOException((usingCachedGZF ? "Cached " : "") +
 						"Program has incorrect language/compiler spec (" + program.getLanguageID() +
 						"/" + program.getCompilerSpec().getCompilerSpecID() + "): " +
@@ -2123,7 +2113,7 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 				testFileDigest.append(nameAndAddr);
 				testFileDigest.append(" (GroupInfo @ ");
 				testFileDigest
-					.append(testGroup.controlBlock.getInfoStructureAddress().toString(true));
+						.append(testGroup.controlBlock.getInfoStructureAddress().toString(true));
 				testFileDigest.append(")");
 				if (duplicateTests.contains(testGroup.testGroupName)) {
 					testFileDigest.append(" *DUPLICATE*");
@@ -2137,7 +2127,9 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Force proper code address alignment to compensate for address encoding schemes (e.g., Thumb mode)
+	 * Force proper code address alignment to compensate for address encoding schemes (e.g., Thumb
+	 * mode)
+	 * 
 	 * @param offset
 	 * @param alignment
 	 * @return
@@ -2147,7 +2139,9 @@ public abstract class ProcessorEmulatorTestAdapter extends TestCase implements E
 	}
 
 	/**
-	 * Force proper code address alignment to compensate for address encoding schemes (e.g., Thumb mode)
+	 * Force proper code address alignment to compensate for address encoding schemes (e.g., Thumb
+	 * mode)
+	 * 
 	 * @param addr
 	 * @param alignment
 	 * @return

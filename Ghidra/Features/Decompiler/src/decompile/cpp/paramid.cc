@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -165,7 +165,7 @@ void ParamMeasure::encode( Encoder &encoder,ElementId &tag,bool moredetail ) con
   encoder.openElement(ELEM_ADDR);
   vndata.space->encodeAttributes( encoder, vndata.offset, vndata.size );
   encoder.closeElement(ELEM_ADDR);
-  vntype->encode(encoder);
+  vntype->encodeRef(encoder);
   if( moredetail ) {
     encoder.openElement(ELEM_RANK);
     encoder.writeSignedInteger(ATTRIB_VAL, rank);
@@ -192,6 +192,7 @@ ParamIDAnalysis::ParamIDAnalysis( Funcdata *fd_in, bool justproto )
     int4 num = fproto.numParams();
     for(int4 i=0;i<num;++i) {
       ProtoParameter *param = fproto.getParam(i);
+      if (!param->hasStorage()) continue;
       InputParamMeasures.push_back( ParamMeasure(param->getAddress(),param->getSize(),
 						 param->getType(),ParamMeasure::INPUT) );
       Varnode *vn = fd->findVarnodeInput(param->getSize(),param->getAddress());
@@ -200,7 +201,7 @@ ParamIDAnalysis::ParamIDAnalysis( Funcdata *fd_in, bool justproto )
     }
 
     ProtoParameter *outparam = fproto.getOutput();
-    if (!outparam->getAddress().isInvalid()) { // If we don't have a void type
+    if (outparam->hasStorage()) { // If we don't have a void type
       OutputParamMeasures.push_back( ParamMeasure( outparam->getAddress(),outparam->getSize(),
 						   outparam->getType(),ParamMeasure::OUTPUT) );
       list<PcodeOp *>::const_iterator rtn_iter = fd->beginOp( CPUI_RETURN );

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,7 +20,6 @@ import java.io.IOException;
 import ghidra.app.util.bin.*;
 import ghidra.program.model.data.*;
 import ghidra.util.Msg;
-import ghidra.util.StringUtilities;
 import ghidra.util.exception.DuplicateNameException;
 
 public class CoffArchiveMemberHeader implements StructConverter {
@@ -54,16 +53,16 @@ public class CoffArchiveMemberHeader implements StructConverter {
 
 	/**
 	 * Reads a COFF archive member header from the specified {@link BinaryReader reader},
-	 * leaving the file position at the start of the this member's payload.
+	 * leaving the file position at the start of this member's payload.
 	 * <p>
 	 * The archive member's name is fixed up using the specified {@link LongNamesMember longNames}
 	 * object.
-	 * <p>
+	 * 
 	 * @param reader stream from which to read the COFF archive member header from
 	 * @param longNames optional, string table with long file names (only present in some 
 	 * COFF ar formats)
 	 * @return a new {@link CoffArchiveMemberHeader}
-	 * @throws IOException
+	 * @throws IOException if error reading fields
 	 */
 	public static CoffArchiveMemberHeader read(BinaryReader reader, LongNamesMember longNames)
 			throws IOException {
@@ -139,6 +138,9 @@ public class CoffArchiveMemberHeader implements StructConverter {
 		long size;
 		try {
 			size = Long.parseLong(sizeStr);
+			if (size < 0) {
+				throw new IOException("Invalid CoffArchiveMember size string: " + sizeStr);
+			}
 		} catch ( NumberFormatException nfe ) {
 			throw new IOException("Bad size value: " + sizeStr);
 		}
@@ -146,6 +148,9 @@ public class CoffArchiveMemberHeader implements StructConverter {
 		if (name.startsWith("#1/")) {
 			try {
 				int nameLen = Integer.parseInt(name.substring(3));
+				if (nameLen > size) {
+					throw new IOException("Bad CoffArchiveMember #1 name length: " + name);
+				}
 				// name seems to be padded with trailing nulls to put payload at aligned offset
 				name = reader.readAsciiString(payloadOffset, nameLen);
 				size -= nameLen;

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,10 +20,10 @@ import java.io.IOException;
 import db.DBRecord;
 import ghidra.docking.settings.Settings;
 import ghidra.docking.settings.SettingsDefinition;
-import ghidra.program.database.DBObjectCache;
 import ghidra.program.model.data.*;
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.util.InvalidNameException;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.UniversalID;
 import ghidra.util.exception.DuplicateNameException;
 
@@ -34,20 +34,19 @@ import ghidra.util.exception.DuplicateNameException;
  */
 class ArrayDB extends DataTypeDB implements Array {
 
-	private volatile String displayName;
 	private ArrayDBAdapter adapter;
-	private int elementLength; // lazy initialization
+
+	private int elementLength = -1; // lazy initialization
+	private String displayName; // lazy initialization
 
 	/**
 	 * Constructor
-	 * @param dataMgr
-	 * @param cache
-	 * @param adapter
-	 * @param record
+	 * @param dataMgr the datatypes manager
+	 * @param adapter the arrays database adapter
+	 * @param record the record for the union
 	 */
-	public ArrayDB(DataTypeManagerDB dataMgr, DBObjectCache<DataTypeDB> cache,
-			ArrayDBAdapter adapter, DBRecord record) {
-		super(dataMgr, cache, record);
+	ArrayDB(DataTypeManagerDB dataMgr, ArrayDBAdapter adapter, DBRecord record) {
+		super(dataMgr, record);
 		this.adapter = adapter;
 	}
 
@@ -74,13 +73,16 @@ class ArrayDB extends DataTypeDB implements Array {
 	}
 
 	@Override
-	protected boolean refresh() {
+	protected boolean refresh(DBRecord rec) {
 		try {
 			elementLength = -1;
-			DBRecord rec = adapter.getRecord(key);
+			if (rec == null) {
+				rec = adapter.getRecord(key);
+			}
 			if (rec != null) {
 				record = rec;
-				return super.refresh();
+				completeRefresh();
+				return true;
 			}
 		}
 		catch (IOException e) {
@@ -92,19 +94,15 @@ class ArrayDB extends DataTypeDB implements Array {
 	@Override
 	public String getDisplayName() {
 		String localDisplayName = displayName;
-		if (localDisplayName != null && !isInvalid()) {
+		if (localDisplayName != null && !needsRefreshing()) {
 			return localDisplayName;
 		}
-		lock.acquire();
-		try {
-			checkIsValid();
-			if ( displayName == null ) {
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
+			if (displayName == null) {
 				displayName = DataTypeUtilities.getDisplayName(this, false);
 			}
 			return displayName;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -139,24 +137,20 @@ class ArrayDB extends DataTypeDB implements Array {
 
 	@Override
 	public String getDescription() {
-		checkIsValid();
+		refreshIfNeeded();
 		return "Array of " + getDataType().getDescription();
 	}
 
 	@Override
 	public DataType getDataType() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			long dataTypeID = record.getLongValue(ArrayDBAdapter.ARRAY_DT_ID_COL);
 			DataType dt = dataMgr.getDataType(dataTypeID);
 			if (dt == null) {
 				dt = DataType.DEFAULT;
 			}
 			return dt;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -177,9 +171,8 @@ class ArrayDB extends DataTypeDB implements Array {
 
 	@Override
 	public int getElementLength() {
-		lock.acquire();
-		try {
-			checkIsValid();
+		try (Closeable c = lock.read()) {
+			refreshIfNeeded();
 			DataType dt = getDataType();
 			if (elementLength < 0) {
 				if (dt instanceof Dynamic) {
@@ -190,9 +183,6 @@ class ArrayDB extends DataTypeDB implements Array {
 				}
 			}
 			return elementLength;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -223,21 +213,34 @@ class ArrayDB extends DataTypeDB implements Array {
 	}
 
 	@Override
-	public boolean isEquivalent(DataType dt) {
+	protected boolean isEquivalent(DataType dt, DataTypeConflictHandler handler) {
 		if (dt == this) {
 			return true;
 		}
 		if (!(dt instanceof Array)) {
 			return false;
 		}
+
 		Array array = (Array) dt;
 		if (getNumElements() != array.getNumElements()) {
 			return false;
 		}
+
 		DataType dataType = getDataType();
-		if (!dataType.isEquivalent(array.getDataType())) {
+		DataType otherDataType = array.getDataType();
+
+		// if they contain datatypes that have same ids, then we are essentially equivalent.
+		if (DataTypeUtilities.isSameDataType(dataType, otherDataType)) {
+			return true;
+		}
+
+		if (handler != null) {
+			handler = handler.getSubsequentHandler();
+		}
+		if (!DataTypeDB.isEquivalent(dataType, otherDataType, handler)) {
 			return false;
 		}
+
 		if (dataType instanceof Dynamic && getElementLength() != array.getElementLength()) {
 			return false;
 		}
@@ -245,15 +248,46 @@ class ArrayDB extends DataTypeDB implements Array {
 	}
 
 	@Override
-	public void dataTypeReplaced(DataType oldDt, DataType newDt) {
-		lock.acquire();
-		try {
-			checkIsValid();
-			if (newDt == this || newDt.getLength() < 0) {
-				newDt = DataType.DEFAULT;
-			}
+	public boolean isEquivalent(DataType dt) {
+		return isEquivalent(dt, null);
+	}
 
+	@Override
+	public void dataTypeReplaced(DataType oldDt, DataType newDt) {
+		if (deleting) {
+			return;
+		}
+		DataTypeUtilities.checkValidReplacement(oldDt, newDt);
+		try (Closeable c = lock.write()) {
+			checkDeleted();
 			if (oldDt == getDataType()) {
+				if (newDt == this || newDt.getLength() < 0) {
+					newDt = DataType.DEFAULT;
+				}
+				int oldElementLength = getElementLength();
+				int newElementLength =
+					elementLength = newDt.getLength() < 0 ? oldElementLength : -1;
+
+				// check for existing pointer to newDt
+				ArrayDataType newArray =
+					new ArrayDataType(newDt, getNumElements(), newElementLength, dataMgr);
+				DataType existingArray =
+					dataMgr.getDataType(newDt.getCategoryPath(), newArray.getName());
+				if (existingArray != null && existingArray != this) {
+					// avoid duplicate array - replace this array with existing one
+					dataMgr.addDataTypeToReplace(this, existingArray);
+					return;
+				}
+
+				if (!newDt.getCategoryPath().equals(oldDt.getCategoryPath())) {
+					// move this pointer to same category as newDt
+					try {
+						super.setCategoryPath(newDt.getCategoryPath());
+					}
+					catch (DuplicateNameException e) {
+						throw new RuntimeException(e); // already checked
+					}
+				}
 
 				oldDt.removeParent(this);
 				newDt.addParent(this);
@@ -261,7 +295,6 @@ class ArrayDB extends DataTypeDB implements Array {
 				String myOldName = getOldName();
 				int oldLength = getLength();
 				int oldAlignment = getAlignment();
-				int oldElementLength = getElementLength();
 
 				record.setLongValue(ArrayDBAdapter.ARRAY_DT_ID_COL, dataMgr.getResolvedID(newDt));
 				if (newDt instanceof Dynamic || newDt instanceof FactoryDataType) {
@@ -276,7 +309,7 @@ class ArrayDB extends DataTypeDB implements Array {
 					dataMgr.dbError(e);
 				}
 				refreshName();
-				if (!getName().equals(myOldName)) {
+				if (!oldDt.getName().equals(newDt.getName())) {
 					notifyNameChanged(myOldName);
 				}
 				if (getLength() != oldLength || oldElementLength != getElementLength()) {
@@ -290,9 +323,6 @@ class ArrayDB extends DataTypeDB implements Array {
 				}
 			}
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	@Override
@@ -302,28 +332,28 @@ class ArrayDB extends DataTypeDB implements Array {
 
 	@Override
 	public void dataTypeSizeChanged(DataType dt) {
-		lock.acquire();
-		try {
-			if (checkIsValid() && dt == getDataType() && dt.getLength() > 0) {
+		if (deleting) {
+			return;
+		}
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (dt == getDataType() && dt.getLength() > 0) {
 				elementLength = -1;
 				notifySizeChanged(true);
 			}
-		}
-		finally {
-			lock.release();
 		}
 	}
 
 	@Override
 	public void dataTypeAlignmentChanged(DataType dt) {
-		lock.acquire();
-		try {
-			if (checkIsValid() && dt == getDataType()) {
+		if (deleting) {
+			return;
+		}
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (dt == getDataType()) {
 				notifyAlignmentChanged(true);
 			}
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -349,26 +379,33 @@ class ArrayDB extends DataTypeDB implements Array {
 
 	@Override
 	public void dataTypeDeleted(DataType dt) {
-		if (getDataType() == dt) {
-			elementLength = -1;
-			dataMgr.addDataTypeToDelete(key);
+		if (deleting) {
+			return;
+		}
+		try (Closeable c = lock.write()) {
+			checkDeleted();
+			if (dt == getDataType()) {
+				elementLength = -1;
+				dataMgr.addDataTypeToDelete(this, key);
+				deleting = true;
+			}
 		}
 	}
 
 	@Override
 	public void dataTypeNameChanged(DataType dt, String oldName) {
-		lock.acquire();
-		try {
+		if (deleting) {
+			return;
+		}
+		try (Closeable c = lock.write()) {
+			checkDeleted();
 			String myOldName = getOldName();
-			if (checkIsValid() && dt == getDataType()) {
+			if (dt == getDataType()) {
 				refreshName();
 				if (!getName().equals(myOldName)) {
 					notifyNameChanged(myOldName);
 				}
 			}
-		}
-		finally {
-			lock.release();
 		}
 	}
 

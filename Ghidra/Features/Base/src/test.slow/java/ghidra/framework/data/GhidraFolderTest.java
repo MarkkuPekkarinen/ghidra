@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,6 +22,8 @@ import java.io.IOException;
 
 import org.junit.*;
 
+import ghidra.framework.model.ProjectLocator;
+import ghidra.framework.protocol.ghidra.GhidraURL;
 import ghidra.framework.store.local.LocalFileSystem;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 
@@ -31,6 +33,7 @@ public class GhidraFolderTest extends AbstractGhidraHeadedIntegrationTest {
 	private LocalFileSystem sharedFS;
 	private LocalFileSystem privateFS;
 
+	private DefaultProjectData projectData;
 	private GhidraFolder root;
 
 	public GhidraFolderTest() {
@@ -68,8 +71,8 @@ public class GhidraFolderTest extends AbstractGhidraHeadedIntegrationTest {
 			false, false, true);
 		sharedFS = LocalFileSystem.getLocalFileSystem(sharedProjectDir.getAbsolutePath(), false,
 			true, false, true);
-		ProjectFileManager projectFileManager = new ProjectFileManager(privateFS, sharedFS);
-		root = projectFileManager.getRootFolder();
+		projectData = new DefaultProjectData(privateFS, sharedFS);
+		root = projectData.getRootFolder();
 	}
 
 	private void deleteTestFiles() {
@@ -80,6 +83,15 @@ public class GhidraFolderTest extends AbstractGhidraHeadedIntegrationTest {
 	@After
 	public void tearDown() {
 		deleteTestFiles();
+	}
+
+	@Test
+	public void testGetLocalProjectURL() {
+		ProjectLocator projectLocator = projectData.getProjectLocator();
+		assertEquals(GhidraURL.makeURL(projectLocator, "/a/y", null),
+			projectData.getFolder("/a/y").getLocalProjectURL());
+		assertEquals(GhidraURL.makeURL(projectLocator, "/a/x", null),
+			projectData.getFolder("/a/x").getLocalProjectURL());
 	}
 
 	@Test
@@ -206,19 +218,12 @@ public class GhidraFolderTest extends AbstractGhidraHeadedIntegrationTest {
 
 	@Test
 	public void testCopyTo() throws Exception {
-		System.err.println("folders.length: " + root.getFolders().length);
 
 		GhidraFolder aFolder = root.getFolder("a");
 		GhidraFolder bFolder = root.getFolder("b");
 
 		aFolder.copyTo(bFolder, null);
 		GhidraFolder[] folders = root.getFolders();
-		if (folders.length != 3) {
-			System.err.println("Folders of " + root.getName());
-			for (GhidraFolder folder : folders) {
-				System.err.println("\t" + folder);
-			}
-		}
 
 		assertEquals(3, folders.length);
 

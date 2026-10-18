@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,22 +19,27 @@ import static org.junit.Assert.*;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.event.KeyEvent;
 import java.beans.PropertyChangeListener;
 import java.beans.PropertyEditorSupport;
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
 import java.util.*;
 
 import javax.swing.JComponent;
 import javax.swing.KeyStroke;
 
-import org.jdom.Element;
+import org.jdom2.Element;
 import org.junit.*;
 
+import docking.DockingUtils;
 import generic.test.AbstractGuiTest;
 import generic.theme.GThemeDefaults.Colors.Palette;
-import ghidra.util.HelpLocation;
+import ghidra.util.*;
 import ghidra.util.bean.opteditor.OptionsVetoException;
 import ghidra.util.exception.InvalidInputException;
+import gui.event.MouseBinding;
 
 public class OptionsTest extends AbstractGuiTest {
 
@@ -67,7 +72,7 @@ public class OptionsTest extends AbstractGuiTest {
 
 	@Test
 	public void testDefaultsNotSaved() {
-		options.registerOption("Foo", 5, null, null);
+		options.registerOption("Foo", 5, null, "foo");
 		assertTrue(options.contains("Foo"));
 		assertEquals(5, options.getInt("Foo", 0));
 		saveAndRestoreOptions();
@@ -161,10 +166,37 @@ public class OptionsTest extends AbstractGuiTest {
 
 	@Test
 	public void testSaveKeyStrokeOption() {
-		options.setKeyStroke("Foo", KeyStroke.getKeyStroke('a', 0));
+		options.setKeyStroke("Foo", KeyStroke.getKeyStroke(KeyEvent.VK_A, 0));
 		saveAndRestoreOptions();
-		assertEquals(KeyStroke.getKeyStroke('a', 0),
-			options.getKeyStroke("Foo", KeyStroke.getKeyStroke('b', 0)));
+		assertEquals(KeyStroke.getKeyStroke(KeyEvent.VK_A, 0), options.getKeyStroke("Foo", null));
+	}
+
+	@Test
+	public void testSaveActionTrigger_KeyStroke() {
+		KeyStroke ks = KeyStroke.getKeyStroke(KeyEvent.VK_A, 0);
+		ActionTrigger trigger = new ActionTrigger(ks);
+		options.setActionTrigger("Foo", trigger);
+		saveAndRestoreOptions();
+		assertEquals(trigger, options.getActionTrigger("Foo", null));
+	}
+
+	@Test
+	public void testSaveActionTrigger_MouseBinding() {
+		MouseBinding mb = new MouseBinding(1, DockingUtils.CONTROL_KEY_MODIFIER_MASK);
+		ActionTrigger trigger = new ActionTrigger(mb);
+		options.setActionTrigger("Foo", trigger);
+		saveAndRestoreOptions();
+		assertEquals(trigger, options.getActionTrigger("Foo", null));
+	}
+
+	@Test
+	public void testSaveActionTrigger_KeyStrokeAndMouseBinding() {
+		KeyStroke ks = KeyStroke.getKeyStroke(KeyEvent.VK_A, 0);
+		MouseBinding mb = new MouseBinding(1, DockingUtils.CONTROL_KEY_MODIFIER_MASK);
+		ActionTrigger trigger = new ActionTrigger(ks, mb);
+		options.setActionTrigger("Foo", trigger);
+		saveAndRestoreOptions();
+		assertEquals(trigger, options.getActionTrigger("Foo", null));
 	}
 
 	@Test
@@ -198,7 +230,7 @@ public class OptionsTest extends AbstractGuiTest {
 		options.setInt("Foo", 3);
 		options.setColor("COLOR", Palette.RED);
 		options.getLong("LONG", 10);
-		options.registerOption("Bar", true, null, null);
+		options.registerOption("Bar", true, null, "foo");
 		Options optionsCopy = options.copy();
 		assertTrue(optionsCopy.contains("Foo"));
 		assertTrue(optionsCopy.contains("COLOR"));
@@ -287,7 +319,7 @@ public class OptionsTest extends AbstractGuiTest {
 
 	@Test
 	public void testGetDefaultValue() {
-		options.registerOption("Foo", Color.RED, null, null);
+		options.registerOption("Foo", Color.RED, null, "foo");
 		options.setColor("Foo", Color.BLUE);
 		assertColorsEqual(Color.BLUE, options.getColor("Foo", null));
 		assertColorsEqual(Color.RED, (Color) options.getDefaultValue("Foo"));
@@ -296,21 +328,22 @@ public class OptionsTest extends AbstractGuiTest {
 	@Test
 	public void testRegisterPropertyEditor() {
 		MyPropertyEditor editor = new MyPropertyEditor();
-		options.registerOption("color", OptionType.COLOR_TYPE, Color.RED, null, null, editor);
+		options.registerOption("color", OptionType.COLOR_TYPE, Color.RED, null, "foo",
+			() -> editor);
 		assertEquals(editor, options.getRegisteredPropertyEditor("color"));
 	}
 
 	@Test
 	public void testGetHelpLocation() {
 		HelpLocation helpLocation = new HelpLocation("topic", "anchor");
-		options.registerOption("Foo", 3, helpLocation, null);
+		options.registerOption("Foo", 3, helpLocation, "foo");
 		assertEquals(helpLocation, options.getHelpLocation("Foo"));
 	}
 
 	@Test
 	public void testRestoreOptionValue() {
 
-		options.registerOption("Foo", Color.RED, null, null);
+		options.registerOption("Foo", Color.RED, null, "foo");
 		options.setColor("Foo", Color.BLUE);
 		assertColorsEqual(Color.BLUE, options.getColor("Foo", null));
 
@@ -378,16 +411,16 @@ public class OptionsTest extends AbstractGuiTest {
 		assertTrue(!options.isRegistered("Bar"));
 
 		assertTrue(!options.isRegistered("aaa"));
-		options.registerOption("aaa", 3, null, null);
+		options.registerOption("aaa", 3, null, "foo");
 		assertTrue(options.isRegistered("aaa"));
 
 	}
 
 	@Test
 	public void testRestoreDefaults() {
-		options.registerOption("Foo", 10, null, null);
+		options.registerOption("Foo", 10, null, "foo");
 		options.setInt("Foo", 2);
-		options.registerOption("Bar", 100, null, null);
+		options.registerOption("Bar", 100, null, "foo");
 		options.setInt("Bar", 1);
 		options.restoreDefaultValues();
 		assertEquals(10, options.getInt("Foo", 0));
@@ -423,12 +456,133 @@ public class OptionsTest extends AbstractGuiTest {
 		assertTrue(options.contains("Foo"));
 		assertTrue(options.contains("Bar"));
 
-		options.registerOption("Bar", 0, null, null);
-
+		options.registerOption("Bar", 0, null, "Bar description");
 		options.removeUnusedOptions();
 
-		assertFalse(options.contains("Foo"));
+		// registered; should stay around
 		assertTrue(options.contains("Bar"));
+		// not registered, but not aged-off; should stay around
+		assertTrue(options.contains("Foo"));
+
+		// Save, edit the date of the options to be older than 1 year, which is our age cutoff. 
+		// Make sure any unregistered option is then removed.
+		Element savedRoot = options.getXmlRoot(false);
+		LocalDate twoYearsAgo = LocalDate.now().minusYears(2);
+		Set<String> optionNames = Set.of("Bar", "Foo");
+		setLastUsedDate(savedRoot, twoYearsAgo, optionNames);
+
+		options = new ToolOptions(savedRoot);
+		assertTrue(options.contains("Foo"));
+		assertTrue(options.contains("Bar"));
+
+		options.registerOption("Bar", 0, null, "Bar description");
+		options.removeUnusedOptions();
+
+		// registered; should stay around
+		assertTrue(options.contains("Bar"));
+		// not registered, and older than 1 year; should be removed
+		assertFalse(options.contains("Foo"));
+	}
+
+	@Test
+	public void testRemoveUnusedOption_WrappedOption() throws Exception {
+
+		Date date = new Date();
+		options.setDate("Foo", date);
+		options.setDate("Bar", date);
+		saveAndRestoreOptions();
+		assertEquals(date, options.getDate("Foo", null));
+		assertEquals(date, options.getDate("Bar", null));
+
+		Date defaultDate = new SimpleDateFormat("yyyy-MM-dd").parse("2025-09-12");
+
+		options.registerOption("Bar", defaultDate, null, "Bar description");
+		options.removeUnusedOptions();
+
+		// registered; should stay around
+		assertTrue(options.contains("Bar"));
+		// not registered, but not aged-off; should stay around
+		assertTrue(options.contains("Foo"));
+
+		// Save, edit the date of the options to be older than 1 year, which is our age cutoff. 
+		// Make sure any unregistered option is then removed.
+		Element savedRoot = options.getXmlRoot(false);
+		LocalDate twoYearsAgo = LocalDate.now().minusYears(2);
+		Set<String> optionNames = Set.of("Bar", "Foo");
+		setLastUsedDate(savedRoot, twoYearsAgo, optionNames);
+
+		options = new ToolOptions(savedRoot);
+		assertTrue(options.contains("Foo"));
+		assertTrue(options.contains("Bar"));
+
+		options.registerOption("Bar", defaultDate, null, "Bar description");
+		options.removeUnusedOptions();
+
+		// registered; should stay around
+		assertTrue(options.contains("Bar"));
+		// not registered, and older than 1 year; should be removed
+		assertFalse(options.contains("Foo"));
+	}
+
+	@Test
+	public void testUnregisteredWarningMessage() {
+
+		/*
+		 	Test that options access, but not registered, will trigger a warning message.   
+		 */
+
+		SpyErrorLogger spyLogger = new SpyErrorLogger();
+		Msg.setErrorLogger(spyLogger);
+
+		options.getInt("Foo", 1);
+		assertTrue(spyLogger.isEmtpy());
+
+		options.validateOptions();
+		spyLogger.assertLogMessage("Unregistered", "property", "Foo");
+
+		spyLogger.reset();
+		options.registerOption("Foo", 0, null, "Description");
+		options.getInt("Foo", 2);
+		options.validateOptions();
+		assertTrue(spyLogger.isEmtpy());
+	}
+
+	private void setLastUsedDate(Element savedRoot, LocalDate lastRegisteredDate,
+			Set<String> names) {
+
+		/*
+		 
+		 Msg.debug(this, XmlUtilities.toString(savedRoot));
+		
+			<CATEGORY NAME="Test">
+			    <SAVE_STATE NAME="Bar" TYPE="int" VALUE="3" LAST_REGISTERED="2025-09-17" />
+				<SAVE_STATE NAME="Bar" TYPE="boolean" VALUE="false" LAST_REGISTERED="2025-09-17" />
+			</CATEGORY> 
+		
+		 */
+
+		String dateString = lastRegisteredDate.format(ToolOptions.LAST_REGISTERED_DATE_FORMATTER);
+
+		List<Element> elements = getElementsByName(savedRoot, names);
+		for (Element element : elements) { // <SAVE_STATE NAME="Foo" ...>
+			element.setAttribute(ToolOptions.LAST_REGISTERED_DATE_ATTIBUTE, dateString);
+		}
+
+	}
+
+	@SuppressWarnings("unchecked")
+	private List<Element> getElementsByName(Element savedRoot, Set<String> names) {
+
+		List<Element> matches = new ArrayList<>();
+		List<Element> children = savedRoot.getChildren();
+		for (Element saveState : children) {
+			String name = saveState.getAttributeValue("NAME");
+			if (names.contains(name)) {
+				matches.add(saveState);
+			}
+		}
+
+		return matches;
 	}
 
 	@Test
@@ -527,7 +681,7 @@ public class OptionsTest extends AbstractGuiTest {
 
 	@Test
 	public void testGetDefaultValueAsString() {
-		options.registerOption("foo", 7, null, null);
+		options.registerOption("foo", 7, null, "foo");
 		options.setInt("foo", 5);
 		assertEquals("7", options.getDefaultValueAsString("foo"));
 		assertNull(options.getDefaultValueAsString("bar"));
@@ -536,7 +690,7 @@ public class OptionsTest extends AbstractGuiTest {
 	@Test
 	public void testResgisteringOptionWithNullValue() {
 		try {
-			options.registerOption("Foo", null, null, null);
+			options.registerOption("Foo", null, null, "foo");
 			Assert.fail("Should not be able to register an options with a default value");
 		}
 		catch (IllegalArgumentException e) {
@@ -547,7 +701,7 @@ public class OptionsTest extends AbstractGuiTest {
 	@Test
 	public void testRegisteringOptionWithUnsupportedType() {
 		try {
-			options.registerOption("Foo", new ArrayList<String>(), null, null);
+			options.registerOption("Foo", new ArrayList<String>(), null, "foo");
 			Assert.fail(
 				"Should not be able to register an options with an ArrayList as a default value");
 		}
@@ -559,7 +713,7 @@ public class OptionsTest extends AbstractGuiTest {
 	@Test
 	public void testRegisteringOptionWithTypeNone() {
 		try {
-			options.registerOption("Foo", OptionType.NO_TYPE, null, null, null);
+			options.registerOption("Foo", OptionType.NO_TYPE, null, null, "foo");
 			Assert.fail("Should not be able to register an options of type NONE");
 		}
 		catch (IllegalArgumentException e) {
@@ -570,10 +724,10 @@ public class OptionsTest extends AbstractGuiTest {
 	@Test
 	public void testRegisteringOptionsEditor() {
 		MyOptionsEditor myOptionsEditor = new MyOptionsEditor();
-		options.registerOptionsEditor(myOptionsEditor);
+		options.registerOptionsEditor(() -> myOptionsEditor);
 		assertEquals(myOptionsEditor, options.getOptionsEditor());
 		Options subOptions = options.getOptions("SUB");
-		subOptions.registerOptionsEditor(myOptionsEditor);
+		subOptions.registerOptionsEditor(() -> myOptionsEditor);
 		assertEquals(myOptionsEditor, subOptions.getOptionsEditor());
 
 	}
@@ -634,7 +788,7 @@ public class OptionsTest extends AbstractGuiTest {
 		int value;
 
 		@SuppressWarnings("unused")
-		MyCustomOption() {
+		public MyCustomOption() {
 			// used by reflection
 		}
 
@@ -643,13 +797,13 @@ public class OptionsTest extends AbstractGuiTest {
 		}
 
 		@Override
-		public void readState(SaveState saveState) {
-			value = saveState.getInt("VALUE", 0);
+		public void readState(GProperties properties) {
+			value = properties.getInt("VALUE", 0);
 		}
 
 		@Override
-		public void writeState(SaveState saveState) {
-			saveState.putInt("VALUE", value);
+		public void writeState(GProperties properties) {
+			properties.putInt("VALUE", value);
 		}
 
 		@Override
@@ -663,6 +817,11 @@ public class OptionsTest extends AbstractGuiTest {
 		@Override
 		public int hashCode() {
 			return 0;
+		}
+
+		@Override
+		public String toString() {
+			return "MyCustomOption[value=%s]".formatted(value);
 		}
 	}
 

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,10 +21,12 @@ import java.util.List;
 
 import db.*;
 import db.util.ErrorHandler;
+import generic.stl.Pair;
 import ghidra.program.database.map.AddressKeyRecordIterator;
 import ghidra.program.database.map.AddressMap;
 import ghidra.program.model.address.*;
 import ghidra.util.Lock;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.Msg;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
@@ -38,9 +40,9 @@ import ghidra.util.task.TaskMonitor;
  * <P>
  * This is implemented by storing records for each contiguous range with the same value.
  * <ul>
- * 		<li>The key is the encoded start address of the range.
- * 		<li>The TO_COL column of the record stores the encoded end address of the range.
- * 		<li>The VALUE_COL column of the record stores the value for the range.
+ * 		<li>The key is the encoded start address of the range.</li>
+ * 		<li>The TO_COL column of the record stores the encoded end address of the range.</li>
+ * 		<li>The VALUE_COL column of the record stores the value for the range.</li>
  * </ul>
  * <P>
  * This implementation is complicated by several issues. 
@@ -50,7 +52,7 @@ import ghidra.util.task.TaskMonitor;
  * 		  Encoded addresses do not necessarily encode to keys that have the same ordering. 
  * 	      Therefore, all comparisons must be done in address space and not in the encoded space.
  * 		  Also, record iterators must use the {@link AddressKeyRecordIterator} which will return
- * 		  records in address order versus encoded key order.
+ * 		  records in address order versus encoded key order.</li>
  *     <li>The default space's image base can be changed after records have been created. This can
  *        cause the address ranges represented by a record to wrap around. For example, suppose
  *        the image base is 0 and you paint a range from address 0 to 0x20, which say maps to
@@ -65,7 +67,8 @@ import ghidra.util.task.TaskMonitor;
  *        logic, any wrapping record will first be split into two records before painting. However
  *        we can only do this during a write operation (when we can make changes). Since the getter
  *        methods and iterators cannot modify the database, they have to deal with wrapping
- *        records on the fly.
+ *        records on the fly.</li>
+ * </ol>
  */
 public class AddressRangeMapDB implements DBListener {
 	public static final String RANGE_MAP_TABLE_PREFIX = "Range Map - ";
@@ -85,9 +88,8 @@ public class AddressRangeMapDB implements DBListener {
 	private Schema rangeMapSchema;
 	private Table rangeMapTable;
 
-	// caching
-	private Field lastValue;
-	private AddressRange lastRange;
+	// caching, single value, so safer to check
+	private Pair<AddressRange, Field> lastValue;
 
 	private int modCount;
 
@@ -104,7 +106,7 @@ public class AddressRangeMapDB implements DBListener {
 	 * @param errHandler database error handler
 	 * @param valueField specifies the type for the values stored in this map
 	 * @param indexed if true, values will be indexed allowing use of the 
-	 * getValueRangeIterator method
+	 * {@link AddressRangeMapDB#getAddressSet(Field)} method.
 	 */
 	public AddressRangeMapDB(DBHandle dbHandle, AddressMap addressMap, Lock lock, String name,
 			ErrorHandler errHandler, Field valueField, boolean indexed) {
@@ -136,12 +138,14 @@ public class AddressRangeMapDB implements DBListener {
 	 * @throws DuplicateNameException if there is already range map with that name
 	 */
 	public boolean setName(String newName) throws DuplicateNameException {
-		String newTableName = RANGE_MAP_TABLE_PREFIX + newName;
-		if (rangeMapTable == null || rangeMapTable.setName(newTableName)) {
-			tableName = newTableName;
-			return true;
+		try (Closeable c = lock.write()) {
+			String newTableName = RANGE_MAP_TABLE_PREFIX + newName;
+			if (rangeMapTable == null || rangeMapTable.setName(newTableName)) {
+				tableName = newTableName;
+				return true;
+			}
+			return false;
 		}
-		return false;
 	}
 
 	/**
@@ -149,13 +153,8 @@ public class AddressRangeMapDB implements DBListener {
 	 * @return true if this map is empty
 	 */
 	public boolean isEmpty() {
-		lock.acquire();
-		try {
-			return rangeMapTable == null || rangeMapTable.getRecordCount() == 0;
-		}
-		finally {
-			lock.release();
-		}
+		Table localTable = rangeMapTable;
+		return localTable == null || localTable.getRecordCount() == 0;
 	}
 
 	/**
@@ -165,7 +164,8 @@ public class AddressRangeMapDB implements DBListener {
 	 * @return record count
 	 */
 	public int getRecordCount() {
-		return rangeMapTable != null ? rangeMapTable.getRecordCount() : 0;
+		Table localTable = rangeMapTable;
+		return localTable == null ? 0 : localTable.getRecordCount();
 	}
 
 	/**
@@ -174,31 +174,30 @@ public class AddressRangeMapDB implements DBListener {
 	 * @return value or null no value exists
 	 */
 	public Field getValue(Address address) {
-		lock.acquire();
-		try {
+		if (isEmpty()) {
+			return null;
+		}
+		// check last cached range
+		Pair<AddressRange, Field> localValue = lastValue;
+		if (localValue != null && localValue.first.contains(address)) {
+			return localValue.second;
+		}
+		try (Closeable c = lock.read()) {
 			if (rangeMapTable == null) {
 				return null;
 			}
-			// check last cached range
-			if (lastRange != null && lastRange.contains(address)) {
-				return lastValue;
-			}
-
 			DBRecord record = findRecordContaining(address);
 			List<AddressRange> ranges = getRangesForRecord(record);
 			for (AddressRange range : ranges) {
 				if (range.contains(address)) {
-					lastRange = range;
-					lastValue = record.getFieldValue(VALUE_COL);
-					return lastValue;
+					Field fieldValue = record.getFieldValue(VALUE_COL);
+					lastValue = new Pair<AddressRange, Field>(range, fieldValue);
+					return fieldValue;
 				}
 			}
 		}
 		catch (IOException e) {
 			errHandler.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return null;
 	}
@@ -214,31 +213,24 @@ public class AddressRangeMapDB implements DBListener {
 	 * @throws IllegalArgumentException if the end address is greater then the start address
 	 */
 	public void paintRange(Address startAddress, Address endAddress, Field value) {
-		if (!startAddress.hasSameAddressSpace(endAddress)) {
-			throw new IllegalArgumentException("Addresses must be in the same space!");
+		if (value == null && isEmpty()) {
+			return;
 		}
-		if (startAddress.compareTo(endAddress) > 0) {
-			throw new IllegalArgumentException("Start address must be <= end address!");
-		}
-
-		lock.acquire();
-		try {
+		AddressRange.checkValidRange(startAddress, endAddress);
+		try (Closeable c = lock.write()) {
+			if (value == null && rangeMapTable == null) {
+				return;
+			}
 			clearCache();
 			++modCount;
 
 			if (rangeMapTable == null) {
-				if (value == null) {
-					return;
-				}
 				createTable();
 			}
 			doPaintRange(startAddress, endAddress, value);
 		}
 		catch (IOException e) {
 			errHandler.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -252,14 +244,16 @@ public class AddressRangeMapDB implements DBListener {
 	 */
 	public void moveAddressRange(Address fromAddr, Address toAddr, long length, TaskMonitor monitor)
 			throws CancelledException {
-		if (length <= 0 || rangeMapTable == null) {
+		if (length <= 0 || isEmpty()) {
 			return;
 		}
 
 		DBHandle tmpDb = null;
 		AddressRangeMapDB tmpMap = null;
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
+			if (rangeMapTable == null) {
+				return;
+			}
 			tmpDb = dbHandle.getScratchPad();
 			tmpMap = new AddressRangeMapDB(tmpDb, addressMap, lock, "TEMP", errHandler, valueField,
 				indexed);
@@ -298,7 +292,6 @@ public class AddressRangeMapDB implements DBListener {
 					// ignore
 				}
 			}
-			lock.release();
 		}
 	}
 
@@ -316,32 +309,38 @@ public class AddressRangeMapDB implements DBListener {
 	 * @return set of addresses where a values has been set
 	 */
 	public AddressSet getAddressSet() {
-		lock.acquire();
-		try {
-			AddressSet set = new AddressSet();
+		AddressSet set = new AddressSet();
+		if (isEmpty()) {
+			return set;
+		}
+		try (Closeable c = lock.read()) {
+			if (rangeMapTable == null) {
+				return set;
+			}
 			AddressRangeIterator addressRanges = getAddressRanges();
 			for (AddressRange addressRange : addressRanges) {
 				set.add(addressRange);
 			}
 			return set;
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	/**
-	 * Returns set of addresses where the given value has been set
+	 * Returns set of addresses where the given value has been set.
+	 * This method may only be invoked on indexed {@link AddressRangeMapDB}s!
 	 * @param value the value to search for
 	 * @return set of addresses where the given value has been set
 	 */
 	public AddressSet getAddressSet(Field value) {
 		AddressSet set = new AddressSet();
-		if (rangeMapTable == null) {
+		if (isEmpty()) {
 			return set;
 		}
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
+			if (rangeMapTable == null) {
+				return set;
+			}
+
 			RecordIterator it = rangeMapTable.indexIterator(VALUE_COL, value, value, true);
 			while (it.hasNext()) {
 				DBRecord record = it.next();
@@ -352,9 +351,6 @@ public class AddressRangeMapDB implements DBListener {
 		catch (IOException e) {
 			dbError(e);
 		}
-		finally {
-			lock.release();
-		}
 		return set;
 	}
 
@@ -363,7 +359,7 @@ public class AddressRangeMapDB implements DBListener {
 	 * @return AddressRangeIterator that iterates over all occupied ranges in the map
 	 */
 	public AddressRangeIterator getAddressRanges() {
-		if (rangeMapTable == null) {
+		if (isEmpty()) {
 			return new EmptyAddressRangeIterator();
 		}
 		try {
@@ -383,7 +379,7 @@ public class AddressRangeMapDB implements DBListener {
 	 * given start address
 	 */
 	public AddressRangeIterator getAddressRanges(Address startAddress) {
-		if (rangeMapTable == null) {
+		if (isEmpty()) {
 			return new EmptyAddressRangeIterator();
 		}
 		try {
@@ -404,7 +400,7 @@ public class AddressRangeMapDB implements DBListener {
 	 * given start address
 	 */
 	public AddressRangeIterator getAddressRanges(Address startAddress, Address endAddr) {
-		if (rangeMapTable == null) {
+		if (isEmpty()) {
 			return new EmptyAddressRangeIterator();
 		}
 		try {
@@ -418,13 +414,9 @@ public class AddressRangeMapDB implements DBListener {
 
 	@Override
 	public void dbRestored(DBHandle dbh) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			clearCache();
 			findTable();
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -436,13 +428,9 @@ public class AddressRangeMapDB implements DBListener {
 	@Override
 	public void tableDeleted(DBHandle dbh, Table table) {
 		if (table == rangeMapTable) {
-			lock.acquire();
-			try {
+			try (Closeable c = lock.write()) {
 				clearCache();
 				rangeMapTable = null;
-			}
-			finally {
-				lock.release();
 			}
 		}
 	}
@@ -458,8 +446,7 @@ public class AddressRangeMapDB implements DBListener {
 	 * Deletes the database table used to store this range map.
 	 */
 	public void dispose() {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			if (rangeMapTable != null) {
 				try {
 					dbHandle.deleteTable(tableName);
@@ -471,23 +458,16 @@ public class AddressRangeMapDB implements DBListener {
 				rangeMapTable = null;
 			}
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	/**
-	 * Notification that that something may have changed (undo/redo/image base change) and we need
+	 * Notification that something may have changed (undo/redo/image base change) and we need
 	 * to invalidate our cache and possibly have a wrapping record again.
 	 */
 	public void invalidate() {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.write()) {
 			clearCache();
 			alreadyCheckedForWrappingRecord = false;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -498,14 +478,12 @@ public class AddressRangeMapDB implements DBListener {
 	 * @return an address range that contains the given address and has all the same value
 	 */
 	public AddressRange getAddressRangeContaining(Address address) {
-
-		lock.acquire();
-		try {
-			// check cache
-			if (lastRange != null && lastRange.contains(address)) {
-				return lastRange;
-			}
-
+		// check cache
+		Pair<AddressRange, Field> localValue = lastValue;
+		if (localValue != null && localValue.first.contains(address)) {
+			return localValue.first;
+		}
+		try (Closeable c = lock.read()) {
 			// look for a stored value range that contains that address
 			AddressRange range = findValueRangeContainingAddress(address);
 			if (range == null) {
@@ -518,9 +496,6 @@ public class AddressRangeMapDB implements DBListener {
 			dbError(e);
 			return null;
 		}
-		finally {
-			lock.release();
-		}
 	}
 
 	private AddressRange findValueRangeContainingAddress(Address address) throws IOException {
@@ -528,8 +503,8 @@ public class AddressRangeMapDB implements DBListener {
 		List<AddressRange> rangesForRecord = getRangesForRecord(record);
 		for (AddressRange range : rangesForRecord) {
 			if (range.contains(address)) {
-				lastRange = range;
-				lastValue = record.getFieldValue(VALUE_COL);
+				Field fieldValue = record.getFieldValue(VALUE_COL);
+				lastValue = new Pair<AddressRange, Field>(range, fieldValue);
 				return range;
 			}
 		}
@@ -566,8 +541,7 @@ public class AddressRangeMapDB implements DBListener {
 		record = getRecordAfter(address);
 		if (record != null) {
 			Address startAddress = getStartAddress(record);
-			if (startAddress.hasSameAddressSpace(address) &&
-				startAddress.compareTo(address) > 0) {
+			if (startAddress.hasSameAddressSpace(address) && startAddress.compareTo(address) > 0) {
 				gapEnd = startAddress.subtract(1);
 			}
 		}
@@ -793,14 +767,7 @@ public class AddressRangeMapDB implements DBListener {
 	 * Clears the "last range" cache
 	 */
 	private void clearCache() {
-		lock.acquire();
-		try {
-			lastRange = null;
-			lastValue = null;
-		}
-		finally {
-			lock.release();
-		}
+		lastValue = null;
 	}
 
 	DBRecord getAddressWrappingRecord() throws IOException {

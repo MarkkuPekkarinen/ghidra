@@ -4,18 +4,16 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/**
- * 
- */
+
 package ghidra.framework.main;
 
 import static org.junit.Assert.*;
@@ -23,19 +21,20 @@ import static org.junit.Assert.*;
 import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.UnknownHostException;
 
 import javax.swing.*;
 
 import docking.action.DockingActionIf;
 import docking.test.AbstractDockingTest;
-import docking.wizard.WizardManager;
+import docking.wizard.WizardDialog;
 import generic.test.AbstractGTest;
 import generic.test.AbstractGuiTest;
 import ghidra.framework.client.*;
+import ghidra.framework.main.wizard.project.*;
 import ghidra.framework.model.*;
 import ghidra.server.remote.ServerTestUtil;
 import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
+import ghidra.util.Msg;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.UserAccessException;
 import utilities.util.FileUtilities;
@@ -47,24 +46,17 @@ import utilities.util.FileUtilities;
 public class SharedProjectUtil {
 
 	public static final int SERVER_PORT = ServerTestUtil.GHIDRA_TEST_SERVER_PORT;
-	public static String LOCALHOST = createLocalhostString();
-	private static final String USER = ClientUtil.getUserName();
+	public static String LOCALHOST = ServerTestUtil.LOCALHOST;
+	public static final String USER = ClientUtil.getUserName();
+	
 	private static File serverRoot;
 	private static RepositoryServerAdapter repositoryServer;
-
-	private static String createLocalhostString() {
-		try {
-			return InetAddress.getLocalHost().getHostName();
-		}
-		catch (UnknownHostException e) {
-			return "127.0.0.1";
-		}
-	}
 
 	public static boolean createSharedProject(FrontEndTool frontEndTool, final String projectName)
 			throws Exception {
 		// create shared project against existing repository
-		System.err.println("SharedProjectUtil.createSharedProject(): " + projectName);
+		Msg.info(SharedProjectUtil.class,
+			"SharedProjectUtil.createSharedProject(): " + projectName);
 
 		UtilProjectListener projectListener = new UtilProjectListener();
 		frontEndTool.addProjectListener(projectListener);
@@ -73,7 +65,7 @@ public class SharedProjectUtil {
 		AbstractDockingTest.performAction(action, false);
 		AbstractGuiTest.waitForSwing();
 
-		WizardManager wm = AbstractDockingTest.waitForDialogComponent(WizardManager.class);
+		WizardDialog wm = AbstractDockingTest.waitForDialogComponent(WizardDialog.class);
 
 		ProjectTypePanel typePanel = AbstractDockingTest.findComponent(wm, ProjectTypePanel.class);
 		final JRadioButton rb =
@@ -126,17 +118,12 @@ public class SharedProjectUtil {
 			projNameField.setText(projectName);
 		});
 
-		if (!finishButton.isEnabled()) {
-			String statusMessage = projPanel.getStatusMessage();
-			System.err.println(
-				"Finish button is unexectedly disabled!!\n\t" + "Status message: " + statusMessage);
-			return false;
-		}
+		assertTrue("Finish button is unexpectedly disabled", finishButton.isEnabled());
 
 		AbstractGuiTest.pressButton(finishButton, true);
 		AbstractGuiTest.waitForSwing();
 		boolean didOpen = waitForProjectToOpen(projectName, projectListener);
-		System.err.println("\tdid the project get opened?: " + didOpen);
+		Msg.info(SharedProjectUtil.class, "\tdid the project get opened?: " + didOpen);
 		return didOpen;
 	}
 
@@ -154,7 +141,8 @@ public class SharedProjectUtil {
 		AbstractGuiTest.waitForSwing();
 		boolean success = desiredProjectName.equals(lastOpenedProjectName);
 		if (!success) {
-			System.err.println("\tOpen windows: " + AbstractDockingTest.getOpenWindowsAsString());
+			Msg.info(SharedProjectUtil.class,
+				"\tOpen windows: " + AbstractDockingTest.getOpenWindowsAsString());
 		}
 
 		return success;
@@ -173,14 +161,14 @@ public class SharedProjectUtil {
 				Thread.sleep(50);
 			}
 			catch (InterruptedException e) {
-				e.printStackTrace();
+				Msg.error(SharedProjectUtil.class, e, e);
 			}
 
 			AbstractGhidraHeadlessIntegrationTest.deleteProject(projectDirectory.getAbsolutePath(),
 				projectName);
 		}
 		if (count > 500) {
-			System.err.println("Could not delete " + projectName);
+			Msg.warn(SharedProjectUtil.class, "Could not delete " + projectName);
 			return false;
 		}
 		return true;
@@ -198,7 +186,7 @@ public class SharedProjectUtil {
 	 * @throws Exception if there are any exceptions starting the server
 	 */
 	public static RepositoryAdapter startServer() throws Exception {
-		System.err.println("SharedProjectUtil.startServer()...");
+		Msg.info(SharedProjectUtil.class, "SharedProjectUtil.startServer()...");
 		repositoryServer = null;
 		File parent = new File(AbstractGTest.getTestDirectoryPath());
 
@@ -206,16 +194,19 @@ public class SharedProjectUtil {
 		serverRoot = new File(parent, "My_Server");
 		FileUtilities.deleteDir(serverRoot);
 
-		System.err.println("SharedProjectUtil.startServer()\tgetting server adapter...");
+		Msg.info(SharedProjectUtil.class,
+			"SharedProjectUtil.startServer()\tgetting server adapter...");
 		repositoryServer = ServerTestUtil.getServerAdapter(serverRoot, new String[] { USER });
 
-		System.err.println("SharedProjectUtil.startServer()\tchecking connection...");
+		Msg.info(SharedProjectUtil.class,
+			"SharedProjectUtil.startServer()\tchecking connection...");
 		if (repositoryServer == null || !repositoryServer.isConnected()) {
 			deleteServerRoot();
 			fail("Server connect failed");
 		}
 
-		System.err.println("SharedProjectUtil.startServer()\tcreating repository...");
+		Msg.info(SharedProjectUtil.class,
+			"SharedProjectUtil.startServer()\tcreating repository...");
 		return repositoryServer.createRepository("My_Repository");
 	}
 
@@ -249,12 +240,14 @@ public class SharedProjectUtil {
 
 		@Override
 		public void projectClosed(Project project) {
-			System.err.println(getClass().getSimpleName() + ".projectClosed(): " + project);
+			Msg.info(UtilProjectListener.class,
+				getClass().getSimpleName() + ".projectClosed(): " + project);
 		}
 
 		@Override
 		public void projectOpened(Project project) {
-			System.err.println(getClass().getSimpleName() + ".projectOpened(): " + project);
+			Msg.info(UtilProjectListener.class,
+				getClass().getSimpleName() + ".projectOpened(): " + project);
 			lastOpenedProjectName = project.getName();
 		}
 

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,7 @@
 package ghidra.framework.model;
 
 import java.io.IOException;
+import java.net.URL;
 import java.util.List;
 
 import ghidra.framework.client.RepositoryAdapter;
@@ -42,6 +43,12 @@ public class TestDummyProjectData implements ProjectData {
 	@Override
 	public DomainFolder getFolder(String path) {
 		// stub
+		return getFolder(path, DomainFolderFilter.ALL_INTERNAL_FOLDERS_FILTER);
+	}
+
+	@Override
+	public DomainFolder getFolder(String path, DomainFolderFilter filter) {
+		// stub
 		return null;
 	}
 
@@ -53,6 +60,12 @@ public class TestDummyProjectData implements ProjectData {
 
 	@Override
 	public DomainFile getFile(String path) {
+		// stub
+		return getFile(path, DomainFileFilter.ALL_INTERNAL_FILES_FILTER);
+	}
+
+	@Override
+	public DomainFile getFile(String path, DomainFileFilter filter) {
 		// stub
 		return null;
 	}
@@ -96,6 +109,18 @@ public class TestDummyProjectData implements ProjectData {
 	}
 
 	@Override
+	public URL getSharedProjectURL() {
+		// stub
+		return null;
+	}
+
+	@Override
+	public URL getLocalProjectURL() {
+		// stub
+		return null;
+	}
+
+	@Override
 	public void addDomainFolderChangeListener(DomainFolderChangeListener listener) {
 		// stub
 	}
@@ -106,7 +131,7 @@ public class TestDummyProjectData implements ProjectData {
 	}
 
 	@Override
-	public void refresh(boolean force) throws IOException {
+	public void refresh(boolean force) {
 		// stub
 	}
 

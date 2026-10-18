@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 
+import ghidra.framework.data.OpenMode;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.model.address.Address;
@@ -99,7 +100,7 @@ public class StubFunctionManager implements FunctionManager {
 	}
 
 	@Override
-	public FunctionIterator getFunctions(Address start, boolean foward) {
+	public FunctionIterator getFunctions(Address start, boolean forward) {
 		throw new UnsupportedOperationException();
 	}
 
@@ -114,7 +115,7 @@ public class StubFunctionManager implements FunctionManager {
 	}
 
 	@Override
-	public FunctionIterator getFunctionsNoStubs(Address start, boolean foward) {
+	public FunctionIterator getFunctionsNoStubs(Address start, boolean forward) {
 		throw new UnsupportedOperationException();
 	}
 
@@ -146,12 +147,12 @@ public class StubFunctionManager implements FunctionManager {
 	}
 
 	@Override
-	public void setProgram(ProgramDB program) {
+	public void setDomainObject(ProgramDB program) {
 		throw new UnsupportedOperationException();
 	}
 
 	@Override
-	public void programReady(int openMode, int currentRevision, TaskMonitor monitor)
+	public void domainObjectReady(OpenMode openMode, int currentRevision, TaskMonitor monitor)
 			throws IOException, CancelledException {
 		throw new UnsupportedOperationException();
 	}

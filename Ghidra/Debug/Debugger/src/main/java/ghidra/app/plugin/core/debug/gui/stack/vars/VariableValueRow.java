@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,20 +15,17 @@
  */
 package ghidra.app.plugin.core.debug.gui.stack.vars;
 
-import static ghidra.app.plugin.core.debug.gui.stack.vars.VariableValueRow.*;
-
 import java.nio.ByteBuffer;
-import java.util.List;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import generic.theme.GColor;
 import generic.theme.GThemeDefaults.Colors;
-import ghidra.app.plugin.core.debug.stack.UnwoundFrame;
+import ghidra.app.plugin.core.debug.stack.*;
 import ghidra.pcode.exec.DebuggerPcodeUtils.PrettyBytes;
 import ghidra.pcode.exec.DebuggerPcodeUtils.WatchValue;
 import ghidra.pcode.exec.ValueLocation;
 import ghidra.program.model.address.AddressRange;
+import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.lang.Language;
 import ghidra.program.model.listing.*;
@@ -37,9 +34,9 @@ import ghidra.program.model.pcode.Varnode;
 import ghidra.trace.model.Trace;
 import ghidra.trace.model.guest.TracePlatform;
 import ghidra.trace.model.listing.TraceCodeUnit;
-import ghidra.trace.model.memory.*;
-import ghidra.trace.util.TraceAddressSpace;
+import ghidra.trace.model.memory.TraceMemoryState;
 import ghidra.util.HTMLUtilities;
+import ghidra.util.Msg;
 import ghidra.util.exception.InvalidInputException;
 
 /**
@@ -61,7 +58,8 @@ public interface VariableValueRow {
 	 * @return the HTML-styled string
 	 */
 	static String styleSimple(Object obj) {
-		return obj == null ? htmlFg(COLOR_ERROR, "None") : HTMLUtilities.escapeHTML(obj.toString());
+		return obj == null ? htmlFg(COLOR_ERROR, "None")
+				: HTMLUtilities.escapeHTML(obj.toString()).replace("\n", "<br>");
 	}
 
 	/**
@@ -138,7 +136,7 @@ public interface VariableValueRow {
 	/**
 	 * Render the key for display in diagnostics
 	 * 
-	 * @return the the key as a string
+	 * @return the key as a string
 	 */
 	default String keyToSimpleString() {
 		return key().toString();
@@ -366,17 +364,9 @@ public interface VariableValueRow {
 	 * @param snap the snapshot key
 	 * @return the composite state
 	 */
-	static TraceMemoryState computeState(Trace trace, TraceAddressSpace space, AddressRange range,
+	static TraceMemoryState computeState(Trace trace, AddressSpace space, AddressRange range,
 			long snap) {
-		TraceMemoryManager mem = trace.getMemoryManager();
-		TraceMemoryOperations ops;
-		if (space != null && space.getAddressSpace().isRegisterSpace()) {
-			ops = mem.getMemoryRegisterSpace(space.getThread(), space.getFrameLevel(), false);
-		}
-		else {
-			ops = mem;
-		}
-		return ops != null && ops.isKnown(snap, range)
+		return trace.getMemoryManager().isKnown(snap, range)
 				? TraceMemoryState.KNOWN
 				: TraceMemoryState.UNKNOWN;
 	}
@@ -387,10 +377,11 @@ public interface VariableValueRow {
 	 * @param unit the code unit
 	 * @param snap the snapshot key
 	 * @return the composite state.
-	 * @see #computeState(Trace, TraceAddressSpace, AddressRange, long)
+	 * @see #computeState(Trace, AddressSpace, AddressRange, long)
 	 */
 	static TraceMemoryState computeState(TraceCodeUnit unit, long snap) {
-		return computeState(unit.getTrace(), unit.getTraceSpace(), unit.getRange(), snap);
+		return computeState(unit.getTrace(), unit.getAddress().getAddressSpace(), unit.getRange(),
+			snap);
 	}
 
 	/**
@@ -566,19 +557,7 @@ public interface VariableValueRow {
 	 * A row to display the warnings encountered while unwinding the frame used to evaluate the
 	 * variable
 	 */
-	record WarningsRow(String warnings) implements VariableValueRow {
-		/**
-		 * Create a row from the given list of warnings
-		 * 
-		 * @param warnings the warnings
-		 */
-		public WarningsRow(List<String> warnings) {
-			this(warnings.stream()
-					.map(String::trim)
-					.filter(w -> !w.isBlank())
-					.collect(Collectors.joining("\n")));
-		}
-
+	record WarningsRow(StackUnwindWarningSet warnings) implements VariableValueRow {
 		@Override
 		public RowKey key() {
 			return RowKey.WARNINGS;
@@ -591,8 +570,8 @@ public interface VariableValueRow {
 
 		@Override
 		public String valueToHtml() {
-			String[] split = warnings.split("\n");
-			String formatted = Stream.of(split)
+			String formatted = warnings.summarize()
+					.stream()
 					.map(w -> String.format("<li>%s</li>", HTMLUtilities.escapeHTML(w)))
 					.collect(Collectors.joining("\n  "));
 			return String.format("""
@@ -604,16 +583,21 @@ public interface VariableValueRow {
 
 		@Override
 		public String valueToSimpleString() {
-			return warnings;
+			return warnings.summarize().stream().collect(Collectors.joining("\n"));
 		}
 
 		@Override
 		public String toHtml() {
-			if (warnings.isBlank()) {
+			if (warnings.isEmpty()) {
 				return "";
 			}
 			return String.format("<tr><td valign='top'><b>%s</b></td><td>%s</td></tr>",
 				keyToHtml(), valueToHtml());
+		}
+
+		@Override
+		public void reportDetails() {
+			warnings.reportDetails();
 		}
 	}
 
@@ -633,11 +617,17 @@ public interface VariableValueRow {
 
 		@Override
 		public String valueToHtml() {
+			if (error instanceof EvaluationException || error instanceof UnwindException) {
+				return styleSimple(error.getMessage());
+			}
 			return styleSimple(error);
 		}
 
 		@Override
 		public String valueToSimpleString() {
+			if (error instanceof EvaluationException || error instanceof UnwindException) {
+				return error.getMessage();
+			}
 			return error.toString();
 		}
 
@@ -646,5 +636,13 @@ public interface VariableValueRow {
 			return String.format("<tr><td valign='top'><b>%s</b></td><td>%s</td></tr>",
 				keyToHtml(), valueToHtml());
 		}
+
+		@Override
+		public void reportDetails() {
+			Msg.showError(this, null, "Details", error.getMessage(), error);
+		}
+	}
+
+	default void reportDetails() {
 	}
 }

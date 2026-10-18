@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -102,7 +102,7 @@ public class AutocompletingStringConstraintEditor extends DataLoadingConstraintE
 
 	@Override
 	public void columnDataLoadComplete() {
-		// do nothing
+		autocompleter.loadComplete();
 	}
 
 	@Override
@@ -134,27 +134,40 @@ public class AutocompletingStringConstraintEditor extends DataLoadingConstraintE
 	private class AutocompleteDataModel implements DropDownTextFieldDataModel<String> {
 
 		private final Set<String> dataSet = new HashSet<>();
+		private final List<String> dataList = new ArrayList<>();
 		private StringColumnConstraint lastConstraint;
 
 		@Override
 		public List<String> getMatchingData(String searchText) {
-			if (StringUtils.isBlank(searchText) || !isValidPatternString(searchText)) {
+			if (!isValidPatternString(searchText)) {
 				return Collections.emptyList();
 			}
+
+			if (StringUtils.isBlank(searchText)) {
+				// full data display not supported, as we don't know how big the data may be
+				return Collections.emptyList();
+			}
+
 			searchText = searchText.trim();
 			lastConstraint = (StringColumnConstraint) currentConstraint
 					.parseConstraintValue(searchText, columnDataSource.getTableDataSource());
 
+			// @formatter:off
+			return dataList.stream()
+					.filter(k -> lastConstraint.accepts(k, null))
+					.collect(Collectors.toList());
+			// @formatter:on
+		}
+
+		public void loadComplete() {
+
+			dataList.addAll(dataSet);
+			dataSet.clear();
+
 			// Use a Collator to support languages other than English.
 			Collator collator = Collator.getInstance();
 			collator.setStrength(Collator.SECONDARY);
-
-			// @formatter:off
-			return dataSet.stream()
-					.filter(k -> lastConstraint.accepts(k, null))
-					.sorted( (k1, k2) -> collator.compare(k1,  k2))
-					.collect(Collectors.toList());
-			// @formatter:on
+			Collections.sort(dataList, (k1, k2) -> collator.compare(k1, k2));
 		}
 
 		private boolean isValidPatternString(String searchText) {
@@ -182,7 +195,7 @@ public class AutocompletingStringConstraintEditor extends DataLoadingConstraintE
 			return value;
 		}
 
-		public void collect(String value) {
+		void collect(String value) {
 			if (value == null) {
 				return;
 			}
@@ -190,13 +203,12 @@ public class AutocompletingStringConstraintEditor extends DataLoadingConstraintE
 		}
 
 		public void loadCancelled() {
-			//	reset();
+			reset();
 		}
 
 		public void clear() {
 			dataSet.clear();
 		}
-
 	}
 
 	/**

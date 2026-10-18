@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -101,6 +101,35 @@ Address::Address(mach_extreme ex)
   }
 }
 
+/// If there is a register container of the given region print a description of the region
+/// using the register name.  Otherwise just print region as an address.
+/// Return the size of the register or the \e expected size for the region.
+/// \param s is the stream to print to
+/// \param size is the number of bytes in the region
+/// \return the size of the expected size
+int4 Address::printRaw(ostream &s,int4 size) const
+
+{
+  const Translate *trans = base->getTrans();
+  int4 expect;
+
+  string name = trans->getRegisterName(base, offset, size);
+  if (name.size() != 0) {
+    const VarnodeData &point(trans->getRegister(name));
+    uintb off = offset - point.offset;
+    s << name;
+    expect = point.size;
+    if (off != 0)
+      s << '+' << dec << off;
+  }
+  else {
+    s << base->getShortcut();
+    expect = trans->getDefaultSize();
+    base->printRaw(s,offset);
+  }
+  return expect;
+}
+
 /// Return \b true if the range starting at \b this extending the given number of bytes
 /// is contained by the second given range.
 /// \param sz is the given number of bytes in \b this range
@@ -185,12 +214,21 @@ bool Address::isContiguous(int4 sz,const Address &loaddr,int4 losz) const
   return false;
 }
 
+/// If pointers are possible anywhere within the \b size byte region return \b true, \b false otherwise.
+/// \param size is the number bytes in the region
+/// \return \b true if pointers into the region are possible
+bool Address::highPtrPossible(int4 size) const
+
+{
+  return base->manage->highPtrPossible(*this, size);
+}
+
 /// If \b this is (originally) a \e join address, reevaluate it in terms of its new
 /// \e offset and \e size, changing the space and offset if necessary.
 /// \param size is the new size in bytes of the underlying object
 void Address::renormalize(int4 size) {
   if (base->getType() == IPTR_JOIN)
-    base->getManager()->renormalizeJoinAddress(*this,size);
+    base->manage->renormalizeJoinAddress(*this,size);
 }
 
 /// This is usually used to decode an address from an \b \<addr\>
@@ -457,15 +495,15 @@ void RangeList::merge(const RangeList &op2)
   while(iter1 != iter2) {
     const Range &range( *iter1 );
     ++iter1;
-    insertRange(range.spc, range.first, range.last);
+    insertRange(range);
   }
 }
 
 /// Make sure indicated range of addresses is \e contained in \b this RangeList
 /// \param addr is the first Address in the target range
 /// \param size is the number of bytes in the target range
-/// \return \b true is the range is fully contained by this RangeList
-bool RangeList::inRange(const Address &addr,int4 size) const
+/// \return \b true if the range is fully contained by this RangeList
+bool RangeList::inRange(const Address &addr,uintb size) const
 
 {
   set<Range>::const_iterator iter;
@@ -481,9 +519,30 @@ bool RangeList::inRange(const Address &addr,int4 size) const
   //  if (iter == tree.end())   // iter can't be end if non-empty
   //    return false;
   if ((*iter).spc != addr.getSpace()) return false;
-  if ((*iter).last >= addr.getOffset()+size-1)
+  uintb end = addr.getOffset()+size-1;
+  if (end < addr.getOffset())
+    return false;	// size causes overflow
+  if ((*iter).last >= end)
     return true;
   return false;
+}
+
+/// \param rng is the target range
+/// \return \b true if the range is fully contained by this RangeList
+bool RangeList::inRange(const Range &rng) const
+
+{
+  set<Range>::const_iterator iter;
+
+  if (tree.empty()) return false;
+
+  // iter = first range with its first > rng.first
+  iter = tree.upper_bound(rng);
+  if (iter == tree.begin()) return false;
+  // Set iter to last range with range.first <= rng.first
+  --iter;
+  if ((*iter).spc != rng.getSpace()) return false;
+  return ((*iter).last >= rng.last);
 }
 
 /// If \b this RangeList contains the specific address (spaceid,offset), return it
@@ -502,6 +561,37 @@ const Range *RangeList::getRange(AddrSpace *spaceid,uintb offset) const
   if ((*iter).last >= offset)
     return &(*iter);
   return (const Range *)0;
+}
+
+/// If \b this contains no Range in the given address space, null is returned.
+/// If a range contains \b offset, it is returned.
+/// Otherwise the range with a boundary point closest to \b offset is returned.
+/// If two ranges are equidistant to \b offset, the earlier Range is returned.
+/// \param spaceid is the given address space
+/// \param offset is the given offset
+/// \return the nearest Range in the same address space or null
+const Range *RangeList::getNearestRange(AddrSpace *spaceid,uintb offset) const
+
+{
+  if (tree.empty()) return (const Range *)0;
+
+  set<Range>::const_iterator iter = tree.upper_bound(Range(spaceid,offset,offset));
+  const Range *after = (const Range *)0;
+  if (iter != tree.end()) {
+    after = &(*iter);
+    if (after->spc != spaceid)
+      after = (const Range *)0;
+  }
+
+  if (iter == tree.begin()) return after;	// nothing earlier, after is closest
+  --iter;
+  const Range *before = &(*iter);
+  if (before->spc != spaceid) return after;
+  if (after == (const Range *)0) return before;
+  if (before->last >= offset) return before;		// Range contains offset, it is closest
+  uint8 distafter = after->first - offset;
+  uint8 distbefore = offset - before->last;
+  return (distafter < distbefore) ? after : before;
 }
 
 /// Return the size of the biggest contiguous sequence of addresses in
@@ -627,6 +717,246 @@ void RangeList::decode(Decoder &decoder)
   decoder.closeElement(elemId);
 }
 
+BitRange::BitRange(const BitRange &op2,int4 off,int4 sz)
+
+{
+  byteOffset = off;
+  byteSize = sz;
+  numBits = op2.numBits;
+  isBigEndian = op2.isBigEndian;
+  leastSigBit = translateLSB(op2);
+}
+
+/// Both the byte container and the bit range are compared and must be equal to return 0.
+/// \param op2 is the other bit range to compare with
+/// \return -1, 0, or 1 to establish ordering the two ranges
+int4 BitRange::compare(const BitRange &op2) const
+
+{
+  if (byteOffset != op2.byteOffset)
+    return (byteOffset < op2.byteOffset) ? -1:1;
+  if (byteSize != op2.byteSize)
+    return (byteSize < op2.byteSize) ? -1 : 1;
+  if (leastSigBit != op2.leastSigBit)
+    return (leastSigBit < op2.leastSigBit) ? -1:1;
+  if (numBits != op2.numBits)
+    return (numBits < op2.numBits) ? -1:1;
+  return 0;
+}
+
+/// The returned result is directly comparable with \b leastSigBit for determining order/overlap.
+/// \param op2 is the other BitRange to translate into \b this frame
+/// \return the translated value of op2.leastSigBit
+int4 BitRange::translateLSB(const BitRange &op2) const
+
+{
+  int4 op2Sig = op2.leastSigBit;
+  if (isBigEndian) {
+    int4 thisPos = byteOffset + byteSize;
+    int4 op2Pos = op2.byteOffset + op2.byteSize;
+    op2Sig += 8 * (thisPos - op2Pos);
+  }
+  else {
+    op2Sig += 8 * (op2.byteOffset - byteOffset);
+  }
+  return op2Sig;
+}
+
+/// Return:
+///   -  -1 if \b this should come before (no intersection)
+///   -  0 if \b this and op2 are the same bitrange
+///   -  1 if \b this should come after (no intersection)
+///   -  2 if \b this is contained in op2
+///   -  3 if op2 is contained in \b this
+///   -  4 if partial overlap
+///
+/// \param op2 is the other range to compare
+/// \return the intersection code
+int4 BitRange::overlapTest(const BitRange &op2) const
+
+{
+  int4 op2Sig = translateLSB(op2);
+  int4 thisMost = leastSigBit + numBits;
+  int4 op2Most = op2Sig + op2.numBits;
+  if (isBigEndian) {
+    if (leastSigBit >= op2Most) return -1;
+    if (op2Sig >= thisMost) return 1;
+  }
+  else {
+    if (thisMost <= op2Sig) return -1;
+    if (op2Most <= leastSigBit) return 1;
+  }
+  // Reaching here we have some kind of intersection
+  if (leastSigBit == op2Sig && thisMost == op2Most) return 0;
+  if (op2Sig <= leastSigBit && op2Most >= thisMost) return 2;	/// this contained in op2
+  if (leastSigBit <= op2Sig && thisMost >= op2Most) return 3;	/// op2 contained in this
+  return 4;
+}
+
+/// The byte container for \b this does not change only \b leastSigBit and \b numBits.
+/// If the intersection is empty, \b numBits is set to 0.
+/// \param op2 is the bit range to intersect with \b this.
+void BitRange::intersection(const BitRange &op2)
+
+{
+  int4 op2Sig = translateLSB(op2);
+  int4 op2Most = op2Sig + op2.numBits;
+  int4 thisMost = leastSigBit + numBits;
+  if (op2Sig > leastSigBit) {
+    numBits -= (op2Sig - leastSigBit);
+    leastSigBit = op2Sig;
+  }
+  if (op2Most < thisMost) {
+    numBits -= (thisMost - op2Most);
+  }
+  if (numBits < 0) {
+    leastSigBit = 0;
+    numBits = 0;
+  }
+}
+
+/// The range of bits is intersected with the 1-bits of the mask.  The resulting
+/// range is the minimal cover of the bits in the intersection.
+/// \param mask is the mask to intersect with
+void BitRange::intersectMask(uintb mask)
+
+{
+  mask &= getMask();
+  if (mask == 0) {
+    leastSigBit = 0;
+    numBits = 0;
+    return;
+  }
+  int4 newLeastSig = leastsigbit_set(mask);
+  int4 newMostSig = mostsigbit_set(mask) + 1;
+  int4 thisMost = leastSigBit + numBits;
+  if (newLeastSig > leastSigBit) {
+    numBits -= (newLeastSig - leastSigBit);
+    leastSigBit = newLeastSig;
+  }
+  if (newMostSig < thisMost) {
+    numBits -= (thisMost - newMostSig);
+  }
+}
+
+/// The bit range is shifted to the left by the given amount.
+/// \param leftShiftAmount is the amount to shift the range by
+void BitRange::shift(int4 leftShiftAmount)
+
+{
+  leastSigBit += leftShiftAmount;
+  int4 most = leastSigBit + numBits;
+  if (leastSigBit < 0) {
+    numBits += leastSigBit;
+    leastSigBit = 0;
+  }
+  else if (most > byteSize * 8) {
+    numBits -= (most - byteSize * 8);
+  }
+  if (numBits < 0) {
+    leastSigBit = 0;
+    numBits = 0;
+  }
+}
+
+/// The number of bits may be affected.
+/// \param num is the number of bytes to truncate
+void BitRange::truncateMostSigBytes(int4 num)
+
+{
+  if (isBigEndian) {
+    byteOffset += num;
+  }
+  byteSize -= num;
+  int4 maxOffset = leastSigBit + numBits;
+  if (maxOffset > byteSize * 8)
+    numBits -= (maxOffset - byteSize * 8);
+  if (numBits < 0)
+    numBits = 0;
+}
+
+/// \param num is the number of bytes to truncate
+void BitRange::truncateLeastSigBytes(int4 num)
+
+{
+  if (!isBigEndian)
+    byteOffset += num;
+  byteSize -= num;
+  leastSigBit -= num * 8;
+  if (leastSigBit < 0) {
+    numBits = numBits + leastSigBit;
+    leastSigBit = 0;
+    if (numBits < 0)
+      numBits = 0;
+  }
+}
+
+/// Only the container is affected, the bit range itself does not change.
+/// \param num is the number of bytes to add
+void BitRange::extendBytes(int4 num)
+
+{
+  if (isBigEndian)
+    byteOffset -= num;
+  byteSize += num;
+}
+
+/// The bit-mask is aligned with the byte container.
+/// \return the bit-mask describing \b this range
+uintb BitRange::getMask(void) const
+
+{
+  uintb res;
+  if (numBits >= sizeof(uintb)*8)
+    res = 0;
+  else {
+    res = 1;
+    res <<= numBits;
+  }
+  res -= 1;
+  res <<= leastSigBit;
+  return res;
+}
+
+/// \return \b true if the beginning and end of the range fall on byte boundaries
+bool BitRange::isByteRange(void) const
+
+{
+  if ((numBits & 7) != 0) return false;
+  if ((leastSigBit & 7) != 0) return false;
+  return true;
+}
+
+/// \return \b true if the most significant bit of the field and the container are the same
+bool BitRange::isMostSignificant(void) const
+
+{
+  return 8*byteSize == leastSigBit + numBits;
+}
+
+void BitRange::minimizeContainer(void)
+
+{
+  int4 trunc = leastSigBit / 8;
+  if (isBigEndian)
+    byteSize -= trunc;
+  else
+    byteOffset += trunc;
+  leastSigBit &= 7;
+  int4 num = byteSize - ((leastSigBit + numBits + 7) / 8);
+  if (num > 0) {
+    if (isBigEndian)
+      byteOffset += num;
+    byteSize -= num;
+  }
+}
+
+void BitRange::expandToMost(void)
+
+{
+  numBits = 8*byteSize - leastSigBit;	// Increase number of bits to maximum that still fits
+}
+
 #ifdef UINTB4
 uintb uintbmasks[9] = { 0, 0xff, 0xffff, 0xffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
 #else
@@ -666,11 +996,29 @@ uintb uintb_negate(uintb in,int4 size)
 uintb sign_extend(uintb in,int4 sizein,int4 sizeout)
 
 {
+  sizein = (sizein < sizeof(uintb)) ? sizein : sizeof(uintb);
+  sizeout = (sizeout < sizeof(uintb)) ? sizeout : sizeof(uintb);
   intb sval = in;
   sval <<= (sizeof(intb) - sizein) * 8;
   uintb res = (uintb)(sval >> (sizeout - sizein) * 8);
   res >>= (sizeof(uintb) - sizeout)*8;
   return res;
+}
+
+/// \param val is the value to extend
+/// \param numbits is the number of bits in the value
+/// \param size is the integer size in bytes
+/// \return the extended value
+uintb extend_signbit(uintb val,int4 numbits,int4 size)
+
+{
+  if (numbits < size * 8) {
+    int4 sa = 8*sizeof(intb) - numbits;
+    intb sval = val;
+    val = (sval << sa) >> sa;
+    val &= calc_mask(size);
+  }
+  return val;
 }
 
 /// Swap the least significant \b size bytes in \b val
@@ -829,135 +1177,6 @@ int4 bit_transitions(uintb val,int4 sz)
     if (val==0) break;
   }
   return res;
-}
-
-/// \brief Multiply 2 unsigned 64-bit values, producing a 128-bit value
-///
-/// TODO: Remove once we import a full multiprecision library.
-/// \param res points to the result array (2 uint8 pieces)
-/// \param x is the first 64-bit value
-/// \param y is the second 64-bit value
-void mult64to128(uint8 *res,uint8 x,uint8 y)
-
-{
-  uint8 f = x & 0xffffffff;
-  uint8 e = x >> 32;
-  uint8 d = y & 0xffffffff;
-  uint8 c = y >> 32;
-  uint8 fd = f * d;
-  uint8 fc = f * c;
-  uint8 ed = e * d;
-  uint8 ec = e * c;
-  uint8 tmp = (fd >> 32) + (fc & 0xffffffff) + (ed & 0xffffffff);
-  res[1] = (tmp>>32) + (fc>>32) + (ed>>32) + ec;
-  res[0] = (tmp<<32) + (fd & 0xffffffff);
-}
-
-/// \brief Subtract (in-place) a 128-bit value from a base 128-value
-///
-/// The base value is altered in place.
-/// TODO: Remove once we import a full multiprecision library.
-/// \param a is the base 128-bit value being subtracted from in-place
-/// \param b is the other 128-bit value being subtracted
-void unsignedSubtract128(uint8 *a,uint8 *b)
-
-{
-  bool borrow = (a[0] < b[0]);
-  a[0] -= b[0];
-  a[1] -= b[1];
-  if (borrow)
-    a[1] -= 1;
-}
-
-/// \brief Compare two unsigned 128-bit values
-///
-/// TODO: Remove once we import a full multiprecision library.
-/// Given a first and second value, return -1, 0, or 1 depending on whether the first value
-/// is \e less, \e equal, or \e greater than the second value.
-/// \param a is the first 128-bit value (as an array of 2 uint8 elements)
-/// \param b is the second 128-bit value
-/// \return the comparison code
-int4 unsignedCompare128(uint8 *a,uint8 *b)
-
-{
-  if (a[1] != b[1])
-    return (a[1] < b[1]) ? -1 : 1;
-  if (a[0] != b[0])
-    return (a[0] < b[0]) ? -1 : 1;
-  return 0;
-}
-
-/// \brief Unsigned division of a power of 2 (upto 2^127) by a 64-bit divisor
-///
-/// The result must be less than 2^64. The remainder is calculated.
-/// \param n is the power of 2 for the numerand
-/// \param divisor is the 64-bit divisor
-/// \param q is the passed back 64-bit quotient
-/// \param r is the passed back 64-bit remainder
-/// \return 0 if successful, 1 if result is too big, 2 if divide by 0
-int4 power2Divide(int4 n,uint8 divisor,uint8 &q,uint8 &r)
-
-{
-  if (divisor == 0) return 2;
-  uint8 power = 1;
-  if (n < 64) {
-    power <<= n;
-    q = power / divisor;
-    r = power % divisor;
-    return 0;
-  }
-  // Divide numerand and divisor by 2^(n-63) to get approximation of result
-  uint8 y = divisor >> (n-64);	// Most of the way on divisor
-  if (y == 0) return 1;		// Check if result will be too big
-  y >>= 1;			// Divide divisor by final bit
-  power <<= 63;
-  uint8 max;
-  if (y == 0) {
-    max = 0;
-    max -= 1;			// Could be maximal
-    // Check if divisor is a power of 2
-    if ((((uint8)1) << (n-64)) == divisor)
-      return 1;
-  }
-  else
-    max = power / y + 1;
-  uint8 min = power / (y+1);
-  if (min != 0)
-    min -= 1;
-  uint8 fullpower[2];
-  fullpower[1] = ((uint8)1)<<(n-64);
-  fullpower[0] = 0;
-  uint8 mult[2];
-  mult[0] = 0;
-  mult[1] = 0;
-  uint8 tmpq = 0;
-  while(max > min+1) {
-    tmpq = max + min;
-    if (tmpq < min) {
-      tmpq = (tmpq>>1) + 0x8000000000000000L;
-    }
-    else
-      tmpq >>= 1;
-    mult64to128(mult,divisor,tmpq);
-    if (unsignedCompare128(fullpower,mult) < 0)
-      max = tmpq-1;
-    else
-      min = tmpq;
-  }
-  // min is now our putative quotient
-  if (tmpq != min)
-    mult64to128(mult,divisor,min);
-  unsignedSubtract128(fullpower,mult); // Calculate remainder
-  // min might be 1 too small
-  if (fullpower[1] != 0 || fullpower[0] >= divisor) {
-    q = min + 1;
-    r = fullpower[0] - divisor;
-  }
-  else {
-    q = min;
-    r = fullpower[0];
-  }
-  return 0;
 }
 
 } // End namespace ghidra

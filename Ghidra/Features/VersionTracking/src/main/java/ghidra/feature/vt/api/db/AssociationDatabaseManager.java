@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,13 +21,15 @@ import java.io.IOException;
 import java.util.*;
 
 import db.*;
-import ghidra.feature.vt.api.impl.MarkupItemStorage;
-import ghidra.feature.vt.api.impl.VTChangeManager;
+import ghidra.feature.vt.api.impl.*;
 import ghidra.feature.vt.api.main.*;
 import ghidra.feature.vt.api.util.VTAssociationStatusException;
-import ghidra.program.database.DBObjectCache;
+import ghidra.framework.data.OpenMode;
+import ghidra.program.database.DbFactory;
+import ghidra.program.database.DbCache;
 import ghidra.program.model.address.Address;
 import ghidra.util.Lock;
+import ghidra.util.Lock.Closeable;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskLauncher;
 import ghidra.util.task.TaskMonitor;
@@ -38,15 +40,11 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 
 	private VTAssociationTableDBAdapter associationTableAdapter;
 
-	// A cache of accepted associations that allow this class to check isBlocked() quickly.  This
-	// was added to fix a major performance bottleneck.
-	private Set<Address> acceptedSourceAssociations = new HashSet<>();
-	private Set<Address> acceptedDestinationAssociations = new HashSet<>();
-
 	private VTMatchMarkupItemTableDBAdapter markupItemTableAdapter;
-	private DBObjectCache<MarkupItemStorageDB> markupItemCache;
+	private DbCache<MarkupItemStorageDB> markupItemCache;
 	private List<AssociationHook> associationHooks = new ArrayList<>();
-	private DBObjectCache<VTAssociationDB> associationCache;
+	private DbCache<VTAssociationDB> associationCache;
+	private AcceptedStatusCache acceptedStatusCache = new AcceptedStatusCache();
 	Lock lock;
 
 	public static AssociationDatabaseManager createAssociationManager(DBHandle dbHandle,
@@ -71,8 +69,8 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	AssociationDatabaseManager(VTSessionDB session) {
 		this.session = session;
 		lock = session.getLock();
-		associationCache = new DBObjectCache<>(10);
-		markupItemCache = new DBObjectCache<>(10);
+		associationCache = new DbCache<>(new AssociationFactory(), lock, 10);
+		markupItemCache = new DbCache<>(new MarkupFactory(), lock, 10);
 	}
 
 	/**
@@ -80,32 +78,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	 * when a new session is created.
 	 */
 	void sessionInitialized() {
-		TaskLauncher.launchModal("Loading Associations",
-			monitor -> loadAcceptedAssociations(monitor));
-	}
-
-	private void loadAcceptedAssociations(TaskMonitor monitor) {
-
-		monitor.setMessage("Loading accepted associations...");
-
-		try {
-			RecordIterator it = associationTableAdapter.getRecords();
-			while (it.hasNext() && !monitor.isCancelled()) {
-				DBRecord record = it.next();
-				VTAssociationDB associationDB = getAssociationForRecord(record);
-				VTAssociationStatus status = associationDB.getStatus();
-				if (status == ACCEPTED) {
-					Address sourceAddress = associationDB.getSourceAddress();
-					Address destinationAddress = associationDB.getDestinationAddress();
-					acceptedSourceAssociations.add(sourceAddress);
-					acceptedDestinationAssociations.add(destinationAddress);
-				}
-			}
-			monitor.setMessage("Finished loading accepted associations");
-		}
-		catch (IOException e) {
-			session.dbError(e);
-		}
+		acceptedStatusCache.initialize();
 	}
 
 	public Collection<MarkupItemStorageDB> getAppliedMarkupItems(TaskMonitor monitor,
@@ -113,8 +86,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 
 		Collection<MarkupItemStorageDB> items = new ArrayList<>();
 		VTAssociationDB associationDB = (VTAssociationDB) association;
-		try {
-			lock.acquire();
+		try (Closeable c = lock.read()) {
 			int recordCount = markupItemTableAdapter.getRecordCount();
 			if (recordCount == 0) {
 				recordCount = 1; // to give the appearance of progress
@@ -127,7 +99,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 			while (records.hasNext()) {
 				monitor.checkCancelled();
 				DBRecord record = records.next();
-				items.add(getMarkupItemForRecord(record));
+				items.add(markupItemCache.getCachedInstance(record));
 				monitor.incrementProgress(1);
 			}
 
@@ -135,9 +107,6 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 		}
 		catch (IOException e) {
 			session.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return items;
 	}
@@ -166,48 +135,14 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 		return createMarkupItemDB(markupItemStorage);
 	}
 
-	void removeMarkupItem(MarkupItemStorageDB appliedMarkupItemDB) {
+	// non-interface method; internal API use
+	public void removeStoredMarkupItems(List<MarkupItemImpl> impls) {
 
-		VTAssociationDB association = (VTAssociationDB) appliedMarkupItemDB.getAssociation();
-
-		validateAcceptedState(appliedMarkupItemDB, association);
-
-		try {
-			markupItemTableAdapter.removeMatchMarkupItemRecord(appliedMarkupItemDB.getKey());
-		}
-		catch (IOException e) {
-			session.dbError(e);
-		}
-	}
-
-	private void validateAcceptedState(MarkupItemStorageDB appliedItem,
-			VTAssociationDB association) {
-		//
-		// For any 'applied' markup item we assume that its association will be 'ACCEPTED'.  The
-		// exception to this rule is when we have markup items in the database, but that are not
-		// applied (like when we change the destination address without applying)
-		//
-		VTAssociationStatus associationStatus = association.getStatus();
-		VTMarkupItemStatus status = appliedItem.getStatus();
-		if (status.isUnappliable()) {
-			if (associationStatus != ACCEPTED) {
-				throw new AssertException("Cannot have an applied markup item with an " +
-					"association that is not ACCEPTED");
+		for (MarkupItemImpl impl : impls) {
+			MarkupItemStorage storage = impl.getStorage();
+			if (storage instanceof MarkupItemStorageDB storageDb) {
+				removeMarkupRecord(storageDb.getKey());
 			}
-		}
-	}
-
-	private MarkupItemStorageDB getMarkupItemForRecord(DBRecord markupItemRecord) {
-		try {
-			lock.acquire();
-			MarkupItemStorageDB markupItem = markupItemCache.get(markupItemRecord);
-			if (markupItem == null) {
-				markupItem = new MarkupItemStorageDB(markupItemRecord, markupItemCache, this);
-			}
-			return markupItem;
-		}
-		finally {
-			lock.release();
 		}
 	}
 
@@ -237,7 +172,8 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 
 		try {
 			DBRecord record = markupItemTableAdapter.createMarkupItemRecord(markupItem);
-			MarkupItemStorageDB appliedMarkupItem = getMarkupItemForRecord(record);
+			MarkupItemStorageDB appliedMarkupItem = new MarkupItemStorageDB(record, this);
+			markupItemCache.add(appliedMarkupItem);
 			return appliedMarkupItem;
 		}
 		catch (IOException e) {
@@ -262,35 +198,45 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 		boolean isBlocked = isBlocked(sourceAddress, destinationAddress);
 
 		VTAssociationDB newAssociation = null;
-		try {
-			lock.acquire();
+		try (Closeable c = lock.write()) {
 			DBRecord record = associationTableAdapter.insertRecord(sourceLong, destinationLong,
 				type, isBlocked ? BLOCKED : AVAILABLE, 0);
-			newAssociation = new VTAssociationDB(this, associationCache, record);
+			newAssociation = new VTAssociationDB(this, record);
+			associationCache.add(newAssociation);
 		}
 		catch (IOException e) {
 			session.dbError(e);
 		}
-		finally {
-			lock.release();
-		}
-		session.setChanged(VTChangeManager.DOCR_VT_ASSOCIATION_ADDED, null, newAssociation);
+		session.setChanged(VTEvent.ASSOCIATION_ADDED, null, newAssociation);
 		return newAssociation;
 	}
 
 	void removeAssociation(VTAssociation association) {
-		VTAssociationDB existingAssociation = (VTAssociationDB) association;
-		long id = existingAssociation.getKey();
+
+		// Update the association status so that we update any blocked associations
+		VTAssociationDB associationDB = (VTAssociationDB) association;
+		VTAssociationStatus status = association.getStatus();
+		if (status == ACCEPTED) {
+			associationDB.setStatus(AVAILABLE);
+			associationDB.setInvalid();
+			unblockRelatedAssociations(associationDB);
+			for (AssociationHook hook : associationHooks) {
+				hook.associationCleared(associationDB);
+			}
+		}
+
+		VTAssociationDB associationDb = (VTAssociationDB) association;
+		long id = associationDb.getKey();
 		try {
+			associationDb.removeMarkupItems();
 			associationTableAdapter.removeAssociaiton(id);
-			session.setChanged(VTChangeManager.DOCR_VT_ASSOCIATION_REMOVED, existingAssociation,
-				null);
+			session.setChanged(VTEvent.ASSOCIATION_REMOVED, associationDb, null);
 		}
 		catch (IOException e) {
 			session.dbError(e);
 		}
 		associationCache.delete(id);
-		existingAssociation.setInvalid();
+		associationDb.setInvalid();
 
 	}
 
@@ -299,16 +245,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	}
 
 	private boolean isBlocked(Address sourceAddress, Address destinationAddress) {
-
-		if (acceptedSourceAssociations.contains(sourceAddress)) {
-			return true;
-		}
-
-		if (acceptedDestinationAssociations.contains(destinationAddress)) {
-			return true;
-		}
-
-		return false;
+		return acceptedStatusCache.isBlocked(sourceAddress, destinationAddress);
 	}
 
 	@Override
@@ -319,33 +256,28 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	@Override
 	public List<VTAssociation> getAssociations() {
 		List<VTAssociation> list = new ArrayList<>();
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			RecordIterator iterator = associationTableAdapter.getRecords();
 			for (; iterator.hasNext();) {
 				DBRecord nextRecord = iterator.next();
-				list.add(getAssociationForRecord(nextRecord));
+				list.add(associationCache.getCachedInstance(nextRecord));
 			}
 		}
 		catch (IOException e) {
 			session.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return list;
 	}
 
 	@Override
 	public VTAssociation getAssociation(Address sourceAddress, Address destinationAddress) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			long addressKey = session.getLongFromSourceAddress(sourceAddress);
 			RecordIterator iterator =
 				associationTableAdapter.getRecordsForSourceAddress(addressKey);
 			while (iterator.hasNext()) {
 				DBRecord record = iterator.next();
-				VTAssociationDB associationDB = getAssociationForRecord(record);
+				VTAssociationDB associationDB = associationCache.getCachedInstance(record);
 				if (associationDB.getDestinationAddress().equals(destinationAddress)) {
 					return associationDB;
 				}
@@ -353,9 +285,6 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 		}
 		catch (IOException e) {
 			session.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return null;
 	}
@@ -368,7 +297,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 				associationTableAdapter.getRecordsForSourceAddress(addressKey);
 			while (iterator.hasNext()) {
 				DBRecord record = iterator.next();
-				VTAssociationDB associationDB = getAssociationForRecord(record);
+				VTAssociationDB associationDB = associationCache.getCachedInstance(record);
 				Address dbDestinatonAddress = associationDB.getDestinationAddress();
 				if (destinationAddress.equals(dbDestinatonAddress)) {
 					return associationDB;
@@ -382,67 +311,24 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 		return null;
 	}
 
-	private VTAssociationDB getAssociationForRecord(DBRecord record) {
-		if (record == null) {
-			throw new AssertException("How can we have a null record?!!!");
-		}
-		try {
-			lock.acquire();
-			VTAssociationDB associationDB = associationCache.get(record);
-			if (associationDB == null) {
-				associationDB = new VTAssociationDB(this, associationCache, record);
-			}
-			return associationDB;
-		}
-		finally {
-			lock.release();
-		}
-	}
-
-	VTAssociationDB getAssociation(long associationKey) {
-		try {
-			lock.acquire();
-			VTAssociationDB associationDB = associationCache.get(associationKey);
-			if (associationDB != null) {
-				return associationDB;
-			}
-			DBRecord record = associationTableAdapter.getRecord(associationKey);
-			if (record == null) {
-				return null;
-			}
-			return new VTAssociationDB(this, associationCache, record);
-		}
-		catch (IOException e) {
-			session.dbError(e);
-		}
-		finally {
-			lock.release();
-		}
-		return null;
-	}
-
 	public VTSessionDB getSession() {
 		return session;
 	}
 
 	@Override
 	public Collection<VTAssociation> getRelatedAssociationsBySourceAddress(Address sourceAddress) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			long sourceId = session.getLongFromSourceAddress(sourceAddress);
 			Set<DBRecord> relatedRecords =
 				associationTableAdapter.getRelatedAssociationRecordsBySourceAddress(sourceId);
 			List<VTAssociation> associations = new ArrayList<>();
 			for (DBRecord record : relatedRecords) {
-				associations.add(getAssociationForRecord(record));
+				associations.add(associationCache.getCachedInstance(record));
 			}
 			return associations;
 		}
 		catch (IOException e) {
 			session.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return Collections.emptyList();
 	}
@@ -450,22 +336,18 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	@Override
 	public Collection<VTAssociation> getRelatedAssociationsByDestinationAddress(
 			Address destinationAddress) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			long destinationId = session.getLongFromDestinationAddress(destinationAddress);
 			Set<DBRecord> relatedRecords = associationTableAdapter
 					.getRelatedAssociationRecordsByDestinationAddress(destinationId);
 			List<VTAssociation> associations = new ArrayList<>();
 			for (DBRecord record : relatedRecords) {
-				associations.add(getAssociationForRecord(record));
+				associations.add(associationCache.getCachedInstance(record));
 			}
 			return associations;
 		}
 		catch (IOException e) {
 			session.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return Collections.emptyList();
 	}
@@ -473,8 +355,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	@Override
 	public Collection<VTAssociation> getRelatedAssociationsBySourceAndDestinationAddress(
 			Address sourceAddress, Address destinationAddress) {
-		lock.acquire();
-		try {
+		try (Closeable c = lock.read()) {
 			long sourceId = session.getLongFromSourceAddress(sourceAddress);
 			long destinationId = session.getLongFromDestinationAddress(destinationAddress);
 			Set<DBRecord> relatedRecords =
@@ -482,15 +363,12 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 					sourceId, destinationId);
 			List<VTAssociation> associations = new ArrayList<>();
 			for (DBRecord record : relatedRecords) {
-				associations.add(getAssociationForRecord(record));
+				associations.add(associationCache.getCachedInstance(record));
 			}
 			return associations;
 		}
 		catch (IOException e) {
 			session.dbError(e);
-		}
-		finally {
-			lock.release();
 		}
 		return Collections.emptyList();
 	}
@@ -545,7 +423,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 			throws VTAssociationStatusException {
 		if (association.hasAppliedMarkupItems()) {
 			throw new VTAssociationStatusException(
-				"VTMarkupItemManager contains applied " + "markup items");
+				"VTMarkupItemManager contains applied markup items");
 		}
 	}
 
@@ -609,7 +487,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 					sourceId, destinationId);
 			relatedRecords.remove(association.getRecord()); // don't change the given association
 			for (DBRecord record : relatedRecords) {
-				relatedAssociaitons.add(getAssociationForRecord(record));
+				relatedAssociaitons.add(associationCache.getCachedInstance(record));
 			}
 		}
 		catch (IOException e) {
@@ -626,17 +504,15 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 			session.dbError(e);
 		}
 
-		VTAssociationDB association = getAssociationForRecord(record);
+		VTAssociationDB association = associationCache.getCachedInstance(record);
 		Address sourceAddress = association.getSourceAddress();
 		Address destinationAddress = association.getDestinationAddress();
 		VTAssociationStatus status = association.getStatus();
 		if (status == ACCEPTED) {
-			acceptedSourceAssociations.add(sourceAddress);
-			acceptedDestinationAssociations.add(destinationAddress);
+			acceptedStatusCache.add(sourceAddress, destinationAddress);
 		}
 		else {
-			acceptedSourceAssociations.remove(sourceAddress);
-			acceptedDestinationAssociations.remove(destinationAddress);
+			acceptedStatusCache.remove(sourceAddress, destinationAddress);
 		}
 	}
 
@@ -652,6 +528,7 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	void invalidateCache() {
 		associationCache.invalidate();
 		markupItemCache.invalidate();
+		acceptedStatusCache.invalidate();
 	}
 
 	void addAssociationHook(AssociationHook hook) {
@@ -662,9 +539,10 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 		associationHooks.remove(hook);
 	}
 
-	void removeMarkupRecord(DBRecord record) {
+	void removeMarkupRecord(long key) {
 		try {
-			markupItemTableAdapter.removeMatchMarkupItemRecord(record.getKey());
+			markupItemTableAdapter.removeMarkupItemRecord(key);
+			markupItemCache.delete(key);
 		}
 		catch (IOException e) {
 			session.dbError(e);
@@ -678,7 +556,200 @@ public class AssociationDatabaseManager implements VTAssociationManager {
 	}
 
 	void dispose() {
-		acceptedSourceAssociations.clear();
-		acceptedDestinationAssociations.clear();
+		acceptedStatusCache.dispose();
+	}
+
+	/**
+	 * A cache of accepted associations that allow this class to check isBlocked() quickly.  This
+	 * was added to fix a major performance bottleneck.
+	 * <p>
+	 * The cache will be invalidated and cleared after an undo or redo event.  Once cleared, the
+	 * cache will stay empty until the next request to check the blocked status of an association.
+	 * This is to allow the user to perform multiple undo/redo operations without this class having
+	 * to reload.
+	 * 
+	 * Assumptions:
+	 * <ul>
+	 *  <li>This isBlocked() method of class is used by background task threads, not the Swing
+	 *  thread.  This method will reload the cache when it is invalid.  Further, loading the cache
+	 *  in this case will require a lock.  To avoid deadlocks, isBlock() should only be used by
+	 *  background threads and not the Swing thread.
+	 *  </li>
+	 * </ul>
+	 */
+	private class AcceptedStatusCache {
+
+		private Set<Address> acceptedSourceAssociations = new HashSet<>();
+		private Set<Address> acceptedDestinationAssociations = new HashSet<>();
+		private boolean invalid = true;
+		private boolean disposed = false;
+
+		void dispose() {
+			try (Closeable c = lock.write()) {
+				disposed = true;
+				invalidate();
+			}
+		}
+
+		void invalidate() {
+			try (Closeable c = lock.write()) {
+				invalid = true;
+				acceptedSourceAssociations.clear();
+				acceptedDestinationAssociations.clear();
+			}
+		}
+
+		void remove(Address sourceAddress, Address destinationAddress) {
+			try (Closeable c = lock.write()) {
+				if (disposed || invalid) {
+					return;
+				}
+				acceptedSourceAssociations.remove(sourceAddress);
+				acceptedDestinationAssociations.remove(destinationAddress);
+			}
+		}
+
+		void add(Address sourceAddress, Address destinationAddress) {
+			try (Closeable c = lock.write()) {
+				if (disposed || invalid) {
+					return;
+				}
+				acceptedSourceAssociations.add(sourceAddress);
+				acceptedDestinationAssociations.add(destinationAddress);
+			}
+		}
+
+		boolean isBlocked(Address sourceAddress, Address destinationAddress) {
+
+			try (Closeable c = lock.read()) {
+
+				if (disposed) {
+					return true;
+				}
+
+				if (invalid) {
+					doLoadAcceptedAssociations(TaskMonitor.DUMMY);
+					if (invalid) { // some sort of error
+						return isBlockedInDb(sourceAddress, destinationAddress);
+					}
+				}
+
+				if (acceptedSourceAssociations.contains(sourceAddress)) {
+					return true;
+				}
+
+				if (acceptedDestinationAssociations.contains(destinationAddress)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		private boolean isBlockedInDb(Address sourceAddress, Address destinationAddress) {
+			long sourceID = session.getLongFromSourceAddress(sourceAddress);
+			long destinationID = session.getLongFromDestinationAddress(destinationAddress);
+			try {
+				Set<DBRecord> relatedRecords = associationTableAdapter
+						.getRelatedAssociationRecordsBySourceAndDestinationAddress(sourceID,
+							destinationID);
+				for (DBRecord record : relatedRecords) {
+					VTAssociationDB associationDB = associationCache.getCachedInstance(record);
+					VTAssociationStatus status = associationDB.getStatus();
+					if (status == ACCEPTED) {
+						return true;
+					}
+				}
+			}
+			catch (IOException e) {
+				session.dbError(e);
+			}
+
+			return false;
+		}
+
+		/**
+		 * This is called by the Swing thread.  We use a task monitor to show progress.  This method
+		 * will load associations without acquiring a lock, with the assumption that while the
+		 * session is being loaded, no other threads will be running that may require the use of
+		 * this class.
+		 */
+		void initialize() {
+			TaskLauncher.launchModal("Loading Associations",
+				monitor -> doLoadAcceptedAssociations(monitor));
+		}
+
+		/**
+		 * Loads the cache of accepted associations.  This method assumes locking is handled by the
+		 * client.
+		 */
+		private void doLoadAcceptedAssociations(TaskMonitor monitor) {
+			try {
+				monitor.setMessage("Loading accepted associations...");
+				RecordIterator it = associationTableAdapter.getRecords();
+				while (it.hasNext()) {
+					monitor.increment();
+					DBRecord record = it.next();
+					VTAssociationDB associationDB = associationCache.getCachedInstance(record);
+					VTAssociationStatus status = associationDB.getStatus();
+					if (status == ACCEPTED) {
+						Address sourceAddress = associationDB.getSourceAddress();
+						Address destinationAddress = associationDB.getDestinationAddress();
+						add(sourceAddress, destinationAddress);
+					}
+				}
+				monitor.setMessage("Finished loading accepted associations");
+				invalid = false;
+			}
+			catch (CancelledException e) {
+				// nothing to do
+			}
+			catch (IOException e) {
+				session.dbError(e);
+			}
+		}
+	}
+
+	private class AssociationFactory implements DbFactory<VTAssociationDB> {
+
+		@Override
+		public VTAssociationDB instantiate(long key) {
+			try {
+				DBRecord record = associationTableAdapter.getRecord(key);
+				return record == null ? null : instantiate(record);
+			}
+			catch (IOException e) {
+				session.dbError(e);
+				return null;
+			}
+		}
+
+		@Override
+		public VTAssociationDB instantiate(DBRecord rec) {
+			return new VTAssociationDB(AssociationDatabaseManager.this, rec);
+		}
+	}
+
+	private class MarkupFactory implements DbFactory<MarkupItemStorageDB> {
+
+		@Override
+		public MarkupItemStorageDB instantiate(long key) {
+			try {
+				DBRecord record = markupItemTableAdapter.getRecord(key);
+				return record == null ? null : instantiate(record);
+			}
+			catch (IOException e) {
+				session.dbError(e);
+				return null;
+			}
+		}
+
+		@Override
+		public MarkupItemStorageDB instantiate(DBRecord rec) {
+			return new MarkupItemStorageDB(rec, AssociationDatabaseManager.this);
+		}
+	}
+
+	VTAssociation getAssociation(long associationKey) {
+		return associationCache.getCachedInstance(associationKey);
 	}
 }

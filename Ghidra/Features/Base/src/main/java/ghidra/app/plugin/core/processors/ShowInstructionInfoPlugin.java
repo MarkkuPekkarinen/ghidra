@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +21,7 @@ import java.awt.datatransfer.Clipboard;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.*;
+import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +41,7 @@ import ghidra.app.context.*;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.ProgramPlugin;
 import ghidra.app.services.GoToService;
+import ghidra.framework.Application;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginStatus;
@@ -190,7 +192,7 @@ public class ShowInstructionInfoPlugin extends ProgramPlugin {
 	private File writeWrapperFile(URL fileURL) throws IOException {
 		File f;
 		if (manualWrapperFiles.size() < MAX_MANUAL_WRAPPER_FILE_COUNT) {
-			f = File.createTempFile("pdfView", ".html");
+			f = Application.createTempFile("pdfView", ".html");
 			f.deleteOnExit();
 		}
 		else {
@@ -237,16 +239,14 @@ public class ShowInstructionInfoPlugin extends ProgramPlugin {
 			return null;
 		}
 
-		URL url = new File(filename).toURI().toURL();
-
+		URI uri = new File(filename).toURI();
 		String pageNumber = entry.getPageNumber();
 		if (pageNumber != null) {
 			// include manual page as query string (respected by PDF readers)
-			String fileNameAndPage = url.getFile() + "#page=" + pageNumber;
-			url = new URL(url.getProtocol(), null, fileNameAndPage);
+			String pageRef = "#page=" + pageNumber;
+			uri = uri.resolve(pageRef);
 		}
-
-		return url;
+		return uri.toURL();
 	}
 
 	ManualEntry locateManualEntry(ProgramActionContext context, Language language) {
@@ -343,8 +343,8 @@ public class ShowInstructionInfoPlugin extends ProgramPlugin {
 	}
 
 	/**
-	 * Subclass should override this method if it is interested in
-	 * program location events.
+	 * Subclass should override this method if it is interested in program location events.
+	 * 
 	 * @param loc location could be null
 	 */
 	@Override
@@ -462,7 +462,7 @@ public class ShowInstructionInfoPlugin extends ProgramPlugin {
 		}
 		else if (provider != connectedProvider && isDynamic) {
 			if (connectedProvider != null) {
-				connectedProvider.setNonDynamic();
+				connectedProvider.setDynamic(false);
 			}
 			disconnectedProviders.remove(provider);
 			connectedProvider = provider;
@@ -483,7 +483,7 @@ class ShowInfoAction extends ListingContextAction {
 
 		this.plugin = plugin;
 
-		setPopupMenuData(new MenuData(new String[] { "Instruction Info..." }, null, "Disassembly"));
+		setPopupMenuData(new MenuData(new String[] { "Instruction Info" }, null, "Disassembly"));
 
 	}
 
@@ -505,8 +505,8 @@ class ShowProcessorManualAction extends ProgramContextAction {
 		this.plugin = plugin;
 
 		setMenuBarData(
-			new MenuData(new String[] { "Tools", "Processor Manual..." }, null, "Disassembly"));
-		setPopupMenuData(new MenuData(new String[] { "Processor Manual..." }, null, "Disassembly"));
+			new MenuData(new String[] { "Tools", "Processor Manual" }, null, "Disassembly"));
+		setPopupMenuData(new MenuData(new String[] { "Processor Manual" }, null, "Disassembly"));
 
 		this.setEnabled(true);
 	}

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,6 +32,7 @@ import ghidra.util.task.TaskMonitor;
 import ghidra.util.xml.*;
 import ghidra.xml.XmlElement;
 import ghidra.xml.XmlPullParser;
+import utilities.util.FileUtilities;
 
 class MemoryMapXmlMgr {
 
@@ -52,8 +53,7 @@ class MemoryMapXmlMgr {
 ///////////////////////////////////////////////////////////////////////////////////////
 
 	void read(XmlPullParser parser, boolean overwriteConflicts, TaskMonitor monitor,
-			String directory)
-			throws SAXParseException, FileNotFoundException, CancelledException {
+			String directory) throws SAXParseException, FileNotFoundException, CancelledException {
 
 		XmlElement element = parser.next();
 		element = parser.next();
@@ -71,8 +71,7 @@ class MemoryMapXmlMgr {
 	}
 
 	private void processMemoryBlock(XmlElement memorySectionElement, XmlPullParser parser,
-			String directory, Program program, TaskMonitor monitor)
-			throws FileNotFoundException {
+			String directory, Program program, TaskMonitor monitor) throws FileNotFoundException {
 
 		String name = memorySectionElement.getAttribute("NAME");
 		String addrStr = memorySectionElement.getAttribute("START_ADDR");
@@ -90,6 +89,9 @@ class MemoryMapXmlMgr {
 
 		String volatility = memorySectionElement.getAttribute("VOLATILE");
 		boolean isVolatile = "y".equals(volatility);
+
+		String artificial = memorySectionElement.getAttribute("ARTIFICIAL");
+		boolean isArtificial = "y".equals(artificial);
 
 		String comment = memorySectionElement.getAttribute("COMMENT");
 
@@ -124,12 +126,12 @@ class MemoryMapXmlMgr {
 					element = parser.peek();//get next start of contents or end of section
 				}
 				if (overlayName != null) {
-					MemoryBlock block =
-						MemoryBlockUtils.createInitializedBlock(program, true, overlayName, addr,
-							new ByteArrayInputStream(bytes),
-							bytes.length, comment, null, r, w, x, log, monitor);
+					MemoryBlock block = MemoryBlockUtils.createInitializedBlock(program, true,
+						overlayName, addr, new ByteArrayInputStream(bytes), bytes.length, comment,
+						null, r, w, x, log, monitor);
 					if (block != null) {
 						block.setVolatile(isVolatile);
+						block.setArtificial(isArtificial);
 						if (!name.equals(overlayName)) {
 							block.setName(name);
 						}
@@ -138,8 +140,8 @@ class MemoryMapXmlMgr {
 				else {
 
 					MemoryBlock block = MemoryBlockUtils.createInitializedBlock(program, false,
-						name, addr, new ByteArrayInputStream(bytes), bytes.length, comment, null,
-						r, w, x, log, monitor);
+						name, addr, new ByteArrayInputStream(bytes), bytes.length, comment, null, r,
+						w, x, log, monitor);
 					if (block != null) {
 						block.setVolatile(isVolatile);
 					}
@@ -189,7 +191,8 @@ class MemoryMapXmlMgr {
 
 	private void setData(byte[] bytes, int offset, String directory, String fileName,
 			int fileOffset, int length, MessageLog log) throws IOException {
-		File f = new File(directory, fileName);
+		File dir = new File(directory);
+		File f = FileUtilities.getSecureFile(dir, fileName);
 		RandomAccessFile binfile = new RandomAccessFile(f, "r");
 		//binfile.seek(fileOffset);
 		try {
@@ -295,6 +298,10 @@ class MemoryMapXmlMgr {
 
 		if (block.isVolatile()) {
 			attrs.addAttribute("VOLATILE", true);
+		}
+
+		if (block.isArtificial()) {
+			attrs.addAttribute("ARTIFICIAL", true);
 		}
 
 		writer.startElement("MEMORY_SECTION", attrs);

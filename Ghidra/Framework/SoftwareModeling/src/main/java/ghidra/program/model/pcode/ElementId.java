@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -127,6 +127,7 @@ public record ElementId(String name, int id) {
 	public static final ElementId ELEM_WCHAR_SIZE = new ElementId("wchar_size", 65);
 	public static final ElementId ELEM_ZERO_LENGTH_BOUNDARY =
 		new ElementId("zero_length_boundary", 66);
+	public static final ElementId ELEM_BITFIELD = new ElementId("bitfield", 289);
 
 	// database
 	public static final ElementId ELEM_COLLISION = new ElementId("collision", 67);
@@ -268,6 +269,8 @@ public record ElementId(String name, int id) {
 	public static final ElementId ELEM_RETPARAM = new ElementId("retparam", 171);
 	public static final ElementId ELEM_RETURNSYM = new ElementId("returnsym", 172);
 	public static final ElementId ELEM_UNAFFECTED = new ElementId("unaffected", 173);
+	public static final ElementId ELEM_INTERNAL_STORAGE = new ElementId("internal_storage", 286);
+	public static final ElementId ELEM_SHARESTACK = new ElementId("sharestack", 291);
 
 	// options
 	public static final ElementId ELEM_ALIASBLOCK = new ElementId("aliasblock", 174);
@@ -288,6 +291,7 @@ public record ElementId(String name, int id) {
 		new ElementId("errortoomanyinstructions", 185);
 	public static final ElementId ELEM_ERRORUNIMPLEMENTED =
 		new ElementId("errorunimplemented", 186);
+	public static final ElementId ELEM_BADDATACOUNT = new ElementId("baddatacount", 290);
 	public static final ElementId ELEM_EXTRAPOP = new ElementId("extrapop", 187);
 	public static final ElementId ELEM_IGNOREUNIMPLEMENTED =
 		new ElementId("ignoreunimplemented", 188);
@@ -314,6 +318,8 @@ public record ElementId(String name, int id) {
 	public static final ElementId ELEM_TOGGLERULE = new ElementId("togglerule", 209);
 	public static final ElementId ELEM_WARNING = new ElementId("warning", 210);
 
+	public static final ElementId ELEM_BRACEFORMAT = new ElementId("braceformat", 284);
+
 	// jumptable
 	public static final ElementId ELEM_BASICOVERRIDE = new ElementId("basicoverride", 211);
 	public static final ElementId ELEM_DEST = new ElementId("dest", 212);
@@ -326,9 +332,9 @@ public record ElementId(String name, int id) {
 	// override
 	public static final ElementId ELEM_DEADCODEDELAY = new ElementId("deadcodedelay", 218);
 	public static final ElementId ELEM_FLOW = new ElementId("flow", 219);
-	public static final ElementId ELEM_FORCEGOTO = new ElementId("forcegoto", 220);
-	public static final ElementId ELEM_INDIRECTOVERRIDE = new ElementId("indirectoverride", 221);
-	public static final ElementId ELEM_MULTISTAGEJUMP = new ElementId("multistagejump", 222);
+//	public static final ElementId ELEM_FORCEGOTO = new ElementId("forcegoto", 220);
+	public static final ElementId ELEM_CALLDEST = new ElementId("calldest", 221);
+//	public static final ElementId ELEM_MULTISTAGEJUMP = new ElementId("multistagejump", 222);
 	public static final ElementId ELEM_OVERRIDE = new ElementId("override", 223);
 	public static final ElementId ELEM_PROTOOVERRIDE = new ElementId("protooverride", 224);
 
@@ -421,7 +427,40 @@ public record ElementId(String name, int id) {
 	public static final ElementId ELEM_COMMAND_GETUSEROPNAME =
 		new ElementId("command_getuseropname", COMMAND_GETUSEROPNAME);
 
+	// signature
+	public static final ElementId ELEM_BLOCKSIG = new ElementId("blocksig", 258);
+	public static final ElementId ELEM_CALL = new ElementId("call", 259);
+	public static final ElementId ELEM_GENSIG = new ElementId("gensig", 260);
+	public static final ElementId ELEM_MAJOR = new ElementId("major", 261);
+	public static final ElementId ELEM_MINOR = new ElementId("minor", 262);
+	public static final ElementId ELEM_COPYSIG = new ElementId("copysig", 263);
+	public static final ElementId ELEM_SETTINGS = new ElementId("settings", 264);
+	public static final ElementId ELEM_SIG = new ElementId("sig", 265);
+	public static final ElementId ELEM_SIGNATUREDESC = new ElementId("signaturedesc", 266);
+	public static final ElementId ELEM_SIGNATURES = new ElementId("signatures", 267);
+	public static final ElementId ELEM_SIGSETTINGS = new ElementId("sigsettings", 268);
+	public static final ElementId ELEM_VARSIG = new ElementId("varsig", 269);
+
 	public static final ElementId ELEM_SPLITDATATYPE = new ElementId("splitdatatype", 270);
 	public static final ElementId ELEM_JUMPTABLEMAX = new ElementId("jumptablemax", 271);
-	public static final ElementId ELEM_UNKNOWN = new ElementId("XMLunknown", 272);
+	public static final ElementId ELEM_NANIGNORE = new ElementId("nanignore", 272);
+
+	// modelrules
+	public static final ElementId ELEM_DATATYPE = new ElementId("datatype", 273);
+	public static final ElementId ELEM_CONSUME = new ElementId("consume", 274);
+	public static final ElementId ELEM_CONSUME_EXTRA = new ElementId("consume_extra", 275);
+	public static final ElementId ELEM_CONVERT_TO_PTR = new ElementId("convert_to_ptr", 276);
+	public static final ElementId ELEM_GOTO_STACK = new ElementId("goto_stack", 277);
+	public static final ElementId ELEM_JOIN = new ElementId("join", 278);
+	public static final ElementId ELEM_DATATYPE_AT = new ElementId("datatype_at", 279);
+	public static final ElementId ELEM_POSITION = new ElementId("position", 280);
+	public static final ElementId ELEM_VARARGS = new ElementId("varargs", 281);
+	public static final ElementId ELEM_HIDDEN_RETURN = new ElementId("hidden_return", 282);
+	public static final ElementId ELEM_JOIN_PER_PRIMITIVE =
+		new ElementId("join_per_primitive", 283);
+	public static final ElementId ELEM_JOIN_DUAL_CLASS = new ElementId("join_dual_class", 285);
+	public static final ElementId ELEM_EXTRA_STACK = new ElementId("extra_stack", 287);
+	public static final ElementId ELEM_CONSUME_REMAINING = new ElementId("consume_remaining", 288);
+
+	public static final ElementId ELEM_UNKNOWN = new ElementId("XMLunknown", 292);
 }

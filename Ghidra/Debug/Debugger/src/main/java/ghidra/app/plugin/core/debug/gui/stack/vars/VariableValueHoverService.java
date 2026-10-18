@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,6 +16,8 @@
 package ghidra.app.plugin.core.debug.gui.stack.vars;
 
 import java.awt.Window;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
@@ -30,10 +32,10 @@ import ghidra.app.decompiler.component.ClangTextField;
 import ghidra.app.decompiler.component.hover.DataTypeDecompilerHover;
 import ghidra.app.decompiler.component.hover.DecompilerHoverService;
 import ghidra.app.plugin.core.codebrowser.hover.ListingHoverService;
-import ghidra.app.plugin.core.debug.DebuggerCoordinates;
 import ghidra.app.plugin.core.debug.gui.stack.vars.VariableValueRow.*;
 import ghidra.app.plugin.core.debug.gui.stack.vars.VariableValueUtils.VariableEvaluator;
 import ghidra.app.plugin.core.debug.stack.*;
+import ghidra.app.plugin.core.debug.stack.StackUnwindWarning.CustomStackUnwindWarning;
 import ghidra.app.plugin.core.debug.utils.BackgroundUtils.PluginToolExecutorService;
 import ghidra.app.plugin.core.debug.utils.BackgroundUtils.PluginToolExecutorService.TaskOpt;
 import ghidra.app.plugin.core.hover.AbstractConfigurableHover;
@@ -41,6 +43,7 @@ import ghidra.app.services.DebuggerStaticMappingService;
 import ghidra.app.services.DebuggerTraceManagerService;
 import ghidra.async.AsyncUtils;
 import ghidra.async.SwingExecutorService;
+import ghidra.debug.api.tracemgr.DebuggerCoordinates;
 import ghidra.framework.plugintool.AutoService;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.annotation.AutoServiceConsumed;
@@ -115,6 +118,8 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			}
 		};
 
+	private Map<Program, UnwindAnalysis> analyses = new HashMap<>();
+
 	public VariableValueHoverService(PluginTool tool) {
 		super(tool, PRIORITY);
 		autoServiceWiring = AutoService.wireServicesConsumed(tool, this);
@@ -147,13 +152,13 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		private final VariableValueTable table;
 		private final PluginTool tool;
 		private final DebuggerCoordinates current;
-		private final List<String> warnings;
+		private final StackUnwindWarningSet warnings;
 
 		private final DebuggerStaticMappingService mappingService;
 		private final VariableEvaluator eval;
 
 		public TableFiller(VariableValueTable table, PluginTool tool, DebuggerCoordinates current,
-				VariableEvaluator eval, List<String> warnings) {
+				VariableEvaluator eval, StackUnwindWarningSet warnings) {
 			this.table = table;
 			this.tool = tool;
 			this.current = current;
@@ -205,7 +210,8 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			if (stUnit instanceof Instruction stIns) {
 				fillDefinedData(dynData);
 				table.add(new InstructionRow(stIns));
-				table.add(new WarningsRow("Instruction taken from static listing"));
+				table.add(new WarningsRow(
+					StackUnwindWarningSet.custom("Instruction taken from static listing")));
 				return table;
 			}
 			throw new AssertionError();
@@ -257,8 +263,7 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			}
 		}
 
-		record MappedLocation(Program stProg, Address stAddr, Address dynAddr) {
-		}
+		record MappedLocation(Program stProg, Address stAddr, Address dynAddr) {}
 
 		protected MappedLocation mapLocation(Program programOrView, Address address) {
 			if (programOrView instanceof TraceProgramView view) {
@@ -304,10 +309,8 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			}
 			Variable variable = VariableValueUtils.findStackVariable(function, stackAddress);
 			return executeBackground(monitor -> {
-				UnwoundFrame<WatchValue> frame = eval.getStackFrame(function, warnings, monitor);
-				if (frame == null) {
-					throw new UnwindException("Cannot find frame for " + function);
-				}
+				UnwoundFrame<WatchValue> frame =
+					eval.getStackFrame(function, warnings, monitor, true);
 				if (variable != null) {
 					return fillFrameStorage(frame, variable.getName(), variable.getDataType(),
 						variable.getProgram(), variable.getVariableStorage());
@@ -363,15 +366,14 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			return executeBackground(monitor -> {
 				UnwoundFrame<WatchValue> frame;
 				if (function == null) {
-					warnings.add("Instruction is not in a function. Using innermost frame.");
+					warnings.add(new CustomStackUnwindWarning(
+						"Instruction is not in a function. Using innermost frame."));
 					frame = VariableValueUtils.locateInnermost(tool, current);
 				}
 				else {
-					frame = eval.getStackFrame(function, warnings, monitor);
+					frame = eval.getStackFrame(function, warnings, monitor, false);
 				}
 				if (frame == null) {
-					warnings.add(
-						"Could not locate " + function + " in stack. Using innermost frame.");
 					return fillRegisterNoFrame(register);
 				}
 
@@ -399,7 +401,7 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		public CompletableFuture<VariableValueTable> fillOperand(OperandFieldLocation opLoc,
 				Instruction ins) {
 			RefType refType = ins.getOperandRefType(opLoc.getOperandIndex());
-			if (refType.isFlow()) {
+			if (refType != null && refType.isFlow()) {
 				return null;
 			}
 			Object operand = ins.getDefaultOperandRepresentationList(opLoc.getOperandIndex())
@@ -408,7 +410,7 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 				return fillRegister(ins, register);
 			}
 			Address refAddress = opLoc.getRefAddress();
-			if (operand instanceof Scalar scalar && refAddress != null) {
+			if (operand instanceof Scalar && refAddress != null) {
 				return fillReference(ins, refAddress);
 			}
 			if (operand instanceof Address address) {
@@ -418,30 +420,26 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		}
 
 		public CompletableFuture<VariableValueTable> fillStorage(Function function, String name,
-				DataType type, Program program, VariableStorage storage,
-				AddressSetView symbolStorage) {
+				DataType type, Program program, VariableStorage storage) {
 			return executeBackground(monitor -> {
 				UnwoundFrame<WatchValue> frame =
-					VariableValueUtils.requiresFrame(program, storage, symbolStorage)
-							? eval.getStackFrame(function, warnings, monitor)
+					VariableValueUtils.requiresFrame(program, storage)
+							? eval.getStackFrame(function, warnings, monitor, true)
 							: eval.getGlobalsFakeFrame();
-				if (frame == null) {
-					throw new UnwindException("Cannot find frame for " + function);
-				}
 				return fillFrameStorage(frame, name, type, program, storage);
 			});
 		}
 
 		public CompletableFuture<VariableValueTable> fillPcodeOp(Function function, String name,
-				DataType type, PcodeOp op, AddressSetView symbolStorage) {
+				DataType type, PcodeOp op) {
+			Program program = function.getProgram();
+			boolean requiresFrame = applyCopyHeuristic(program, op,
+				VariableValueUtils::requiresFrame, VariableValueUtils::requiresFrame);
 			return executeBackground(monitor -> {
-				UnwoundFrame<WatchValue> frame = VariableValueUtils.requiresFrame(op, symbolStorage)
-						? eval.getStackFrame(function, warnings, monitor)
+				UnwoundFrame<WatchValue> frame = requiresFrame
+						? eval.getStackFrame(function, warnings, monitor, true)
 						: eval.getGlobalsFakeFrame();
-				if (frame == null) {
-					throw new UnwindException("Cannot find frame for " + function);
-				}
-				return fillFrameOp(frame, function.getProgram(), name, type, op, symbolStorage);
+				return fillFrameOp(frame, program, name, type, op);
 			});
 		}
 
@@ -454,7 +452,9 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			table.add(new IntegerRow(value));
 			if (type != DataType.DEFAULT) {
 				String repr = eval.getRepresentation(frame, address, value, type);
-				table.add(new ValueRow(repr, value.state()));
+				if (repr != null) {
+					table.add(new ValueRow(repr, value.state()));
+				}
 			}
 			return table;
 		}
@@ -471,14 +471,40 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			return fillWatchValue(frame, storage.getMinAddress(), type, value);
 		}
 
+		interface CopyCase<T> {
+			T evaluate(Program program, Varnode varnode);
+		}
+
+		interface DefaultCase<T> {
+			T evaluate(Program program, PcodeOp op);
+		}
+
+		/**
+		 * XXX: This is a heuristic I'm not sure about. I'm going to assume a token whose p-code op
+		 * is a {@link PcodeOp#COPY} is an assignment statement. I suppose I could check that I'm on
+		 * the LHS of an assignment operator, but that could be difficult and complex.... In any
+		 * case, if it's an assignment, I'm going to evaluate the output of the output operand
+		 * instead. Trouble is, that may just traverse back over the copy, as the copy is the
+		 * defining operator.
+		 */
+		protected <T> T applyCopyHeuristic(Program program, PcodeOp op, CopyCase<T> copyCase,
+				DefaultCase<T> defaultCase) {
+			return switch (op.getOpcode()) {
+				case PcodeOp.COPY -> copyCase.evaluate(program, op.getOutput());
+				default -> defaultCase.evaluate(program, op);
+			};
+		}
+
 		public VariableValueTable fillFrameOp(UnwoundFrame<WatchValue> frame, Program program,
-				String name, DataType type, PcodeOp op, AddressSetView symbolStorage) {
+				String name, DataType type, PcodeOp op) {
 			table.add(new NameRow(name));
 			if (!frame.isFake()) {
 				table.add(new FrameRow(frame));
 			}
 			table.add(new TypeRow(type));
-			WatchValue value = frame.evaluate(program, op, symbolStorage);
+
+			WatchValue value = applyCopyHeuristic(program, op, frame::evaluate, frame::evaluate);
+
 			// TODO: What if the type is dynamic with non-fixed size?
 			if (type.getLength() != value.length()) {
 				value = frame.zext(value, type.getLength());
@@ -487,7 +513,7 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		}
 
 		public CompletableFuture<VariableValueTable> fillHighVariable(HighVariable hVar,
-				String name, AddressSetView symbolStorage) {
+				String name) {
 			Function function = hVar.getHighFunction().getFunction();
 			VariableStorage storage = VariableValueUtils.fabricateStorage(hVar);
 			if (storage.isUniqueStorage()) {
@@ -496,17 +522,14 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 				table.add(new ValueRow("(Unique)", TraceMemoryState.KNOWN));
 				return CompletableFuture.completedFuture(table);
 			}
-			return fillStorage(function, name, hVar.getDataType(), function.getProgram(), storage,
-				symbolStorage);
+			return fillStorage(function, name, hVar.getDataType(), function.getProgram(), storage);
 		}
 
-		public CompletableFuture<VariableValueTable> fillHighVariable(HighVariable hVar,
-				AddressSetView symbolStorage) {
-			return fillHighVariable(hVar, hVar.getName(), symbolStorage);
+		public CompletableFuture<VariableValueTable> fillHighVariable(HighVariable hVar) {
+			return fillHighVariable(hVar, hVar.getName());
 		}
 
-		public CompletableFuture<VariableValueTable> fillComponent(ClangFieldToken token,
-				AddressSetView symbolStorage) {
+		public CompletableFuture<VariableValueTable> fillComponent(ClangFieldToken token) {
 			Function function = token.getClangFunction().getHighFunction().getFunction();
 			Program program = function.getProgram();
 			PcodeOp op = token.getPcodeOp();
@@ -516,13 +539,13 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			if (hVar.getDataType().isEquivalent(new PointerDataType(type))) {
 				op = VariableValueUtils.findDeref(program.getAddressFactory(), vn);
 			}
-			return fillPcodeOp(function, token.getText(), type, op, symbolStorage);
+			return fillPcodeOp(function, token.getText(), type, op);
 		}
 
 		public CompletableFuture<VariableValueTable> fillComposite(HighSymbol hSym,
-				HighVariable hVar, AddressSetView symbolStorage) {
+				HighVariable hVar) {
 			return fillStorage(hVar.getHighFunction().getFunction(), hSym.getName(),
-				hSym.getDataType(), hSym.getProgram(), hSym.getStorage(), symbolStorage);
+				hSym.getDataType(), hSym.getProgram(), hSym.getStorage());
 		}
 
 		public CompletableFuture<VariableValueTable> fillToken(ClangToken token) {
@@ -530,17 +553,8 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 				return null;
 			}
 
-			/**
-			 * I can't get just the expression tree here, except as p-code AST, which doesn't seem
-			 * to include token info. A line should contain the full expression, though. I'll grab
-			 * the symbols' storage from it and ensure my evaluation recurses until it hits those
-			 * symbols.
-			 */
-			AddressSet symbolStorage =
-				VariableValueUtils.collectSymbolStorage(token.getLineParent());
-
 			if (token instanceof ClangFieldToken fieldToken) {
-				return fillComponent(fieldToken, symbolStorage);
+				return fillComponent(fieldToken);
 			}
 
 			HighVariable hVar = token.getHighVariable();
@@ -563,25 +577,23 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			Varnode representative = hVar.getRepresentative();
 			if (!storage.contains(representative.getAddress())) {
 				// I'm not sure this can ever happen....
-				return fillHighVariable(hVar, symbolStorage);
+				return fillHighVariable(hVar);
 			}
 
 			if (Arrays.asList(storage.getVarnodes()).equals(List.of(representative))) {
 				// The var is the symbol
-				return fillHighVariable(hVar, symbolStorage);
+				return fillHighVariable(hVar);
 			}
 
 			// Presumably, there's some component path from symbol to high var
-			return fillComposite(hSym, hVar, symbolStorage);
+			return fillComposite(hSym, hVar);
 		}
 
 		public CompletableFuture<VariableValueTable> fillVariable(Variable variable) {
 			Function function = variable.getFunction();
 			return executeBackground(monitor -> {
-				UnwoundFrame<WatchValue> frame = eval.getStackFrame(function, warnings, monitor);
-				if (frame == null) {
-					throw new UnwindException("Cannot find frame for " + function);
-				}
+				UnwoundFrame<WatchValue> frame =
+					eval.getStackFrame(function, warnings, monitor, true);
 				return fillFrameStorage(frame, variable.getName(), variable.getDataType(),
 					variable.getProgram(), variable.getVariableStorage());
 			});
@@ -590,13 +602,14 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 
 	public CompletableFuture<VariableValueTable> fillVariableValueTable(VariableValueTable table,
 			ProgramLocation programLocation, DebuggerCoordinates current,
-			FieldLocation fieldLocation, Field field, List<String> warnings) {
+			FieldLocation fieldLocation, Field field, StackUnwindWarningSet warnings) {
 		if (traceManager == null || mappingService == null || current.getPlatform() == null) {
 			return null;
 		}
 		VariableEvaluator eval;
 		synchronized (cachedEvaluators) {
-			eval = cachedEvaluators.computeIfAbsent(current, c -> new VariableEvaluator(tool, c));
+			eval = cachedEvaluators.computeIfAbsent(current,
+				c -> new VariableEvaluator(tool, c));
 		}
 		TableFiller filler = new TableFiller(table, tool, current, eval, warnings);
 		if (field instanceof ClangTextField clangField) {
@@ -630,7 +643,7 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 			return null;
 		}
 		VariableValueTable table = new VariableValueTable();
-		List<String> warnings = new ArrayList<>();
+		StackUnwindWarningSet warnings = new StackUnwindWarningSet();
 		CompletableFuture<VariableValueTable> future;
 		try {
 			future = fillVariableValueTable(table, programLocation,
@@ -638,7 +651,9 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		}
 		catch (Exception e) {
 			table.add(new ErrorRow(e));
-			return createTooltipComponent("<html>" + table.toHtml());
+			JComponent component = createTooltipComponent("<html>" + table.toHtml());
+			addErrorDetailsListener(component, table);
+			return component;
 		}
 		if (future == null) {
 			return null;
@@ -650,6 +665,7 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		if (!(component instanceof JToolTip tooltip)) {
 			throw new AssertionError("Expected a JToolTip");
 		}
+		addErrorDetailsListener(component, table);
 		future.handleAsync((__, ex) -> {
 			table.remove(RowKey.STATUS);
 			if (ex != null) {
@@ -668,9 +684,39 @@ public class VariableValueHoverService extends AbstractConfigurableHover
 		return tooltip;
 	}
 
+	protected void addErrorDetailsListener(JComponent component, VariableValueTable table) {
+		component.addMouseListener(new MouseAdapter() {
+			private boolean isShiftDoubleClick(MouseEvent evt) {
+				if (evt.getClickCount() != 2) {
+					return false;
+				}
+				if ((evt.getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) == 0) {
+					return false;
+				}
+				return true;
+			}
+
+			@Override
+			public void mouseClicked(MouseEvent evt) {
+				if (isShiftDoubleClick(evt)) {
+					table.reportDetails();
+				}
+			}
+		});
+	}
+
 	public void traceClosed(Trace trace) {
 		synchronized (cachedEvaluators) {
 			cachedEvaluators.keySet().removeIf(coords -> coords.getTrace() == trace);
 		}
 	}
+
+	public UnwindInfo getUnwindInfo(Program program, Address key, TaskMonitor monitor) {
+		synchronized (analyses) {
+			UnwindAnalysis ua =
+				analyses.computeIfAbsent(program, p -> new UnwindAnalysis(p));
+			return ua.getUnwindInfo(key, monitor);
+		}
+	}
+
 }

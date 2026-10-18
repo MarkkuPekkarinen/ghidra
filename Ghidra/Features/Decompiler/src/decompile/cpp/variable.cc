@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,6 +15,7 @@
  */
 #include "variable.hh"
 #include "op.hh"
+#include "expression.hh"
 #include "database.hh"
 
 namespace ghidra {
@@ -259,13 +260,15 @@ void HighVariable::setSymbol(Varnode *vn) const
   }
   else if (entry->isDynamic())	// Dynamic symbols (that aren't partials) match whole variable
     symboloffset = -1;
+  else if (!entry->isMapEntry())
+    symboloffset = -1;
   else if (symbol->getCategory() == Symbol::equate)
     symboloffset = -1;			// For equates, we don't care about size
   else if (symbol->getType()->getSize() == vn->getSize() &&
-      entry->getAddr() == vn->getAddr() && !entry->isPiece())
+      ((MapEntry *)entry)->getAddr() == vn->getAddr() && !entry->isPiece())
     symboloffset = -1;			// A matching entry
   else {
-    symboloffset = vn->getAddr().overlapJoin(0,entry->getAddr(),symbol->getType()->getSize()) + entry->getOffset();
+    symboloffset = vn->getAddr().overlapJoin(0,((MapEntry *)entry)->getAddr(),symbol->getType()->getSize()) + entry->getOffset();
   }
 
   if (type != (Datatype *)0 && type->getMetatype() == TYPE_PARTIALUNION)
@@ -295,6 +298,27 @@ void HighVariable::transferPiece(HighVariable *tv2)
   piece->setHigh(this);
   highflags |= (tv2->highflags & (intersectdirty | extendcoverdirty));
   tv2->highflags &= ~(uint4)(intersectdirty | extendcoverdirty);
+}
+
+/// Except in specific circumstances, convert \b type into its stripped form.
+void HighVariable::stripType(void) const
+
+{
+  if (!type->hasStripped())
+    return;
+  type_metatype meta = type->getMetatype();
+  if (meta == TYPE_PARTIALUNION || meta == TYPE_PARTIALSTRUCT) {
+    if (symbol != (Symbol *)0 && symboloffset != -1) {	// If there is a bigger backing symbol
+	type_metatype submeta = symbol->getType()->getMetatype();
+	if (submeta == TYPE_STRUCT || submeta == TYPE_UNION || submeta == TYPE_ARRAY)
+	  return;			// Don't strip the partial
+    }
+  }
+  else if (type->isEnumType()) {
+    if (inst.size() == 1 && inst[0]->isConstant())	// Only preserve partial enum on a constant
+      return;
+  }
+  type = type->getStripped();
 }
 
 /// Only update if the cover is marked as \e dirty.
@@ -367,7 +391,7 @@ Varnode *HighVariable::getTypeRepresentative(void) const
       if (vn->isTypeLock())
 	rep = vn;
     }
-    else if (0>vn->getType()->typeOrderBool(*rep->getType()))
+    else if (0>vn->getType()->typeOrderFormal(*rep->getType()))
       rep = vn;
   }
   return rep;
@@ -386,17 +410,7 @@ void HighVariable::updateType(void) const
   vn = getTypeRepresentative();
 
   type = vn->getType();
-  if (type->hasStripped()) {
-    if (type->getMetatype() == TYPE_PARTIALUNION) {
-      if (symbol != (Symbol *)0 && symboloffset != -1) {
-	type_metatype meta = symbol->getType()->getMetatype();
-	if (meta != TYPE_STRUCT && meta != TYPE_UNION)	// If partial union does not have a bigger backing symbol
-	  type = type->getStripped();			// strip the partial union
-      }
-    }
-    else
-      type = type->getStripped();
-  }
+  stripType();
 				// Update lock flags
   flags &= ~Varnode::typelock;
   if (vn->isTypeLock())
@@ -519,6 +533,19 @@ void HighVariable::remove(Varnode *vn)
   }
 }
 
+/// \b this is assigned directly to the Varnode, losing any reference to a previous HighVariable,
+/// so the caller must take this into account.
+/// \param newvn is the Varnode to add to \b this
+/// \param mergeGroup is the group to associate with this merge
+void HighVariable::insert(Varnode *newvn,int2 mergeGroup)
+
+{
+  vector<Varnode *>::iterator iter;
+  iter = lower_bound(inst.begin(),inst.end(),newvn,compareJustLoc);
+  inst.insert(iter,newvn);
+  newvn->setHigh(this,mergeGroup);
+}
+
 /// Assuming there is a Symbol attached to \b this, run through the Varnode members
 /// until we find one with a SymbolEntry corresponding to the Symbol and return it.
 /// \return the SymbolEntry that mapped the Symbol to \b this or null if no Symbol is attached
@@ -533,24 +560,23 @@ SymbolEntry *HighVariable::getSymbolEntry(void) const
   return (SymbolEntry *)0;
 }
 
-/// The data-type its dirtying mechanism is disabled.  The data-type will not change, unless
-/// this method is called again.
-/// \param tp is the data-type to set
-void HighVariable::finalizeDatatype(Datatype *tp)
+/// If there is an associated Symbol, its data-type (or the appropriate piece) is assigned
+/// to \b this. The dirtying mechanism is disabled so that data-type cannot change.
+/// \param typeFactory is the factory used to construct any required piece
+void HighVariable::finalizeDatatype(TypeFactory *typeFactory)
 
 {
+  if (symbol == (Symbol *)0) return;
+  Datatype *cur = symbol->getType();
+  int4 off = symboloffset;
+  if (off < 0)
+    off = 0;
+  int4 sz = inst[0]->getSize();
+  Datatype *tp = typeFactory->getExactPiece(cur, off, sz);
+  if (tp == (Datatype *)0 || tp->getMetatype() == TYPE_UNKNOWN)
+    return;
   type = tp;
-  if (type->hasStripped()) {
-    if (type->getMetatype() == TYPE_PARTIALUNION) {
-      if (symbol != (Symbol *)0 && symboloffset != -1) {
-	type_metatype meta = symbol->getType()->getMetatype();
-	if (meta != TYPE_STRUCT && meta != TYPE_UNION)	// If partial union does not have a bigger backing symbol
-	  type = type->getStripped();			// strip the partial union
-      }
-    }
-    else
-      type = type->getStripped();
-  }
+  stripType();
   highflags |= type_finalized;
 }
 
@@ -836,7 +862,7 @@ void HighVariable::encode(Encoder &encoder) const
     if (symboloffset >= 0)
       encoder.writeSignedInteger(ATTRIB_OFFSET, symboloffset);
   }
-  getType()->encode(encoder);
+  getType()->encodeRef(encoder);
   for(int4 j=0;j<inst.size();++j) {
     encoder.openElement(ELEM_ADDR);
     encoder.writeUnsignedInteger(ATTRIB_REF, inst[j]->getCreateIndex());
@@ -1048,6 +1074,29 @@ void HighIntersectTest::purgeHigh(HighVariable *high)
   highedgemap.erase(iterfirst,iterlast);
 }
 
+/// \brief Test if a given HighVariable might intersect an address tied HighVariable during a call
+///
+/// If an address tied Varnode has aliases, we need to consider it as \e in \e scope during
+/// calls, even if the value is never read after the call.  In particular, another Varnode
+/// that \e crosses the call is considered to be intersecting with the address tied Varnode.
+/// This method tests whether the address tied HighVariable has aliases, then if so,
+/// it tests if the given HighVariable intersects a call site.
+/// \param tied is the address tied HighVariable
+/// \param untied is the given HighVariable to consider for intersection
+/// \return \b true if we consider the HighVariables to be intersecting
+bool HighIntersectTest::testUntiedCallIntersection(HighVariable *tied,HighVariable *untied)
+
+{
+  // If the address tied part is global, we do not need to test for crossings, as the
+  // address forcing mechanism should act as a placeholder across calls
+  if (tied->isPersist()) return false;
+  Varnode *vn = tied->getTiedVarnode();
+  if (vn->hasNoLocalAlias()) return false;	// A local variable is only in scope if it has aliases
+  if (!affectingOps.isPopulated())
+    affectingOps.populate();
+  return untied->getCover().intersect(affectingOps,vn);
+}
+
 /// \brief Translate any intersection tests for \e high2 into tests for \e high1
 ///
 /// The two variables will be merged and \e high2, as an object, will be freed.
@@ -1087,8 +1136,11 @@ void HighIntersectTest::moveIntersectTests(HighVariable *high1,HighVariable *hig
   iter = highedgemap.lower_bound( HighEdge(high1,(HighVariable *)0) );
   while((iter!=highedgemap.end())&&((*iter).first.a == high1)) {
     if (!(*iter).second) {	// If test is intersection==false
-      if (!(*iter).first.b->isMark()) // and there was no test with high2
-	highedgemap.erase( iter++ ); // Delete the test
+      if (!(*iter).first.b->isMark()) {	// and there was no test with high2
+	// Delete both edges of the test
+	highedgemap.erase( HighEdge( (*iter).first.b, (*iter).first.a) );
+	highedgemap.erase( iter++ );
+      }
       else
 	++iter;
     }
@@ -1149,6 +1201,16 @@ bool HighIntersectTest::intersection(HighVariable *a,HighVariable *b)
     if (blockIntersection(a,b,blockisect[blk])) {
       res = true;
       break;
+    }
+  }
+  if (!res) {
+    bool aTied = a->isAddrTied();
+    bool bTied = b->isAddrTied();
+    if (aTied != bTied) {			// If one variable is address tied and the other isn't
+      if (aTied)
+	res = testUntiedCallIntersection(a,b);		// Test if the non-tied variable crosses any calls
+      else
+	res = testUntiedCallIntersection(b,a);
     }
   }
   highedgemap[ HighEdge(a,b) ] = res; // Cache the result

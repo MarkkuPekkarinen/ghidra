@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,7 +19,7 @@ import java.io.*;
 import java.net.*;
 
 import ghidra.framework.client.*;
-import ghidra.framework.data.ProjectFileManager;
+import ghidra.framework.data.DefaultProjectData;
 import ghidra.framework.model.ProjectData;
 import ghidra.util.exception.AssertException;
 
@@ -36,6 +36,11 @@ public class GhidraURLConnection extends URLConnection {
 		 */
 		UNAUTHORIZED(401, "Unauthorized"),
 		/**
+		 * Ghidra Status-Code 403: Forbidden by client allow list.
+		 * This status code occurs when repository access is denied.
+		 */
+		FORBIDDEN(403, "Forbidden"),
+		/**
 		 * Ghidra Status-Code 404: Not Found.
 		 * This status code occurs when repository or project does not exist.
 		 */
@@ -46,9 +51,15 @@ public class GhidraURLConnection extends URLConnection {
 		 */
 		LOCKED(423, "Locked Project"),
 		/**
+		 * Ghidra Status-Code 499: Connect Request Cancelled (likely during password prompt)
+		 */
+		CANCELLED(499, "Client Cancelled Request"),
+		/**
 		 * Ghidra Status-Code 503: Unavailable.
 		 * This status code includes a variety of connection errors
 		 * which are reported/logged by the Ghidra Server support code.
+		 * This error may also occur when the connection is not allowed
+		 * by the user (see {@link DefaultGhidraUrlAllowListProvider}).
 		 */
 		UNAVAILABLE(503, "Unavailable");
 
@@ -69,38 +80,6 @@ public class GhidraURLConnection extends URLConnection {
 		}
 	}
 
-	// TODO: consider implementing request and response headers
-
-//	/**
-//	 * Ghidra Status-Code 200: OK.
-//	 */
-//	public static final int GHIDRA_OK = 200;
-//
-//	/**
-//	 * Ghidra Status-Code 401: Unauthorized.
-//	 * This response code includes a variety of connection errors
-//	 * which are reported/logged by the Ghidra Server support code.
-//	 */
-//	public static final int GHIDRA_UNAUTHORIZED = 401;
-//
-//	/**
-//	 * Ghidra Status-Code 404: Not Found.
-//	 */
-//	public static final int GHIDRA_NOT_FOUND = 404;
-//
-//	/**
-//	 * Ghidra Status-Code 423: Locked
-//	 * Caused by attempt to open local project data with write-access when project is
-//	 * already opened and locked.
-//	 */
-//	public static final int GHIDRA_LOCKED = 423;
-//
-//	/**
-//	 * Ghidra Status-Code 503: Unavailable
-//	 * Caused by other connection failure
-//	 */
-//	public static final int GHIDRA_UNAVAILABLE = 503;
-
 	/**
 	 * Ghidra content type - domain folder/file wrapped within GhidraURLWrappedContent object.
 	 * @see GhidraURLWrappedContent
@@ -117,7 +96,7 @@ public class GhidraURLConnection extends URLConnection {
 
 	private GhidraProtocolConnector protocolConnector;
 
-	private ProjectFileManager projectData;
+	private DefaultProjectData projectData;
 	private Object refObject;
 
 	private boolean readOnly = true;
@@ -141,6 +120,9 @@ public class GhidraURLConnection extends URLConnection {
 	public GhidraURLConnection(URL url, GhidraProtocolHandler protocolHandler)
 			throws MalformedURLException {
 		super(url);
+		if (url.getUserInfo() != null) {
+			throw new MalformedURLException("User info not supported by Ghidra URLs");
+		}
 		if (protocolHandler == null) {
 			throw new IllegalArgumentException("missing required protocol handler");
 		}
@@ -178,7 +160,7 @@ public class GhidraURLConnection extends URLConnection {
 	public void setReadOnly(boolean state) {
 		if (connected)
 			throw new IllegalStateException("Already connected");
-		if (GhidraURL.isLocalProjectURL(url) && !state) {
+		if (GhidraURL.isLocalURL(url) && !state) {
 			// local project write-access not supported due to inadequate cleanup/disposal strategy
 			throw new UnsupportedOperationException("write access to local projects not supported");
 		}
@@ -270,12 +252,17 @@ public class GhidraURLConnection extends URLConnection {
 	}
 
 	/**
-	 * If URL connects and corresponds to a valid repository, this method
+	 * If URL connects and corresponds to a valid repository or local project, this method
 	 * may be used to obtain the associated ProjectData object.  The caller is
-	 * responsible for closing the returned project data when no longer in-use,
-	 * failure to do so may prevent release of repository handle to server.
-	 * Only a single call to this method is permitted.
-	 * @return transient project data or null if unavailable
+	 * responsible for properly {@link ProjectData#close() closing} the returned project data 
+	 * instance when no longer in-use, failure to do so may prevent release of repository handle 
+	 * to server until process exits.  It is important that {@link ProjectData#close()} is
+	 * invoked once, and only once, per call to this method to ensure project "use" tracking 
+	 * is properly maintained.  Improperly invoking the close method on a shared transient 
+	 * {@link ProjectData} instance may cause the underlying storage to be prematurely
+	 * disposed. 
+	 * 
+	 * @return project data which corresponds to this connection or null if unavailable
 	 * @throws IOException if an IO error occurs
 	 */
 	public ProjectData getProjectData() throws IOException {
@@ -334,10 +321,16 @@ public class GhidraURLConnection extends URLConnection {
 		// will be established with a RepositoryAdapter supplied by the connector.
 
 		// Obtain connected transient project for repository and complete connection
-		TransientProjectManager transientProjectManager =
-			TransientProjectManager.getTransientProjectManager();
-		TransientProjectData transientProjectData =
-			transientProjectManager.getTransientProject(protocolConnector, readOnly);
+		TransientProjectData transientProjectData = null;
+		try {
+			TransientProjectManager transientProjectManager =
+				TransientProjectManager.getTransientProjectManager();
+			transientProjectData =
+				transientProjectManager.getTransientProject(protocolConnector, readOnly);
+		}
+		catch (IOException e) {
+			// ignore - rely on status code
+		}
 
 		connected = true;
 		statusCode = protocolConnector.getStatusCode();

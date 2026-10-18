@@ -271,7 +271,7 @@ macro setHCSphysPage(addr) {
 	                       (zext(isPpage) *       (0x400000 | ((zext(PPAGE) << 14 ) ^ 0x8000))) +
 	                       (zext(isPpage_FF) * (0x400000 | ((0x3FC000) ^ 0xC000))) ;
 }
-@elif defined(HCS12)  && SIZE=="3"
+@elif defined(HCS12) && SIZE=="3"
 macro setHCSphysPage(addr) {
 	local a3:3 = zext(addr);
 
@@ -333,10 +333,10 @@ macro Store(addr, value) {
 #
 
 macro pageCAddr(addr, shift, page, offset) {
-     addr = (page << shift) | offset;
+     addr = addr | ((page << shift) | offset);
 }
 macro pagePAddr(addr, shift, page, offset) {
-     addr = (zext(page) << shift) | offset;
+     addr = addr | ((zext(page) << shift) | offset);
 }
 
 @if defined(HCS12X)
@@ -400,7 +400,7 @@ page:		    imm8     is imm8       { export *[const]:1 imm8; }
 #PageDest: dest    is imm16p=0xd & imm16 & imm16pv ; imm8 [ dest = ($(MAXFLASHPage) << 16) | imm16; ] { 	 export *:1 dest; }
 #PageDest: dest    is imm16p=0xe & imm16 & imm16pv ; imm8 [ dest = ($(MAXFLASHPage) << 16) | imm16; ] { 	 export *:1 dest; }
 #PageDest: dest    is imm16p=0xf & imm16 & imm16pv ; imm8 [ dest = ($(MAXFLASHPage) << 16) | imm16; ] { 	 export *:1 dest; }
-PageDest: opr16a   is opr16a; page  { 	 export opr16a; }
+PageDest: opr16a   is opr16a; page  { export opr16a; }
 
 @else
 
@@ -1961,11 +1961,9 @@ with : XGATE=0 {
 }
 
 # branch never is a two-byte nop
-SkipNextInstr: dest is epsilon [ dest = inst_next + 1; ]  { export *[RAM]:1 dest; }
 
-:BRN SkipNextInstr                 is Prefix18=0 & op8=0x21 & SkipNextInstr
+:BRN rel8                 is Prefix18=0 & op8=0x21; rel8
 {
-	goto SkipNextInstr;
 }
 
 :BRSET opr8a_8, msk8, rel8    is Prefix18=0 & op8=0x4E; opr8a_8; msk8; rel8
@@ -2084,7 +2082,6 @@ CallDest:  PageDest, imm8 is (imm16; imm8) & PageDest {
 
 	local ppage_tmp:1 = PPAGE;
 	Push1( PPAGE );	
-
     build CallDest;
     
     local dest:$(SIZE) = CallDest;

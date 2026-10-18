@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@ import docking.widgets.tree.GTree;
 import docking.widgets.tree.GTreeNode;
 import ghidra.app.plugin.core.datamgr.DataTypeManagerPlugin;
 import ghidra.app.plugin.core.datamgr.DataTypesActionContext;
-import ghidra.app.plugin.core.datamgr.tree.ArchiveNode;
+import ghidra.app.plugin.core.datamgr.tree.DataTypeStoreNode;
 import ghidra.app.plugin.core.datamgr.tree.DataTypeTreeNode;
 import ghidra.app.plugin.core.datamgr.util.DataTypeTreeDeleteTask;
 
@@ -84,7 +84,7 @@ public class DeleteAction extends DockingAction {
 	private boolean containsUndeletableNodes(TreePath[] selectionPaths) {
 		for (TreePath path : selectionPaths) {
 			DataTypeTreeNode node = (DataTypeTreeNode) path.getLastPathComponent();
-			if (!node.canDelete() || (node instanceof ArchiveNode)) {
+			if (!node.canDelete() || (node instanceof DataTypeStoreNode)) {
 				return true;
 			}
 		}
@@ -104,9 +104,14 @@ public class DeleteAction extends DockingAction {
 
 	@Override
 	public void actionPerformed(ActionContext context) {
+		//@formatter:off
 		int choice = OptionDialog.showYesNoDialogWithNoAsDefaultButton(null,
-			"Confirm Delete Operation", "Are you sure you want to delete selected\n categories " +
-				"and/or dataTypes?\n(Note: There is no undo for archives.)");
+			"Confirm Delete Operation", 
+				"Are you sure you want to delete selected\n" + 
+				"data types and/or categories?\n\n" + 
+				"Note: Changes may trigger the removal of related\n" + 
+				"data types, components and defined data.");
+		//@formatter:on
 		if (choice != OptionDialog.OPTION_ONE) {
 			return;
 		}

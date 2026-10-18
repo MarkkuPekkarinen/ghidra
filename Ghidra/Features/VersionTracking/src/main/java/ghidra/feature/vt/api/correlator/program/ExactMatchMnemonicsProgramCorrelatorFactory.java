@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,11 +19,11 @@ import ghidra.app.plugin.match.ExactMnemonicsFunctionHasher;
 import ghidra.feature.vt.api.main.VTProgramCorrelator;
 import ghidra.feature.vt.api.util.VTAbstractProgramCorrelatorFactory;
 import ghidra.feature.vt.api.util.VTOptions;
-import ghidra.framework.plugintool.ServiceProvider;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Program;
 
-public class ExactMatchMnemonicsProgramCorrelatorFactory extends VTAbstractProgramCorrelatorFactory {
+public class ExactMatchMnemonicsProgramCorrelatorFactory
+		extends VTAbstractProgramCorrelatorFactory {
 
 	static final String DESC =
 		"Compares code by hashing instructions mnemonics, looking for identical functions. It reports back any that have ONLY ONE identical match.";
@@ -38,12 +38,12 @@ public class ExactMatchMnemonicsProgramCorrelatorFactory extends VTAbstractProgr
 	}
 
 	@Override
-	protected VTProgramCorrelator doCreateCorrelator(ServiceProvider serviceProvider,
-			Program sourceProgram, AddressSetView sourceAddressSet, Program destinationProgram,
+	protected VTProgramCorrelator doCreateCorrelator(Program sourceProgram,
+			AddressSetView sourceAddressSet, Program destinationProgram,
 			AddressSetView destinationAddressSet, VTOptions options) {
-		return new FunctionMatchProgramCorrelator(serviceProvider, sourceProgram, sourceAddressSet,
+		return new FunctionMatchProgramCorrelator(sourceProgram, sourceAddressSet,
 			destinationProgram, destinationAddressSet, options, EXACT_MATCH, true,
-			ExactMnemonicsFunctionHasher.INSTANCE);
+			ExactMnemonicsFunctionHasher.INSTANCE, false);
 	}
 
 	@Override

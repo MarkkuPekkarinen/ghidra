@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,11 +18,14 @@ package ghidra.app.util.bin.format.macho;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 import ghidra.app.util.bin.*;
 import ghidra.app.util.bin.format.macho.commands.*;
 import ghidra.app.util.opinion.DyldCacheUtils.SplitDyldCache;
 import ghidra.program.model.data.*;
+import ghidra.program.model.mem.Memory;
+import ghidra.util.DataConverter;
 import ghidra.util.exception.DuplicateNameException;
 
 /**
@@ -48,6 +51,8 @@ public class MachHeader implements StructConverter {
 	private long _machHeaderStartIndex = 0;
 	private boolean _parsed = false;
 
+	private static final int MAX_LOAD_COMMANDS = 32_768;
+
 	/**
 	 * Returns true if the specified ByteProvider starts with a Mach header magic signature.
 	 * 
@@ -71,7 +76,7 @@ public class MachHeader implements StructConverter {
 	 * 
 	 * @param provider the ByteProvider
 	 * @throws IOException if an I/O error occurs while reading from the ByteProvider
-	 * @throws MachException if an invalid MachHeader is detected
+	 * @throws MachException if an invalid header is detected
 	 */
 	public MachHeader(ByteProvider provider) throws IOException, MachException {
 		this(provider, 0);
@@ -85,7 +90,7 @@ public class MachHeader implements StructConverter {
 	 * @param machHeaderStartIndexInProvider the index into the ByteProvider where the MachHeader 
 	 *   begins
 	 * @throws IOException if an I/O error occurs while reading from the ByteProvider
-	 * @throws MachException if an invalid MachHeader is detected
+	 * @throws MachException if an invalid header is detected
 	 */
 	public MachHeader(ByteProvider provider, long machHeaderStartIndexInProvider)
 			throws IOException, MachException {
@@ -93,17 +98,17 @@ public class MachHeader implements StructConverter {
 	}
 
 	/**
-	 * Creatse a new {@link MachHeader}.  Assumes the MachHeader starts at index 
+	 * Creates a new {@link MachHeader}.  Assumes the MachHeader starts at index 
 	 * <i>machHeaderStartIndexInProvider</i> in the ByteProvider.
 	 * 
 	 * @param provider the ByteProvider
 	 * @param machHeaderStartIndexInProvider the index into the ByteProvider where the MachHeader 
 	 *   begins.
-	 * @param isRemainingMachoRelativeToStartIndex true if the rest of the macho uses relative 
-	 *   indexin (this is common in UBI and kernel cache files); otherwise, false if the rest of the
+	 * @param isRemainingMachoRelativeToStartIndex true if the rest of the Mach-O uses relative 
+	 *   indexes (this is common in UBI and kernel cache files); otherwise, false if the rest of the
 	 *   file uses absolute indexing from 0 (this is common in DYLD cache files)
 	 * @throws IOException if an I/O error occurs while reading from the ByteProvider
-	 * @throws MachException if an invalid MachHeader is detected
+	 * @throws MachException if an invalid header is detected
 	 */
 	public MachHeader(ByteProvider provider, long machHeaderStartIndexInProvider,
 			boolean isRemainingMachoRelativeToStartIndex) throws IOException, MachException {
@@ -141,7 +146,7 @@ public class MachHeader implements StructConverter {
 	 * 
 	 * @return This {@link MachHeader}, for convenience
 	 * @throws IOException If there was an IO-related error
-	 * @throws MachException if the load command is invalid
+	 * @throws MachException if a problem was detected with the load commands
 	 */
 	public MachHeader parse() throws IOException, MachException {
 		return parse(null);
@@ -154,12 +159,14 @@ public class MachHeader implements StructConverter {
 	 *   if a split DYLD cache is not being used.
 	 * @return This {@link MachHeader}, for convenience
 	 * @throws IOException If there was an IO-related error
-	 * @throws MachException if the load command is invalid
+	 * @throws MachException if a problem was detected with the load commands
 	 */
 	public MachHeader parse(SplitDyldCache splitDyldCache) throws IOException, MachException {
 		if (_parsed) {
 			return this;
 		}
+
+		validateNumLoadCommands();
 
 		// We must parse segment load commands first, so find and store their indexes separately
 		long currentIndex = _commandIndex;
@@ -168,7 +175,7 @@ public class MachHeader implements StructConverter {
 		for (int i = 0; i < nCmds; ++i) {
 			_reader.setPointerIndex(currentIndex);
 			int type = _reader.readNextInt();
-			int size = _reader.readNextInt();
+			long size = _reader.readNextUnsignedInt();
 			if (type == LoadCommandTypes.LC_SEGMENT || type == LoadCommandTypes.LC_SEGMENT_64) {
 				segmentIndexes.add(currentIndex);
 			}
@@ -185,8 +192,90 @@ public class MachHeader implements StructConverter {
 			LoadCommand lc = LoadCommandFactory.getLoadCommand(_reader, this, splitDyldCache);
 			_commands.add(lc);
 		}
+		sanitizeSegmentSectionNames(getAllSegments());
 		_parsed = true;
 		return this;
+	}
+
+	/**
+	 * Parses only this {@link MachHeader}'s {@link SegmentCommand segments}
+	 * 
+	 * @return A {@link List} of this {@link MachHeader}'s {@link SegmentCommand segments}
+	 * @throws IOException If there was an IO-related error
+	 * @throws MachException if a problem was detected with the load commands
+	 */
+	public List<SegmentCommand> parseSegments() throws IOException, MachException {
+		validateNumLoadCommands();
+
+		List<SegmentCommand> segments = new ArrayList<>();
+		_reader.setPointerIndex(_commandIndex);
+		for (int i = 0; i < nCmds; ++i) {
+			int type = _reader.peekNextInt();
+			if (type == LoadCommandTypes.LC_SEGMENT || type == LoadCommandTypes.LC_SEGMENT_64) {
+				segments.add(new SegmentCommand(_reader, is32bit()));
+			}
+			else {
+				type = _reader.readNextInt();
+				long size = _reader.readNextUnsignedInt();
+				_reader.setPointerIndex(_reader.getPointerIndex() + size - 8);
+			}
+		}
+		sanitizeSegmentSectionNames(segments);
+		return segments;
+	}
+
+	/**
+	 * Parses only this {@link MachHeader}'s {@link DynamicLibraryCommand reexport load commands}
+	 * 
+	 * @return A {@link List} of this {@link MachHeader}'s 
+	 *   {@link DynamicLibraryCommand reexport load commands}
+	 * @throws IOException If there was an IO-related error
+	 * @throws MachException if a problem was detected with the load commands
+	 */
+	public List<DynamicLibraryCommand> parseReexports() throws IOException, MachException {
+		validateNumLoadCommands();
+
+		List<DynamicLibraryCommand> cmds = new ArrayList<>();
+		_reader.setPointerIndex(_commandIndex);
+		for (int i = 0; i < nCmds; ++i) {
+			int type = _reader.peekNextInt();
+			if (type == LoadCommandTypes.LC_REEXPORT_DYLIB) {
+				DynamicLibraryCommand cmd = new DynamicLibraryCommand(_reader);
+				cmds.add(cmd);
+				_reader.setPointerIndex(cmd.getStartIndex());
+			}
+			type = _reader.readNextInt();
+			long size = _reader.readNextUnsignedInt();
+			_reader.setPointerIndex(_reader.getPointerIndex() + size - 8);
+		}
+		return cmds;
+	}
+
+	/**
+	 * Parses only this {@link MachHeader}'s {@link LoadCommand}s to check to see if one of the
+	 * given type exists
+	 * 
+	 * @param loadCommandType The type of {@link LoadCommand} to check for
+	 * @return True if this {@link MachHeader} contains the given {@link LoadCommand} type
+	 * @throws IOException If there was an IO-related error
+	 * @throws MachException if a problem was detected with the load commands
+	 * @see LoadCommandTypes
+	 */
+	public boolean parseAndCheck(int loadCommandType) throws IOException, MachException {
+		validateNumLoadCommands();
+
+		_reader.setPointerIndex(_commandIndex);
+		for (int i = 0; i < nCmds; ++i) {
+			int type = _reader.peekNextInt();
+			if (type == loadCommandType) {
+				return true;
+			}
+			type = _reader.readNextInt();
+			long size = _reader.readNextUnsignedInt();
+			_reader.setPointerIndex(_reader.getPointerIndex() + size - 8);
+
+		}
+		return false;
 	}
 
 	public int getMagic() {
@@ -356,6 +445,92 @@ public class MachHeader implements StructConverter {
 	@Override
 	public String toString() {
 		return getDescription();
+	}
+
+	/**
+	 * Validates the specified number of load commands
+	 * 
+	 * @throws MachException if this {@link MachHeader} has an invalid number of load commands
+	 */
+	private void validateNumLoadCommands() throws MachException {
+		if (nCmds > MAX_LOAD_COMMANDS || nCmds < 0) {
+			throw new MachException("Invalid number of load commands (%d)".formatted(nCmds));
+		}
+	}
+
+	/**
+	 * Sanitizes invalid segment/section names so they can be used as memory blocks and program tree
+	 * modules.
+	 * <p>
+	 * There are 3 main cases we have come across that need sanitization:
+	 * <ol>
+	 *   <li>Segment names have a null character in the middle</li>
+	 *   <li>.o files have one segment with a blank name, but the sections refer to more than one
+	 *   normal looking segment name</li>
+	 *   <li>Some segment and section name are complete garbage bytes</li>
+	 * </ol>
+	 * 
+	 * @param segments A {@link List} of {@link SegmentCommand segments} to sanitize
+	 */
+	private void sanitizeSegmentSectionNames(List<SegmentCommand> segments) {
+		Function<String, Boolean> invalid = s -> s.isBlank() || !Memory.isValidMemoryBlockName(s);
+		for (int i = 0; i < segments.size(); i++) {
+			SegmentCommand segment = segments.get(i);
+			segment.setSegmentName(segment.getSegmentName().replace('\0', '_'));
+			if (invalid.apply(segment.getSegmentName())) {
+				segment.setSegmentName("__INVALID.%d".formatted(i));
+			}
+			List<Section> sections = segment.getSections();
+			for (int j = 0; j < sections.size(); j++) {
+				Section section = sections.get(j);
+				section.setSegmentName(section.getSegmentName().replace('\0', '_'));
+				section.setSectionName(section.getSectionName().replace('\0', '_'));
+				if (invalid.apply(section.getSegmentName())) {
+					section.setSegmentName("__INVALID.%d".formatted(i));
+				}
+				if (invalid.apply(section.getSectionName())) {
+					section.setSectionName("__invalid.%d".formatted(j));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Creates a new Mach Header byte array
+	 * 
+	 * @param magic The magic
+	 * @param cpuType The cpu type
+	 * @param cpuSubType The cpu subtype
+	 * @param fileType The file type
+	 * @param nCmds The number of commands
+	 * @param sizeOfCmds The size of the commands
+	 * @param flags The flags
+	 * @param reserved A reserved value (ignored for 32-bit magic)
+	 * @return The new header in byte array form
+	 * @throws MachException if an invalid magic value was passed in (see {@link MachConstants})
+	 */
+	public static byte[] create(int magic, int cpuType, int cpuSubType, int fileType, int nCmds,
+			int sizeOfCmds, int flags, int reserved) throws MachException {
+		if (!MachConstants.isMagic(magic)) {
+			throw new MachException("Invalid magic: 0x%x".formatted(magic));
+		}
+
+		DataConverter conv = DataConverter.getInstance(magic == MachConstants.MH_MAGIC);
+		boolean is64bit = magic == MachConstants.MH_CIGAM_64 || magic == MachConstants.MH_MAGIC_64;
+
+		byte[] bytes = new byte[is64bit ? 0x20 : 0x1c];
+		conv.putInt(bytes, 0x00, magic);
+		conv.putInt(bytes, 0x04, cpuType);
+		conv.putInt(bytes, 0x08, cpuSubType);
+		conv.putInt(bytes, 0x0c, fileType);
+		conv.putInt(bytes, 0x10, nCmds);
+		conv.putInt(bytes, 0x14, sizeOfCmds);
+		conv.putInt(bytes, 0x18, flags);
+		if (is64bit) {
+			conv.putInt(bytes, 0x1c, reserved);
+		}
+
+		return bytes;
 	}
 
 	private static int readMagic(ByteProvider provider, long machHeaderStartIndexInProvider)

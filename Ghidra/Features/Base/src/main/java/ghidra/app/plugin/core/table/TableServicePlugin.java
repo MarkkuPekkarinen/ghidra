@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +20,7 @@ import java.util.*;
 
 import javax.swing.Icon;
 
+import docking.widgets.table.actions.DeleteTableRowAction;
 import ghidra.app.CorePluginPackage;
 import ghidra.app.events.ProgramClosedPluginEvent;
 import ghidra.app.nav.Navigatable;
@@ -38,14 +39,13 @@ import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Swing;
 import ghidra.util.table.GhidraProgramTableModel;
-import ghidra.util.table.actions.DeleteTableRowAction;
 import ghidra.util.task.SwingUpdateManager;
 
 //@formatter:off
 @PluginInfo(
 	status = PluginStatus.RELEASED,
 	packageName = CorePluginPackage.NAME,
-	category = PluginCategoryNames.SUPPORT,
+	category = PluginCategoryNames.COMMON,
 	shortDescription = "Results table service",
 	description = "Provides a generic results service that takes a list of information "
 			+ "and displays the list to user in the form of a table",
@@ -138,15 +138,9 @@ public class TableServicePlugin extends ProgramPlugin
 			GhidraProgramTableModel<T> model, String windowSubMenu, Navigatable navigatable) {
 
 		GoToService gotoService = tool.getService(GoToService.class);
-
-		if (gotoService != null && navigatable == null) {
-			navigatable = gotoService.getDefaultNavigatable();
-		}
-
 		Program program = model.getProgram();
-
 		TableComponentProvider<T> cp = new TableComponentProvider<>(this, title, tableTypeName,
-			model, program.getDomainFile().getName(), gotoService, windowSubMenu, navigatable);
+			model, program, gotoService, windowSubMenu, navigatable);
 		addProvider(program, cp);
 		return cp;
 	}
@@ -157,17 +151,11 @@ public class TableServicePlugin extends ProgramPlugin
 			String windowSubMenu, Navigatable navigatable) {
 
 		GoToService gotoService = tool.getService(GoToService.class);
-
-		if (gotoService != null && navigatable == null) {
-			navigatable = gotoService.getDefaultNavigatable();
-		}
-
 		MarkerService markerService = tool.getService(MarkerService.class);
 		Program program = model.getProgram();
-
 		TableComponentProvider<T> cp = new TableComponentProvider<>(this, title, tableTypeName,
-			model, program.getDomainFile().getName(), gotoService, markerService, markerColor,
-			markerIcon, windowSubMenu, navigatable);
+			model, program, gotoService, markerService, markerColor, markerIcon, windowSubMenu,
+			navigatable);
 		addProvider(program, cp);
 		return cp;
 	}
@@ -182,9 +170,7 @@ public class TableServicePlugin extends ProgramPlugin
 	}
 
 	void remove(TableComponentProvider<?> provider) {
-		Iterator<Program> iter = programMap.keySet().iterator();
-		while (iter.hasNext()) {
-			Program p = iter.next();
+		for (Program p : programMap.keySet()) {
 			List<TableComponentProvider<?>> list = programMap.get(p);
 			if (list.remove(provider)) {
 				if (list.size() == 0) {
@@ -195,10 +181,8 @@ public class TableServicePlugin extends ProgramPlugin
 		}
 	}
 
-	void removeDialog(MyTableChooserDialog dialog) {
-		Iterator<Program> iter = programToDialogMap.keySet().iterator();
-		while (iter.hasNext()) {
-			Program p = iter.next();
+	void removeDialog(TableServiceTableChooserDialog dialog) {
+		for (Program p : programToDialogMap.keySet()) {
 			List<TableChooserDialog> list = programToDialogMap.get(p);
 			if (list.remove(dialog)) {
 				if (list.size() == 0) {
@@ -225,9 +209,7 @@ public class TableServicePlugin extends ProgramPlugin
 
 	private List<TableComponentProvider<?>> getProviders() {
 		List<TableComponentProvider<?>> clist = new ArrayList<>();
-		Iterator<List<TableComponentProvider<?>>> iter = programMap.values().iterator();
-		while (iter.hasNext()) {
-			List<TableComponentProvider<?>> list = iter.next();
+		for (List<TableComponentProvider<?>> list : programMap.values()) {
 			clist.addAll(list);
 		}
 		return clist;
@@ -259,7 +241,7 @@ public class TableServicePlugin extends ProgramPlugin
 
 		Navigatable nav = navigatable;
 		TableChooserDialog dialog = Swing.runNow(
-			() -> new MyTableChooserDialog(this, executor, program, title, nav, isModal));
+			() -> new TableServiceTableChooserDialog(this, executor, program, title, nav, isModal));
 
 		List<TableChooserDialog> list =
 			programToDialogMap.computeIfAbsent(program, p -> new ArrayList<>());

@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,6 +18,7 @@ package ghidra.framework.main;
 import static org.junit.Assert.*;
 
 import java.awt.Rectangle;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -28,13 +29,17 @@ import org.junit.*;
 import docking.DefaultActionContext;
 import docking.action.DockingActionIf;
 import docking.test.AbstractDockingTest;
+import ghidra.app.events.OpenProgramPluginEvent;
 import ghidra.app.plugin.core.byteviewer.ByteViewerPlugin;
+import ghidra.app.plugin.core.codebrowser.CodeBrowserPlugin;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginException;
 import ghidra.program.database.ProgramBuilder;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
+import ghidra.program.util.ProgramLocation;
 import ghidra.test.AbstractGhidraHeadedIntegrationTest;
 import ghidra.test.TestEnv;
 
@@ -61,8 +66,9 @@ public class ByteViewerToolConnectionTest extends AbstractGhidraHeadedIntegratio
 			pressButtonByText(dialog, "OK");
 		}
 
-		closeAllWindows();
 		env.dispose();
+
+		closeAllWindows();
 	}
 
 	@Test
@@ -83,17 +89,39 @@ public class ByteViewerToolConnectionTest extends AbstractGhidraHeadedIntegratio
 
 		producerList.setSelectedIndex(0);
 		consumerList.setSelectedIndex(1);
-		clickRow(eventList, 1);
+		int eventCount = eventList.getModel().getSize();
+		for (int i = 0; i < eventCount; i++) {
+			clickRow(eventList, i);
+		}
 
 		Program p = buildProgram();
 
 		ProgramManager pm = cbTool.getService(ProgramManager.class);
-		SwingUtilities.invokeAndWait(() -> pm.openProgram(p.getDomainFile()));
+		runSwing(() -> pm.openProgram(p.getDomainFile()));
+
+		waitForSwing();
 
 		ProgramManager pm2 = cbTool2.getService(ProgramManager.class);
+		assertNull(pm2.getCurrentProgram());
+
+		// open same program in second tool - cannot rely on tool connection for this
+		cbTool2.firePluginEvent(new OpenProgramPluginEvent("Test", p));
+
+		waitForSwing();
+
 		assertEquals(p, pm2.getCurrentProgram());
 
-		env.release(p);
+		Address a = p.getAddressFactory().getDefaultAddressSpace().getAddress(0x1001010);
+
+		CodeBrowserPlugin cb1 = getPlugin(cbTool, CodeBrowserPlugin.class);
+		cb1.goTo(new ProgramLocation(p, a), true);
+
+		waitForSwing();
+
+		CodeBrowserPlugin cb2 = getPlugin(cbTool2, CodeBrowserPlugin.class);
+		ProgramLocation loc = cb2.getCurrentLocation();
+		assertNotNull(loc);
+		assertEquals(a, loc.getAddress());
 	}
 
 	private void clickRow(JList<?> list, int row) {
@@ -234,7 +262,7 @@ public class ByteViewerToolConnectionTest extends AbstractGhidraHeadedIntegratio
 
 	private void removePlugin(final PluginTool tool, final Plugin plugin) throws Exception {
 		SwingUtilities.invokeAndWait(() -> {
-			tool.removePlugins(new Plugin[] { plugin });
+			tool.removePlugins(List.of(plugin));
 			tool.getProject().getToolManager().toolChanged(tool);
 		});
 	}

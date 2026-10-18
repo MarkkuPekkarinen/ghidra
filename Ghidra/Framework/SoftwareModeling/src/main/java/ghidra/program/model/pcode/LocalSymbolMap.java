@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -210,13 +210,15 @@ public class LocalSymbolMap {
 		pcaddr = pcaddr.subtractWrap(1);
 
 		List<HighSymbol> paramList = new ArrayList<>();
+		boolean internalInvalid = false;
 		for (int i = 0; i < p.length; ++i) {
 			Parameter var = p[i];
-			if (!var.isValid()) {
-				// TODO: exclude parameters which don't have valid storage ??
-				continue;
-			}
 			DataType dt = var.getDataType();
+			if (!var.isValid() && (!dt.isZeroLength() || dt.isNotYetDefined())) {
+				// If storage is invalid and data-type does not formally have zero-length
+				internalInvalid = true;	// We don't trust storage for the entire prototype
+				break;
+			}
 			String name = var.getName();
 			if (name.length() > 2 && name.charAt(name.length() - 2) == '$') {
 				// An indication of names like "name", "name@1", "name@2"
@@ -242,6 +244,12 @@ public class LocalSymbolMap {
 			}
 			paramSymbol.setNameLock(namelock);
 			paramSymbol.setTypeLock(lock);
+		}
+		if (internalInvalid) {
+			// Can only send down a partial prototype.  Let decompiler try to recover the whole.
+			for (HighSymbol paramSymbol : paramList) {
+				paramSymbol.setTypeLock(false);
+			}
 		}
 
 		paramSymbols = new HighSymbol[paramList.size()];
@@ -453,9 +461,8 @@ public class LocalSymbolMap {
 			id = getNextId();
 		}
 		HighSymbol sym;
-		if (DynamicHash.getMethodFromHash(hash) > 3) {
-			int fieldNum = UnionFacetSymbol.extractFieldNumber(nm);
-			sym = new UnionFacetSymbol(id, nm, dt, fieldNum, func);
+		if (DynamicHash.getMethodFromHash(hash) > 3 && UnionFacetSymbol.isUnionType(dt)) {
+			sym = new UnionFacetSymbol(id, nm, dt, func);
 		}
 		else {
 			sym = new HighSymbol(id, nm, dt, func);
@@ -475,8 +482,11 @@ public class LocalSymbolMap {
 			}
 		}
 		if (sym.entryList[0] instanceof MappedEntry) {
-			MappedVarKey key = new MappedVarKey(sym.getStorage(), sym.getPCAddress());
-			addrMappedSymbols.put(key, sym);
+			VariableStorage storage = sym.getStorage();
+			if (storage.getVarnodeCount() != 0) {
+				MappedVarKey key = new MappedVarKey(storage, sym.getPCAddress());
+				addrMappedSymbols.put(key, sym);
+			}
 		}
 		symbolMap.put(uniqueId, sym);
 	}
